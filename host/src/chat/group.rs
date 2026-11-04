@@ -9,7 +9,8 @@
 //! @-mentioned and who haven't spoken or been asked since. A member with nothing
 //! to add says `(pass)`, and a round where nobody speaks ends the turn. A newer
 //! message in the same lane (or Stop) moves the lane's epoch, which ends a running
-//! room turn before its next speaker.
+//! room turn before its next speaker. A member busy elsewhere answers on its own,
+//! outside that turn: what it @-mentions there starts a new one ([`resume`]).
 
 use crate::LockExt;
 use crate::agent::bot::{Cmd, NoticeStyle};
@@ -18,15 +19,18 @@ use crate::remote::push::{self, AlertKind};
 use crate::store::{BotConfig, BotKind, Entry, EntryKind, Lane, Store};
 use anyhow::{Result, anyhow, bail};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::oneshot;
 
 const MAX_ROUNDS: usize = 3;
-/// A member's turn that runs longer counts as a pass.
+/// A member's turn that runs longer counts as a pass (a test shortens it: [`Rooms::set_member_timeout`]).
 const MEMBER_TIMEOUT: Duration = Duration::from_mins(10);
 /// Replies per room turn, across all rounds.
 const MAX_REPLIES: usize = 10;
+/// Most room turns one @-mention chain may start, so two members naming each other can't run forever.
+const MAX_CHAIN: usize = 8;
 /// Room lines a member is shown per turn.
 const HISTORY_LINES: i64 = 24;
 /// A bot's line in another member's prompt is clipped (the user's never is).
@@ -51,25 +55,66 @@ pub struct GroupTurn {
     pub answers: Vec<String>,
 }
 
-/// Room turn epochs per group.
-#[derive(Default)]
-pub struct Rooms(Mutex<HashMap<String, u64>>);
+/// Room turn epochs per group, and the turn running in each.
+pub struct Rooms {
+    epochs: Mutex<HashMap<String, u64>>,
+    /// The epoch of the room turn running in each group: a late reply only opens one where none runs.
+    running: Mutex<HashMap<String, u64>>,
+    /// How long the room waits on a member: [`MEMBER_TIMEOUT`] in milliseconds.
+    member_timeout: AtomicU64,
+}
+
+impl Default for Rooms {
+    fn default() -> Self {
+        Self {
+            epochs: Mutex::default(),
+            running: Mutex::default(),
+            member_timeout: AtomicU64::new(MEMBER_TIMEOUT.as_millis().try_into().unwrap_or(u64::MAX)),
+        }
+    }
+}
 
 impl Rooms {
     fn next(&self, lane: &Lane) -> u64 {
-        let mut map = self.0.locked();
+        let mut map = self.epochs.locked();
         let epoch = map.entry(lane.chat.clone()).or_default();
         *epoch += 1;
         *epoch
     }
 
     pub fn current(&self, lane: &Lane, epoch: u64) -> bool {
-        self.0.locked().get(&lane.chat).copied() == Some(epoch)
+        self.epochs.locked().get(&lane.chat).copied() == Some(epoch)
+    }
+
+    fn member_timeout(&self) -> Duration {
+        Duration::from_millis(self.member_timeout.load(Ordering::Relaxed))
+    }
+
+    #[cfg(test)]
+    pub fn set_member_timeout(&self, timeout: Duration) {
+        self.member_timeout.store(timeout.as_millis().try_into().unwrap_or(u64::MAX), Ordering::Relaxed);
+    }
+
+    /// A room turn is running in `lane`'s group.
+    pub fn running(&self, lane: &Lane) -> bool {
+        self.running.locked().contains_key(&lane.chat)
+    }
+
+    fn began(&self, lane: &Lane, epoch: u64) {
+        self.running.locked().insert(lane.chat.clone(), epoch);
+    }
+
+    /// Ends `epoch`'s room turn; a newer turn already running there keeps its mark.
+    fn ended(&self, lane: &Lane, epoch: u64) {
+        let mut map = self.running.locked();
+        if map.get(&lane.chat) == Some(&epoch) {
+            map.remove(&lane.chat);
+        }
     }
 
     /// Stop: ends the room turn in `group` and the member turns in it.
     pub fn stop(&self, hub: &Hub, group: &str) {
-        match self.0.locked().get_mut(group) {
+        match self.epochs.locked().get_mut(group) {
             Some(epoch) => *epoch += 1,
             None => return,
         }
@@ -113,15 +158,91 @@ pub fn with_members(store: &Store, members: &[String]) -> Result<Option<String>>
 /// The user wrote in a group lane: start a room turn there (ending one still running).
 pub fn start(hub: &Arc<Hub>, group: &BotConfig, lane: Lane) {
     let epoch = hub.groups.next(&lane);
-    let (hub, group_id) = (hub.clone(), group.id.clone());
+    spawn(hub, group.id.clone(), lane, epoch, None, 0);
+}
+
+/// A late reply (see [`answer_later`]) the room turn didn't wait for: once the room is idle again, the
+/// members its text @-mentions are asked, as a user message naming them would ([`sweep`]).
+fn resume(hub: &Arc<Hub>, group_id: &str, _from: &str, _text: &str) {
+    let (hub, group_id) = (hub.clone(), group_id.to_owned());
     tokio::spawn(async move {
-        if let Err(error) = run(&hub, &group_id, &lane, epoch).await {
+        let lane = Lane::main(&group_id);
+        // A turn that is still running follows its own mentions when it ends; this waits for the room,
+        // then asks whoever the newest message names and nobody has answered since ([`sweep`]).
+        for _ in 0..3_600 {
+            if !hub.groups.running(&lane) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+        if let Err(error) = sweep(&hub, &group_id, 1, &HashMap::new()) {
+            tracing::warn!(group = group_id, error = format!("{error:#}"), "room mention resume failed");
+        }
+    });
+}
+
+/// Asks the members the newest room message @-mentions and nobody has answered since. A turn's rounds
+/// can run out, a turn can be replaced while it waits, and a member's queued turn can fail to reach it:
+/// this is what keeps a mention from being left silently unanswered.
+fn sweep(hub: &Arc<Hub>, group_id: &str, depth: usize, asked: &HashMap<String, i64>) -> Result<()> {
+    let lane = Lane::main(group_id);
+    if hub.groups.running(&lane) {
+        return Ok(());
+    }
+    let Ok(group) = group(hub, group_id) else { return Ok(()) };
+    let members = members(hub, &group);
+    let messages = since_last_user_message(hub, &lane)?;
+    let Some(last) = messages.iter().rev().find(|e| e.kind == EntryKind::Agent.as_str()) else {
+        return Ok(());
+    };
+    let Some(author) = last.data["author"].as_str() else { return Ok(()) };
+    let text = last.data["text"].as_str().unwrap_or_default();
+    let everyone = names_everyone(text);
+    let pending: Vec<String> = members
+        .iter()
+        .filter(|m| m.id != author && (everyone || names(text, m)))
+        .filter(|m| hub.store.last_spoke(&lane, &m.id) < last.seq)
+        // Already asked this message by the turn that just ended: it passed on it, or is still typing.
+        .filter(|m| asked.get(&m.id).is_none_or(|shown| *shown < last.seq))
+        .map(|m| m.id.clone())
+        .collect();
+    if pending.is_empty() {
+        return Ok(());
+    }
+    if depth >= MAX_CHAIN {
+        tracing::warn!(group = group_id, seq = last.seq, "mention chain is too deep to follow");
+        return Ok(());
+    }
+    tracing::info!(group = group_id, seq = last.seq, asked = pending.len(), "room turn follows a mention");
+    let epoch = hub.groups.next(&lane);
+    spawn(hub, group_id.to_owned(), lane, epoch, Some(pending), depth + 1);
+    Ok(())
+}
+
+/// Starts [`run`] in the background, logging what it ran into.
+fn spawn(hub: &Arc<Hub>, group_id: String, lane: Lane, epoch: u64, seed: Option<Vec<String>>, depth: usize) {
+    let hub = hub.clone();
+    tokio::spawn(async move {
+        if let Err(error) = run(&hub, &group_id, &lane, epoch, seed.as_deref(), depth).await {
             tracing::warn!(group = group_id, error = format!("{error:#}"), "room turn failed");
         }
     });
 }
 
-async fn run(hub: &Arc<Hub>, group_id: &str, lane: &Lane, epoch: u64) -> Result<()> {
+/// Clears a room turn's running mark however [`run`] returns.
+struct Running(Arc<Hub>, Lane, u64);
+
+impl Drop for Running {
+    fn drop(&mut self) {
+        self.0.groups.ended(&self.1, self.2);
+    }
+}
+
+/// `seed`: the members the first round asks, when a late reply named them (see [`resume`]), instead of
+/// the ones the user's message did.
+async fn run(hub: &Arc<Hub>, group_id: &str, lane: &Lane, epoch: u64, seed: Option<&[String]>, depth: usize) -> Result<()> {
+    hub.groups.began(lane, epoch);
+    let running = Running(hub.clone(), lane.clone(), epoch);
     let mut replies = 0;
     let mut last_reply: Option<(String, String, String)> = None;
     // Members busy elsewhere: their turn waits in their queue, and they answer on their own once free.
@@ -132,8 +253,11 @@ async fn run(hub: &Arc<Hub>, group_id: &str, lane: &Lane, epoch: u64) -> Result<
         let group = group(hub, group_id)?;
         let members = members(hub, &group);
         let since_user = since_last_user_message(hub, lane)?;
-        let mut speakers =
-            if round == 0 { responders(&members, &since_user) } else { cited(&members, &since_user, &asked) };
+        let mut speakers = match seed {
+            Some(seeded) if round == 0 => members.iter().filter(|m| seeded.contains(&m.id)).collect(),
+            _ if round == 0 => responders(&members, &since_user),
+            _ => cited(&members, &since_user, &asked),
+        };
         // Each round starts one member later, so the same bot doesn't always speak first.
         if !speakers.is_empty() {
             let offset = round % speakers.len();
@@ -152,7 +276,6 @@ async fn run(hub: &Arc<Hub>, group_id: &str, lane: &Lane, epoch: u64) -> Result<
                 continue;
             }
             let (prompt, shown) = ask(hub, &group, &members, member, lane)?;
-            asked.insert(member.id.clone(), shown);
             let (reply, answer) = oneshot::channel();
             let busy = busy_elsewhere(hub, &member.id, lane);
             let turn = GroupTurn {
@@ -165,8 +288,11 @@ async fn run(hub: &Arc<Hub>, group_id: &str, lane: &Lane, epoch: u64) -> Result<
                 answers: answers(&since_user),
             };
             if hub.send_cmd(&member.id, Cmd::Group(turn)).is_err() {
+                // Not counted as asked: [`sweep`] asks it again once the turn ends.
+                tracing::warn!(group = group_id, member = %member.name, "room turn could not reach member");
                 continue;
             }
+            asked.insert(member.id.clone(), shown);
             // The room doesn't wait on a turn elsewhere (it can run for hours): it says so, and the member
             // answers here when it's done.
             if busy {
@@ -177,11 +303,25 @@ async fn run(hub: &Arc<Hub>, group_id: &str, lane: &Lane, epoch: u64) -> Result<
                 tokio::spawn(answer_later(hub.clone(), group_id.to_owned(), (*member).clone(), answer));
                 continue;
             }
-            // A failed, cancelled or overdue member turn counts as a pass; its error shows in the room.
-            if let Ok(Ok(Ok(Some(text)))) = tokio::time::timeout(MEMBER_TIMEOUT, answer).await {
-                spoke += 1;
-                replies += 1;
-                last_reply = Some((member.id.clone(), member.name.clone(), text));
+            // A failed or cancelled member turn counts as a pass; its error shows in the room.
+            let mut answer = answer;
+            match tokio::time::timeout(hub.groups.member_timeout(), &mut answer).await {
+                Ok(Ok(Ok(Some(text)))) => {
+                    spoke += 1;
+                    replies += 1;
+                    last_reply = Some((member.id.clone(), member.name.clone(), text));
+                }
+                // The turn was dropped before it ever ran (the member's agent went away): it does not
+                // count as asked, so [`sweep`] asks it again once the turn ends.
+                Ok(Err(_)) => {
+                    asked.remove(&member.id);
+                }
+                Ok(_) => {}
+                // Overdue: the room stops waiting, but the member's answer still lands in the lane.
+                Err(_) => {
+                    let (hub, group_id) = (hub.clone(), group_id.to_owned());
+                    tokio::spawn(answer_after_timeout(hub, group_id, (*member).clone(), answer));
+                }
             }
         }
         if spoke == 0 {
@@ -191,21 +331,40 @@ async fn run(hub: &Arc<Hub>, group_id: &str, lane: &Lane, epoch: u64) -> Result<
     if let Some((from, name, text)) = last_reply {
         alert(hub, group_id, &from, &name, &text)?;
     }
+    // The turn is over: whoever its newest reply named and nobody answered is asked now.
+    drop(running);
+    if let Err(error) = sweep(hub, group_id, depth, &asked) {
+        tracing::warn!(group = group_id, error = format!("{error:#}"), "room mention sweep failed");
+    }
     Ok(())
 }
 
-/// A busy member's reply, after the room turn moved on: it alerts like the room's last reply. Dropping the member's
-/// queued turn (see [`GroupTurn::late`]) ends this wait.
+/// A busy member's reply, after the room turn moved on: it alerts like the room's last reply, and what it
+/// @-mentions starts a room turn of its own ([`resume`]). Dropping the member's queued turn (see
+/// [`GroupTurn::late`]) ends this wait.
 async fn answer_later(
     hub: Arc<Hub>,
     group_id: String,
     member: BotConfig,
     answer: oneshot::Receiver<Result<Option<String>>>,
 ) {
-    if let Ok(Ok(Some(text))) = answer.await
-        && let Err(error) = alert(&hub, &group_id, &member.id, &member.name, &text)
-    {
+    let Ok(Ok(Some(text))) = answer.await else { return };
+    if let Err(error) = alert(&hub, &group_id, &member.id, &member.name, &text) {
         tracing::warn!(group = group_id, error = format!("{error:#}"), "late room reply not pushed");
+    }
+    resume(&hub, &group_id, &member.id, &text);
+}
+
+/// A member the room stopped waiting for ([`MEMBER_TIMEOUT`]) answers on: its text is already in the lane,
+/// and who it names there is asked ([`resume`]).
+async fn answer_after_timeout(
+    hub: Arc<Hub>,
+    group_id: String,
+    member: BotConfig,
+    answer: oneshot::Receiver<Result<Option<String>>>,
+) {
+    if let Ok(Ok(Some(text))) = answer.await {
+        resume(&hub, &group_id, &member.id, &text);
     }
 }
 
