@@ -29,25 +29,27 @@ const REQUEST_QUOTE_BYTES: usize = 1000;
 /// How a request the recipient's user stopped ends, for a sender that isn't on this computer.
 const STOPPED: &str = "Stopped by the user before finishing. Partial work may have happened.";
 
-pub const INSTRUCTIONS: &str = "Use list_bots to find the user's other Codync bots: on this computer and, when it is \
-in a network, on the user's other computers (their ids are name@computer). When you don't know who can help, search \
-with list_bots' query before listing everyone. \
-Use message_bot when the user requests another bot's help or its specialty is useful. It returns as soon as \
-the request is queued, and the recipient's reply comes back to you later as a new turn in your own chat: don't \
-wait or poll for it. Finish your turn (tell the user what you asked for) or go on with other work. Message \
-several bots to have them work in parallel. It works only in your own chat: in a group chat, @-mention the \
-room's members instead, and while answering another bot's request, say in your reply what you need from \
-others. Provide a self-contained request: the recipient has its own \
-conversation, working directory, tools and permissions, not your context. Coordinate file ownership before \
-asking for edits in a shared project. Native subagents are managed by your own harness; these tools are for \
-collaborating with the user's existing bots.";
+pub const INSTRUCTIONS: &str = "Use list_bots to find the user's other Codync bots. Outside groups it includes \
+this computer and the user's other computers (ids like name@computer); search with query before listing everyone. \
+In group turns, list_bots lists only other current room members. Use message_bot(botId, message, idempotencyKey?) \
+to assign one of those members a self-contained task: it returns when queued, and its result stays in the \
+source group, never your private chat. Group work runs in room order; finish your turn so the room can continue, \
+and do not wait or poll. A group idempotency key is scoped to you, the source group and recipient: reuse it only \
+for retransmission of the exact same task; changed text conflicts. Group Stop or member removal cancels related \
+unfinished work. You may also @-mention room members for a conversational answer. \
+In your own chat or a routine, message_bot returns when queued and the recipient's reply reaches your own chat \
+later as a new turn: do not wait or poll. Finish your turn or continue other work; those requests may work in \
+parallel. While answering a private request from another bot, say what help you need in your reply instead. \
+The recipient has its own conversation, working directory, tools and permissions, not your context. Coordinate \
+file ownership before asking for edits in a shared project. Native subagents remain managed by your harness; \
+these tools collaborate with the user's existing bots.";
 
 /// 按当前执行来源公开协作工具，群内派工支持稳定目标和幂等键。
 pub fn tools() -> Value {
     json!([
         {
             "name": "list_bots",
-            "description": "List the Codync bots you can message, with their IDs, kinds, specialties and status: this computer's first, then those on the user's other computers (where Claude Code sessions and Codex threads can be offered too). Narrow it with query (words in a bot's name or description), computer, kind, or online; it returns at most limit at a time, with next for the rest.",
+            "description": "List the Codync bots you can message, with their IDs, kinds, specialties and status. In a group turn, only other current members of that source group are listed. Outside groups, this computer comes first, then the user's other computers. Narrow with query, computer, kind or online; results are bounded by limit and next.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -63,13 +65,13 @@ pub fn tools() -> Value {
         },
         {
             "name": "message_bot",
-            "description": "Send a self-contained request to another Codync bot and return as soon as it is queued. The recipient works with its own tools, folder and permissions; its final reply (or why it couldn't finish) comes back to you later as a new turn in your own chat, with replies that arrive while you are busy taken together. Don't wait or poll for it. Stopping you does not cancel accepted requests; stopping the recipient does. No automatic retry or replay after a host restart; check the chats before retrying an uncertain result.",
+            "description": "Send a self-contained task and return when queued. In group turns, target another current member by botId; the result stays in the source group, never your private chat. Group Stop or member removal cancels related unfinished deliveries. An optional group idempotencyKey reuses the original request only for identical text, scoped to sender, source group and target; changed text conflicts. Outside groups the recipient's reply comes back later as a new turn in your own chat, with busy replies taken together; stopping the sender does not cancel accepted private requests. Do not wait or poll. No automatic replay of uncertain execution after restart; check effects before manually retrying.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "botId": {"type": "string", "description": "Recipient ID from list_bots (name@computer for a bot on another computer)."},
+                    "botId": {"type": "string", "description": "Recipient ID from list_bots. Group turns accept only another current member of that same group; name@computer is for use outside groups."},
                     "message": {"type": "string", "description": "Task, relevant context, file paths and expected result."},
-                    "idempotencyKey": {"type":"string","description":"Reuse for retransmission of the same task only."},
+                    "idempotencyKey": {"type":"string","description":"Group turns only: reuse for identical task retransmission, scoped to sender, source group and target. Changed text conflicts."},
                 },
                 "required": ["botId", "message"],
             },

@@ -302,7 +302,7 @@ fn member_prompt(
         }
     }
     out.push(format!(
-        "You have your full toolkit here. Do the work first, then answer: your final reply of this turn is \
+        "For this group turn, message_bot(botId, message, idempotencyKey?) may assign work to another current member. The result stays in this source group, never your private chat; finish your turn so the room can continue, and do not wait or poll. This current-turn rule replaces earlier instructions forbidding message_bot in groups. You have your full toolkit here. Do the work first, then answer: your final reply of this turn is \
          the one message the room sees. Keep it short and conversational. After this round, only the \
          participants someone @-mentions answer again: @-mention another participant when you need their \
          answer or action, and only then. If you have nothing new worth adding, reply exactly \"{PASS}\". Never \

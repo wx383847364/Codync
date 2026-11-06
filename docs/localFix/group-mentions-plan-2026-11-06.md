@@ -569,6 +569,8 @@ macOS 用 Playwright 跑完整选人与投递；iOS Simulator 与共享 Android 
 - iOS：修改源文件语法解析和独立 Swift 提及标量回归通过；本机仅有 Command Line Tools，缺少完整 Xcode/`simctl`，未执行 iOS 构建、包测试和 Simulator UI 验收。
 - 手机端 Maestro 未执行：缺少 Maestro、本机未配置共享 `codync_worktree` Android AVD，且 iOS Simulator 不可用；没有新建第二台模拟器。Linux/Windows VM 均未安装，未运行其桌面 UI 检查。
 - 真实付费模型成员接力与实际 10 分钟等待尚未人工验收；现有自动化使用真实 host/ACP 子进程与脚本成员、缩短的测试等待上限，不将其记作真实模型通过。
+- 交付复审补充：修正真实模型 profile、MCP 初始化/工具描述及文档残留的群内 `message_bot` 禁令；旧冻结 profile 定向更新，保留原会话 ID/epoch，覆盖 ClaudeMeta、SystemPrompt、FirstMessage 三条实际 ACP 通道。新增三通道子进程迁移回归通过，Host 单测 806 项通过、2 项忽略；相关 memory/compaction/team 集成共 17 项通过，文档 19 页/113 条链接检查通过。
+- 自用包基线再次 fetch 确认：`upstream/main` 与 `origin/main` 都为 `14faf9e8`，属于修复分支祖先；不将未合入的 `dev` 当作稳定 main。无完整 Xcode 的本机使用与该提交同版本、SHA-256 已验证的官方 Screen 组件，且其源码与本分支完全相同；host、Electron 界面和语音组件从当前代码重编译。自用包使用本地 ad-hoc 签名，不代表公证发行版。
 - 本次调整的既有测试与新规范对应：忙成员用例从“最新覆盖”改成两个独立来源均完成；命令用例增加 `/new` 三选项；兼容/更新展示 fixture 提升到可支持提及身份的 host；wire-shape 基线只登记新增字段和运行时事件。
 
 ---

@@ -43,8 +43,9 @@ for line in sys.stdin:
     with open("requests.jsonl", "a", encoding="utf-8") as log:
         log.write(json.dumps({"method": method, "params": params}) + "\n")
     if method == "initialize":
-        capabilities = {"loadSession": mode in ("claude", "flaky"), "sessionCapabilities": {}}
-        if mode == "standard":
+        capabilities = {"loadSession": mode in ("claude", "flaky", "system-resume", "first-resume"), "sessionCapabilities": {}}
+        # 迁移回归同时覆盖系统提示重载与首消息 profile 补发，不改变原有模式的能力。
+        if mode in ("standard", "system-resume"):
             capabilities["sessionCapabilities"]["systemPrompt"] = {}
         if mode == "claude":
             capabilities["_meta"] = {"claudeCode": {}}
