@@ -80,12 +80,14 @@ data class Entry(
             val fields = WireJson.decodeFromJsonElement<EntryFields>(entry.data)
             require(fields.callSeconds == null || fields.callSeconds >= 0)
             require(fields.options.orEmpty().all { it.optionId.isNotBlank() })
-            require(fields.attachments.orEmpty().all { it.size in 0..MAX_FILE_BYTES && it.name.isNotBlank() })
+            // 用户附件没有总大小上限，仍拒绝负数和无效名称；bot 发布快照沿用自己的限制。
+            require(fields.attachments.orEmpty().all { it.size >= 0 && it.name.isNotBlank() })
             return entry
         }
     }
 }
 
+// bot 发布的快照及内存备份沿用既有界限；用户发送的附件不使用此上限。
 const val MAX_FILE_BYTES = 100L * 1024 * 1024
 
 @Serializable

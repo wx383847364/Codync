@@ -23,7 +23,7 @@ import { BotSending } from './bot-sending'
 
 export { builtInBackendName, type Connection } from './bot-mirror'
 
-export { MAX_FILE_SIZE, type OutgoingFile, type SendOptions } from './bot-sending'
+export { type OutgoingFile, type SendOptions } from './bot-sending'
 
 export const QUICK_REACTIONS = ['👍', '❤️', '😂', '🎉', '👀', '✅']
 

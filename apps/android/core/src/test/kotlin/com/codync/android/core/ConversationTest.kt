@@ -5,6 +5,17 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class ConversationTest {
+    /** 超过旧限制的附件能进入同步历史，负数仍由统一校验拒绝。 */
+    @Test fun `conversation updates accept large attachment metadata`() {
+        val value = buildJsonObject {
+            put("id", "e"); put("botId", "b"); put("seq", 1); put("rev", 1); put("kind", "user")
+            putJsonObject("data") {
+                putJsonArray("attachments") { addJsonObject { put("id", "a"); put("name", "video.mp4"); put("size", 101L * 1024 * 1024) } }
+            }
+        }
+        val decoded = Entry.decode(value)
+        assertEquals(101L * 1024 * 1024, decoded.data.getValue("attachments").jsonArray.single().jsonObject.getValue("size").jsonPrimitive.long)
+    }
     private fun entry(kind: String, final: Boolean = false) = Entry("e", 1, "b", rev = 1, kind = kind,
         data = buildJsonObject { put("text", "message"); put("final", final) })
 

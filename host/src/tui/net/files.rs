@@ -1,6 +1,5 @@
 use super::Client;
-use crate::chat::files::{CHUNK_SIZE, SharedFile};
-use crate::chat::uploads::MAX_FILE;
+use crate::chat::files::{CHUNK_SIZE, MAX_FILE, SharedFile};
 use crate::tui::app::Msg;
 use anyhow::{Result, anyhow, ensure};
 use base64::Engine as _;

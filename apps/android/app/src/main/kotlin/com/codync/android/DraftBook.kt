@@ -1,7 +1,6 @@
 package com.codync.android
 
 import android.util.AtomicFile
-import com.codync.android.core.MAX_FILE_BYTES
 import com.codync.android.core.MirrorSnapshot
 import com.codync.android.core.OutgoingFile
 import com.codync.android.core.WireJson
@@ -61,6 +60,7 @@ class DraftBook(private val directory: File, computerId: String) {
         catch (error: Throwable) { file.failWrite(output); throw error }
     }
 
+    /** 校验草稿身份和本地文件边界；大附件按非负大小接受，避免重启后丢失。 */
     fun validate(drafts: Collection<ComposerDraft>, checkPaths: Boolean = true) {
         require(drafts.size <= 64) { "Too many drafts. Send or clear an older draft first." }
         require(drafts.map { it.botId }.distinct().size == drafts.size) { "The saved drafts contain duplicate conversations." }
@@ -70,7 +70,8 @@ class DraftBook(private val directory: File, computerId: String) {
             require(draft.text.toByteArray().size <= TEXT_BYTES) { "Draft messages must be 64 KiB or smaller." }
             require(draft.files.size <= 20) { "Choose at most 20 files for one message." }
             for (attachment in draft.files) {
-                require(attachment.size in 0..MAX_FILE_BYTES && attachment.name.isNotBlank())
+                // 大附件草稿与重试必须保留，不能在重载时恢复旧的 100 MB 限制。
+                require(attachment.size >= 0 && attachment.name.isNotBlank())
                 if (checkPaths) require(AttachmentFiles.inOutgoing(directory, attachment.path)) { "A draft attachment belongs to another account." }
             }
         }

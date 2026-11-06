@@ -8,6 +8,29 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class HostFilesTest {
+    /** 大视频上传始终保持单片大小，记录精确偏移和最终结束标记。 */
+    @Test fun `videos larger than 100 MiB upload without a size rejection`() = runBlocking {
+        val root = Files.createTempDirectory("codync-large-video").toFile()
+        try {
+            val size = 100L * 1024 * 1024 + 1
+            val source = root.resolve("video.mp4")
+            java.io.RandomAccessFile(source, "rw").use { it.setLength(size); it.seek(size - 1); it.write(42) }
+            var offset = 0L
+            // 只保留当前片，验证最后一个字节而不把整段视频载入测试内存。
+            val files = HostFiles { method, body, _ ->
+                assertEquals("upload", method)
+                assertEquals(offset, body.getValue("offset").jsonPrimitive.long)
+                val bytes = Base64.getDecoder().decode(body.getValue("data").jsonPrimitive.content)
+                assertTrue(bytes.size <= HostFiles.CHUNK_BYTES)
+                offset += bytes.size
+                assertEquals(offset == size, body.getValue("done").jsonPrimitive.boolean)
+                if (offset == size) assertEquals(42.toByte(), bytes.last())
+                JsonObject(emptyMap())
+            }
+            files.upload("bot", "id", OutgoingFile(source.path, source.name, size))
+            assertEquals(size, offset)
+        } finally { root.deleteRecursively() }
+    }
     @Test fun `uploads stream bounded ordered chunks including an empty file`() = runBlocking {
         val root = Files.createTempDirectory("codync-files").toFile()
         try {

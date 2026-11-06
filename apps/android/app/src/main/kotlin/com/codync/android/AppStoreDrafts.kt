@@ -139,13 +139,13 @@ suspend fun AppStore.sharedImage(entryId: String, file: SharedFile): File = cach
     withContext(Dispatchers.IO) { try { saved.copyTo(destination, overwrite = true) } finally { folder.deleteRecursively() } }
 }
 
-/** A file from the computer, fetched once into the attachment cache by `fetch`. */
+/** 缓存来自电脑的文件；回收其他旧副本时保留当前文件，允许大附件突破缓存软额度。 */
 private suspend fun AppStore.cachedFile(id: String, size: Long, fetch: suspend (HostFiles, File) -> Unit): File {
     val request = contextScope.async { downloadLocks.getOrPut(id) { Mutex() }.withLock {
     val destination = withContext(Dispatchers.IO) { attachments.cached(id) }
     if (!destination.exists() || destination.length() != size) {
         fetch(HostFiles(ready()), destination)
-        withContext(Dispatchers.IO) { attachments.trim() }
+        withContext(Dispatchers.IO) { AttachmentFiles.trim(destination) }
     }
     destination
     } }

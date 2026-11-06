@@ -22,9 +22,6 @@ export interface SendOptions {
   call?: string | null
 }
 
-/** Anything larger is refused by the computer. */
-export const MAX_FILE_SIZE = 100 * 1024 * 1024
-
 /** 消息发送、失败重试和附件缓存在同一职责内，主Store只保留聊天操作。 */
 export class BotSending extends BotSync {
   private outgoingFiles = new Map<string, OutgoingFile[]>()

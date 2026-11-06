@@ -115,28 +115,33 @@ impl Client {
         });
     }
 
-    /// Uploads `files` in 384 KiB chunks (under the channel's message limit, like the apps), then sends
-    /// `body` with them attached. The reply comes back as `Msg::Reply(after, …)`.
+    /// 按 384 KiB 分片流式上传附件，不限制总大小；全部成功后发送正文，失败保留草稿供重试。
     pub fn spawn_send_files(&self, mut body: Value, files: Vec<PathBuf>, after: After, tx: UnboundedSender<Msg>) {
         use base64::Engine as _;
+        use tokio::io::AsyncReadExt as _;
         const CHUNK: usize = 384 * 1024;
-        const MAX: u64 = 100 * 1024 * 1024;
         let c = self.clone();
+        // 文件读取与网络等待均在后台，单个大视频不占用整文件内存。
         tokio::spawn(async move {
             let upload = async {
                 let mut ids = Vec::new();
                 for path in &files {
                     let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-                    let data = tokio::fs::read(path).await.map_err(|e| format!("Can't read {name}: {e}"))?;
-                    if data.len() as u64 > MAX {
-                        return Err(format!("{name} is over 100 MB."));
-                    }
+                    let mut file = tokio::fs::File::open(path).await.map_err(|e| format!("Can't read {name}: {e}"))?;
+                    let size = file.metadata().await.map_err(|e| format!("Can't read {name}: {e}"))?.len();
                     let id = uuid::Uuid::new_v4().to_string();
                     let mut offset = 0;
                     loop {
-                        let end = (offset + CHUNK).min(data.len());
-                        let chunk = base64::engine::general_purpose::STANDARD.encode(&data[offset..end]);
-                        let done = end == data.len();
+                        let count = usize::try_from((size - offset).min(CHUNK as u64)).map_err(|e| e.to_string())?;
+                        let mut data = vec![0; count];
+                        file.read_exact(&mut data).await.map_err(|e| format!("Can't read {name}: {e}"))?;
+                        let end = offset + data.len() as u64;
+                        let chunk = base64::engine::general_purpose::STANDARD.encode(&data);
+                        let done = end == size;
+                        // 在最终确认前检查文件是否增长，缩短则由 read_exact 拒绝。
+                        if done && file.metadata().await.map_err(|e| e.to_string())?.len() != size {
+                            return Err(format!("{name} changed during upload."));
+                        }
                         c.call(
                             "upload",
                             &json!({"botId": body["botId"], "uploadId": id, "name": name,

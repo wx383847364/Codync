@@ -58,15 +58,15 @@ export function AttachmentList({ attachments, botId }: { attachments: Attachment
 /** Where a picture's bytes are on the computer: a file sent with a message, or one a bot shared. */
 export type ImageSource = { file: Attachment; botId: string } | { file: SharedFile; entryId: string }
 
-/** A picture full size, in a sheet. */
-export function AttachmentViewer({ source, close }: { source: ImageSource | null; close: () => void }) {
+/** 复用同一大图面板预览已发送、bot 分享及本地尚未发送的图片，本地 URL 由调用方管理。 */
+export function AttachmentViewer({ source, close }: { source: ImageSource | { file: { name: string }; url: string } | null; close: () => void }) {
   return (
     <Sheet open={source !== null} onClose={close} width={1040} height={800}>
       {source ? (
         <SheetPage>
           <ModalHeader title={source.file.name} />
           <div className="attachment-viewer">
-            <AttachmentImage source={source} fit="full" />
+            {'url' in source ? <img src={source.url} alt={source.file.name} className="attachment-image full" /> : <AttachmentImage source={source} fit="full" />}
           </div>
         </SheetPage>
       ) : null}

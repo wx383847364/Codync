@@ -13,9 +13,10 @@ import kotlinx.serialization.json.*
 class HostFiles(private val call: suspend (String, JsonObject, Long) -> JsonElement) {
     constructor(channel: EncryptedChannel) : this({ method, body, timeout -> channel.call(method, body, timeout) })
 
+    /** 不设附件总大小上限，以单个分片占用内存；源文件变化时中止，保留调用方重试能力。 */
     suspend fun upload(botId: String, id: String, file: OutgoingFile, progress: (Long) -> Unit = {}) = withContext(Dispatchers.IO) {
         val source = File(file.path)
-        require(file.size in 0..MAX_FILE_BYTES && source.length() == file.size && source.isFile) { "The selected file is no longer available. Choose it again." }
+        require(file.size >= 0 && source.length() == file.size && source.isFile) { "The selected file is no longer available. Choose it again." }
         source.inputStream().use { input ->
             var offset = 0L
             do {
@@ -41,8 +42,9 @@ class HostFiles(private val call: suspend (String, JsonObject, Long) -> JsonElem
         }
     }
 
+    /** 下载用户发送的附件时接受大文件，磁盘写入始终逐片完成。 */
     suspend fun download(botId: String, file: Attachment, destination: File) = withContext(Dispatchers.IO) {
-        require(file.size in 0..MAX_FILE_BYTES)
+        require(file.size >= 0)
         val partial = File(destination.parentFile, destination.name + ".partial")
         try {
             partial.outputStream().use { output ->

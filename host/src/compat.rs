@@ -8,7 +8,8 @@ use serde_json::Value;
 /// Raise it only when this host stops sending or accepting something older clients depend on;
 /// the release gate (tools/release-gate.py) then offers the release once the App Store has that
 /// iPhone app.
-pub const MIN_APP: &str = "2.36.0";
+// 旧 Android 会拒绝解析超过 100 MiB 的附件，必须先更新客户端，避免同步卡死。
+pub const MIN_APP: &str = "2.41.0";
 
 /// The oldest host the terminal client works with.
 pub const MIN_HOST: &str = "2.41.0";

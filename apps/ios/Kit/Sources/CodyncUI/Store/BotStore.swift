@@ -308,6 +308,4 @@ public struct OutgoingFile: Identifiable, Sendable {
         self.data = data
     }
 
-    /// Anything larger is refused by the computer.
-    public static let maxSize = 100 * 1024 * 1024
 }

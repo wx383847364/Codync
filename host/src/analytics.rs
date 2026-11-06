@@ -59,6 +59,8 @@ pub enum Event {
     StarPromptAnswered,
     LinkOpened,
     ScreenViewed,
+    /// 草稿图片预览使用或解码失败，不包含附件内容。
+    AttachmentPreview,
     BotCreated,
     BotUpdated,
     BotsReordered,
@@ -150,6 +152,7 @@ impl Event {
             Self::StarPromptAnswered => "star_prompt_answered",
             Self::LinkOpened => "link_opened",
             Self::ScreenViewed => "screen_viewed",
+            Self::AttachmentPreview => "attachment_preview",
             Self::BotCreated => "bot_created",
             Self::BotUpdated => "bot_updated",
             Self::BotsReordered => "bots_reordered",

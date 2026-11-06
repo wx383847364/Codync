@@ -57,8 +57,8 @@ import kotlinx.coroutines.withContext
     ImageSheet(file, { it.name }, dismiss) { shown, modifier -> SharedImage(shown, entryId, 4096, state, store, modifier) }
 }
 
-/** A picture full size (iOS `AttachmentViewer`), in a sheet while `item` is set. */
-@Composable private fun <T : Any> ImageSheet(item: T?, name: (T) -> String, dismiss: () -> Unit, image: @Composable (T, Modifier) -> Unit) {
+/** 复用大图面板容纳已发送图片和本地草稿，内容读取由所属组件负责。 */
+@Composable internal fun <T : Any> ImageSheet(item: T?, name: (T) -> String, dismiss: () -> Unit, image: @Composable (T, Modifier) -> Unit) {
     CodyncSheet(item, dismiss) { shown ->
         Column(Modifier.fillMaxSize().background(Palette.background)) {
             ModalHeader(name(shown))

@@ -144,7 +144,7 @@ Update this table in the release that changes a floor, with the reason.
 
 | Release | Host `minApp` | Client `minHost` | Why |
 |---|---|---|---|
-| 2.41.0 | 2.36.0 (unchanged) | 2.41.0 (all clients, including terminal) | Selected group identities require host validation of `send.mentions`; older hosts would silently resolve names instead. New session intents and delivery retry/save recovery also require this host. Older clients remain supported through admission-time text parsing. |
+| 2.41.0 | 2.41.0 | 2.41.0 (all clients, including terminal) | Selected group identities require host validation of `send.mentions`; older hosts would silently resolve names instead. New session intents and delivery retry/save recovery also require this host. Text parsing still handles clients without structured spans, but older Android apps reject attachment metadata above 100 MiB and must update before syncing this host. |
 | 2.36.0 | 2.36.0 | 2.26.0 (unchanged) | Pairing proves the phone's account with a cloud-signed device certificate; older apps send none, so the host rejects their `pair` with `unsupportedVersion`. |
 | 2.34.0 | 2.34.0 | 2.26.0 (iPhone, Android, desktop) | Custom icons are for bots only: `setIcon` rejects `agent:` targets, so older apps' agent icon editor would fail. |
 | 2.26.0 | 2.21.0 | 2.26.0 (iPhone, Android, desktop) | What a call's voice hears comes from the host as `call` events (replies, approvals, failures, progress); the apps no longer derive it from the chat, so on an older host a call would never hear the bot. |

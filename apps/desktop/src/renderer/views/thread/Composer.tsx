@@ -13,7 +13,7 @@ import { HStack, VStack } from '../../components/Stack'
 import { useModel } from '../../lib/observable'
 import { useTr } from '../../lib/use-language'
 import { useStore } from '../../store/context'
-import { MAX_FILE_SIZE, type OutgoingFile } from '../../store/bot-store'
+import { type OutgoingFile } from '../../store/bot-store'
 import { pluginsFor } from '../marketplace/plugins'
 import { pastedFiles, readPicked } from './composer-files'
 import { composerEnter } from './composer-keyboard'
@@ -159,14 +159,11 @@ function DestinationComposer({ botId, reply, about, cancelReply, onCall, onInter
   }
   const menu = useCommandMenu(draft, commands, run)
 
+  /** 接收所选附件，不按总大小拒绝；发送仍由既有分片协议完成。 */
   const append = (incoming: PickedFile[]) => {
     if (!canAttach) return
     const accepted: OutgoingFile[] = []
     for (const f of incoming) {
-      if (f.data.length > MAX_FILE_SIZE) {
-        store.setError(tr('{name} is larger than 100 MB.').replaceAll('{name}', () => f.name))
-        continue
-      }
       accepted.push({ id: crypto.randomUUID(), name: f.name, data: f.data })
     }
     setFiles((list) => [...list, ...accepted])

@@ -401,15 +401,10 @@ struct Composer: View {
         })
     }
 
+    /// 选取附件后保留完整内容，不再按 100 MB 拒绝，上传仍使用分片。
     private func append(_ new: [OutgoingFile]) {
         guard canAttach else { return }
-        for file in new {
-            guard file.data.count <= OutgoingFile.maxSize else {
-                model.lastError = "\(file.name) is larger than 100 MB."
-                continue
-            }
-            files.append(file)
-        }
+        files.append(contentsOf: new)
     }
 
     /// Images (or files) on the clipboard become attachments.

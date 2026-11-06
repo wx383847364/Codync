@@ -33,6 +33,9 @@ pub enum App {
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
 pub enum Reported {
+    AttachmentPreview {
+        outcome: AttachmentPreviewOutcome,
+    },
     DevServerAction {
         action: DevServerAction,
     },
@@ -97,6 +100,16 @@ pub enum Reported {
 }
 
 // Value lists. A value a newer client adds arrives as `other` instead of being refused.
+
+/// 图片预览只记录打开及固定解码失败类别，禁止接收文件名称和内容。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AttachmentPreviewOutcome {
+    Opened,
+    DecodeFailed,
+    #[serde(other)]
+    Other,
+}
 
 /// What came of a desktop window whose page crashed: it loaded again, or crashed too often and stays down.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -280,6 +293,17 @@ fn read(b: &Value) -> Result<(Event, Map<String, Value>)> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// 图片预览只接受固定结果类别，额外传入的名称和内容不能进入上报属性。
+    #[test]
+    fn attachment_preview_events_drop_file_content() {
+        let event =
+            json!({"event":"attachment_preview", "outcome":"decode_failed", "name":"private.png", "data":"private"});
+        assert_eq!(
+            read_json(&event),
+            Some((Event::AttachmentPreview, json!({"app":"desktop", "outcome":"decode_failed"})))
+        );
+    }
 
     fn read_json(b: &Value) -> Option<(Event, Value)> {
         read(b).ok().map(|(e, p)| (e, Value::Object(p)))

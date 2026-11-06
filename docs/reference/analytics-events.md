@@ -71,6 +71,7 @@ host answers and sends it once the host is up.
 | `bots_reordered` | host | `reorderBots` | — |
 | `section_renamed` | host | `renameSection` | `removed`: whether it removed the section (`to` empty or `null`); never the names |
 | `bot_deleted` | host | `deleteBot` | — |
+| `attachment_preview` | desktop, iPhone, Android | Local draft image preview | `outcome`: `opened` or `decode_failed`; no filename, path or image content |
 | `message_sent` | host | `send` (a resend counts once) | `kind`, `agent`, `reply` (whether it quotes a message), `attachments` (count) |
 | `message_steered` | host | *Send now* on a queued message (`steer`), once its outcome is known | `agent`, `how` (`joined` the running turn / `next` turn, the turn ended first / `interrupted` the user's turn / `moved_up` behind other work / `failed`, it waits) |
 | `queued_message_removed` | host | *Remove* on a queued message (`unqueue`) | — |
