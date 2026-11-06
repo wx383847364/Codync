@@ -44,6 +44,8 @@ test('draft image preview opens on double click and keyboard without sending', a
     await expect(page.locator('.attachment-viewer')).toHaveCount(0)
     await preview.dblclick()
     await expect(page.locator('.attachment-viewer img')).toBeVisible()
+    // 等面板淡入完成，避免仅有布局但仍透明的节点被当作可见大图。
+    await expect(page.locator('.modal-content')).toHaveCSS('opacity', '1')
     // 原图为 640×480，必须明显大于 80px 的输入框缩略图且不裁剪。
     const bounds = await page.locator('.attachment-viewer img').boundingBox()
     expect(bounds!.width).toBeGreaterThan(80)
@@ -58,6 +60,7 @@ test('draft image preview opens on double click and keyboard without sending', a
       await preview.focus()
       await page.keyboard.press(key)
       await expect(page.locator('.attachment-viewer img')).toBeVisible()
+      await expect(page.locator('.modal-content')).toHaveCSS('opacity', '1')
       await page.keyboard.press('Escape')
     }
     await page.getByRole('button', { name: 'Remove draft.png', exact: true }).click()
