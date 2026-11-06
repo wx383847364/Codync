@@ -78,6 +78,7 @@ public final class BotStore {
     public internal(set) var installedSkills: [InstalledSkill] = []
     /// Bots whose older history has been fully paged in.
     public internal(set) var historyComplete: Set<String> = []
+    var composerMentions: [String: [Mention]] = [:]
     var composerDrafts: [String: String] = [:]
     /// What was pasted into each draft, sent along so memory never takes it as the user's own words.
     @ObservationIgnored var composerPasted: [String: [String]] = [:]
@@ -171,6 +172,9 @@ public final class BotStore {
         makeTransport = transport
         usage = storage.usage[computer.id] ?? Usage()
         composerDrafts = Self.chatDrafts(storage.composerDrafts[computer.id] ?? [:])
+        // 身份只能依附仍存在的正文草稿，不能从旧账户镜像复活孤立范围。
+        let draftKeys = Set(composerDrafts.keys)
+        composerMentions = (storage.composerMentions[computer.id] ?? [:]).filter { draftKeys.contains($0.key) }
         loadCache()
     }
 

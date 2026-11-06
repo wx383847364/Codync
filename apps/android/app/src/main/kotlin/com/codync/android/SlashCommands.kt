@@ -1,5 +1,9 @@
 package com.codync.android
 
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -33,7 +37,7 @@ import com.kyant.shapes.RoundedRectangle
 
 /** A command in the composer's `/` list (iOS `SlashCommand`): Fast mode, or one of the bot's skills. */
 internal data class SlashCommand(val name: String, val icon: String, val title: String, val detail: String, val warning: Boolean,
-    val skill: String? = null)
+    val skill: String? = null, val sessionMode: String? = null)
 
 /**
  * The composer's `/` commands, listed while the draft is just `/partial`, the same in a group (iOS `SlashCommands`): Fast mode
@@ -45,15 +49,25 @@ internal object SlashCommands {
     fun query(draft: String): String? = if (draft.startsWith("/") && draft.none(Char::isWhitespace)) draft.drop(1) else null
 
     /** Built-in commands, then the skills the bot has on (a group's: any member's), whose name or title holds `query`. `members` are a group's bots. */
+    /** 列出当前聊天适用的命令与会话切换选项。 */
     fun list(bot: Bot, query: String, skills: List<InstalledSkill>, members: List<Bot> = emptyList()): List<SlashCommand> {
+        if (query.startsWith("new")) return sessions(bot).filter { it.name.contains(query) }
         val owners = if (bot.kind == "group") members else listOf(bot)
         val own = skills.filter { skill -> owners.any { skill.id in it.skills } }.map { SlashCommand(it.id, "book.pages", it.name, it.description, false, it.id) }
         return (builtIn(bot, members) + own).filter { query.isEmpty() || it.name.contains(query, true) || it.title.contains(query, true) }
     }
 
     /** A draft that is just a built-in command (`/fast`): sending it runs the command. */
+    /** 解析已确认命令，成员选择与实际发送保持分离。 */
     fun builtIn(bot: Bot, draft: String, members: List<Bot> = emptyList()): SlashCommand? =
-        query(draft.trim())?.let { name -> builtIn(bot, members).firstOrNull { it.name == name } }
+        query(draft.trim())?.let { name -> (builtIn(bot, members) + sessions(bot)).firstOrNull { it.name == name } }
+
+    /** /new 默认等任务与保存结束；立即切换和取消切换为另两项。 */
+    private fun sessions(bot: Bot): List<SlashCommand> = if (bot.kind == "group") emptyList() else listOf(
+        SlashCommand("new", "plus", "在当前任务结束后新建会话", "主会话与群共享；先保存当前执行状态", false, sessionMode = "after"),
+        SlashCommand("new-now", "plus", "立即停止并新建", "主会话与群共享；先保存当前执行状态", false, sessionMode = "immediate"),
+        SlashCommand("new-cancel", "plus", "取消切换", "主会话与群共享", false, sessionMode = "cancel"),
+    )
 
     /** Fast mode, while the bot (or a member of the group) shows it. */
     private fun builtIn(bot: Bot, members: List<Bot>): List<SlashCommand> {
@@ -84,21 +98,27 @@ internal object SlashCommands {
     }
 }
 
+/** 群成员的纵向候选列表，ID 前缀用于区分同名成员。 */
 /** The bots to @mention above a group's box: chips with their faces (iOS `SuggestionChip`). */
-@Composable internal fun MentionChips(members: List<Bot>, bots: List<Bot>, mention: (Bot) -> Unit) {
-    Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        for (member in members) Row(Modifier.clip(Capsule()).background(Palette.surface).plainButton { mention(member) }
+@Composable internal fun MentionChips(members: List<Bot>, bots: List<Bot>, selected: Int, mention: (Bot) -> Unit) {
+    Column(Modifier.fillMaxWidth().heightIn(max = 240.dp).verticalScroll(rememberScrollState()).padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        for ((index, member) in members.withIndex()) {
+        val bring = remember(member.id) { BringIntoViewRequester() }
+        LaunchedEffect(selected, member.id) { if (index == selected) bring.bringIntoView() }
+        Row(Modifier.bringIntoViewRequester(bring).clip(Capsule()).background(if (index == selected) Palette.surface else androidx.compose.ui.graphics.Color.Transparent).plainButton { mention(member) }
             .padding(horizontal = 10.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             BotAvatar(member, bots, 18.dp)
-            Text(member.name, style = Type.subheadline, color = Palette.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text("${member.name} · ${member.id.take(8)}", style = Type.subheadline, color = Palette.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
         }
     }
 }
 
 /** The `@partial` being typed at the end of a group's draft, if any. */
-internal fun mentionQuery(draft: String): String? {
-    val at = draft.lastIndexOf('@')
+/** 只提取光标前的成员查询，保留中间插入之后的正文。 */
+internal fun mentionQuery(draft: String, cursor: Int = draft.length): String? {
+    val at = draft.lastIndexOf('@', cursor - 1)
     if (at < 0 || at > 0 && !draft[at - 1].isWhitespace()) return null
-    val query = draft.substring(at + 1)
+    val query = draft.substring(at + 1, cursor)
     return if (query.contains('\n') || query.length > 24) null else query
 }

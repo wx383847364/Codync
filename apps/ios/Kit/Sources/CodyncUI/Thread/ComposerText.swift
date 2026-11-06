@@ -4,11 +4,39 @@ import SwiftUI
 struct ComposerText {
     var text = ""
     var selection: TextSelection?
+    var editRange: Range<Int>?
 
+    /// 光标前的提及片段；非空选区不显示候选，避免覆盖用户选中的正文。
+    var mentionRange: Range<String.Index>? {
+        let caret: String.Index
+        if case .selection(let range) = selection?.indices {
+            guard range.isEmpty, range.upperBound <= text.endIndex else { return nil }
+            caret = range.lowerBound
+        } else { caret = text.endIndex }
+        guard let at = text[..<caret].lastIndex(of: "@") else { return nil }
+        if at > text.startIndex, !text[text.index(before: at)].isWhitespace { return nil }
+        let query = text[text.index(after: at)..<caret]
+        guard !query.contains(where: \.isNewline), query.utf16.count <= 24 else { return nil }
+        return at..<caret
+    }
+
+    /// 只替换当前查询，保留尾文并把光标放回插入内容后。
+    mutating func insertMention(_ name: String) {
+        guard let range = mentionRange else { return }
+        let offset = text.utf16.distance(from: text.startIndex, to: range.lowerBound)
+        let token = "@\(name) "
+        var replacement = text
+        replacement.replaceSubrange(range, with: token)
+        replace(with: replacement)
+        selection = TextSelection(insertionPoint: String.Index(utf16Offset: offset + token.utf16.count, in: text))
+    }
+
+    /// 替换正文时同步丢弃旧选区，程序插入后由调用方设置新光标。
     mutating func replace(with replacement: String) {
         // iOS 18 converts the old selection to UTF-16 offsets during the next field
         // update. Clearing or shortening text without clearing its indices can trap.
         selection = nil
+        editRange = nil
         text = replacement
     }
 

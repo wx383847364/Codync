@@ -1,3 +1,4 @@
+import CodyncKit
 import SwiftUI
 import Testing
 @testable import CodyncUI
@@ -48,4 +49,11 @@ func replacingComposerTextDiscardsPreviousSelection(_ replacement: String) {
     input.insertNewline()
     #expect(input.text.isEmpty)
     #expect(input.selection == nil)
+}
+
+/// 三端按完整 Unicode 标量判断扩展名字；编辑片段后不能继续路由旧身份。
+@Test func supplementaryNameEditsReleaseMentionIdentity() {
+    let mention = Mention(botId: "a", start: 0, end: 6)
+    #expect(Mention.edited(from: "@Alice tail", to: "@Alice𠀀 tail", mentions: [mention]).isEmpty)
+    #expect(Mention.edited(from: "@Alice tail", to: "@Alice𠀀 tail", mentions: [mention], replacement: 6..<6).isEmpty)
 }

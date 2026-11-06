@@ -19,6 +19,7 @@ use std::time::Duration;
 use tokio::sync::{broadcast, watch};
 
 mod bots;
+mod deliveries;
 mod groups;
 mod lead;
 mod order;
@@ -53,6 +54,8 @@ pub struct Runtime {
     pub message: Option<String>,
     /// The ACP session the running turn prompts. A memory write made there is one that session already knows.
     pub session: Option<String>,
+    pub pending_new_session: bool,
+    pub storage_error: Option<String>,
     pub fast_mode: crate::agent::config::FastModeSupport,
     /// The fallback the bot is on; `None` on its own agent (see `agent::fallback`).
     pub agent_step: Option<AgentStep>,
@@ -166,9 +169,11 @@ impl Hub {
         })
     }
 
+    /// 恢复投递保守执行边界，再启动成员与统一房间周期补查。
     pub fn start(self: &Arc<Self>) -> Result<()> {
         // Approval cards and queued sends from a previous run can't be honored anymore.
         self.store.expire_pending()?;
+        self.store.recover_deliveries()?;
         crate::chat::memory::import_old_memory(self);
         self.routines.restore(&self.store)?;
         crate::market::turn_on_installed_once(&self.store)?;
@@ -180,6 +185,7 @@ impl Hub {
             }
         }
         crate::chat::calls::rewatch(self);
+        crate::chat::group::wake(self, None);
         crate::routines::start(self);
         crate::analytics::start(self);
         Ok(())
@@ -263,6 +269,7 @@ impl Hub {
         }
     }
 
+    /// 更新内存运行态并同步成员与来源群，数据库故障另走运行时事件。
     pub fn set_runtime(&self, id: &str, f: impl FnOnce(&mut Runtime)) {
         let (before, after) = {
             let mut map = self.runtime.locked();
@@ -275,6 +282,7 @@ impl Hub {
             || before.activity != after.activity
             || before.lane != after.lane
             || before.fast_mode != after.fast_mode
+            || before.pending_new_session != after.pending_new_session
             || before.agent_step != after.agent_step
         {
             self.emit_bot(id);
@@ -295,6 +303,48 @@ impl Hub {
                 }
             }
         }
+    }
+
+    /// 每次重连发送全部运行时故障状态（包含显式清除），不受数据库 rev 过滤。
+    pub fn delivery_runtime_snapshot(&self) -> Vec<Value> {
+        self.runtime
+            .locked()
+            .iter()
+            .map(|(id, r)| json!({"type":"deliveryStorageError","botId":id,"storageError":r.storage_error,
+                "status":r.status,"activity":r.activity,"workingChat":r.lane.as_ref().map(|lane| &lane.chat),"pendingNewSession":r.pending_new_session}))
+            .collect()
+    }
+
+    /// 存储故障只更新内存并走 DB 无关事件，重连快照也读取该字段。
+    pub fn delivery_storage_error(&self, id: &str, error: Option<String>) {
+        let has_error = error.is_some();
+        {
+            let mut runtime = self.runtime.locked();
+            let state = runtime.entry(id.to_owned()).or_default();
+            if state.storage_error == error {
+                return;
+            }
+            state.storage_error = error;
+            if has_error {
+                state.status = BotStatus::Error;
+                state.storage_error.as_deref().unwrap_or_default().clone_into(&mut state.activity);
+            } else {
+                state.status = BotStatus::Idle;
+                state.activity.clear();
+                state.lane = None;
+            }
+        }
+        crate::analytics::capture(
+            self,
+            crate::analytics::Event::GroupDeliveryStorage,
+            json!({"outcome":if has_error{"error"}else{"recovered"},"category":"database_write"})
+                .as_object()
+                .cloned()
+                .unwrap_or_default(),
+        );
+        let state = self.runtime(id);
+        let _ = self.events.send(json!({"type":"deliveryStorageError","botId":id,"storageError":state.storage_error,
+            "status":state.status,"activity":state.activity,"workingChat":state.lane.map(|lane|lane.chat),"pendingNewSession":state.pending_new_session}));
     }
 
     pub fn runtime(&self, id: &str) -> Runtime {

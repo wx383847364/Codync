@@ -39,6 +39,31 @@ pub(super) fn list(
     Ok(page(&rows, args, !filter.narrows()))
 }
 
+/// 群内发现只看可信房间成员，隐藏成员仍可被工具与文字一致地指派。
+pub(super) fn group(hub: &Hub, from: &str, room: &str, args: &Value) -> Result<Value> {
+    let group = hub.store.bot(room)?.filter(|r| !r.deleted).ok_or_else(|| anyhow::anyhow!("group deleted"))?;
+    anyhow::ensure!(group.config.members.iter().any(|id| id == from), "source is no longer a member");
+    let filter = Filter::of(args);
+    let here = hub.network.my_name();
+    let mut rows = Vec::new();
+    for id in group.config.members.iter().filter(|id| id.as_str() != from) {
+        if let Some(row) = hub.store.bot(id)?.filter(|r| !r.deleted) {
+            let cfg = row.config;
+            let row = Row {
+                words: format!("{} {}", cfg.name, cfg.description).to_lowercase(),
+                computer: None,
+                online: true,
+                kind: AgentKind::Codync,
+                value: json!({"id":cfg.id,"name":cfg.name,"description":cfg.description,"kind":AgentKind::Codync,"backend":cfg.backend,"cwd":cfg.cwd,"status":hub.runtime(id).status}),
+            };
+            if filter.keeps(&row, here.as_deref()) {
+                rows.push(row);
+            }
+        }
+    }
+    Ok(page(&rows, args, !filter.narrows()))
+}
+
 /// Everyone `from` can message, nearest first: this computer's bots, then the ones on computers
 /// that can take a message now.
 fn rows(hub: &Hub, from: &str, remote: &[Peer], keep: impl Fn(&BotConfig) -> bool) -> Result<Vec<Row>> {

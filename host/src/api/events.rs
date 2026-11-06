@@ -52,6 +52,7 @@ mod tests;
 
 /// Subscribes first, then yields a catch-up (everything after `since`, in rev order),
 /// then live events. Duplicates are fine: clients upsert by id/rev. Shared by SSE and channels.
+/// 建立事件追赶流，运行时保存故障每次重连单独补发且不推进数据库游标。
 pub fn events_stream(
     hub: &Arc<Hub>,
     since: i64,
@@ -70,6 +71,7 @@ pub fn events_stream(
     let icons = crate::icons::snapshot(&hub.store)?;
     catch_up.push(json!({"type": "icons", "icons": icons.icons, "iconsRevision": icons.icons_revision}));
     catch_up.sort_by_key(|v| v["rev"].as_i64().unwrap_or(0));
+    catch_up.extend(hub.delivery_runtime_snapshot());
     // What the voice of a call this device holds should have heard while it was away.
     catch_up.extend(crate::chat::calls::replay(caller.device_key()));
     let hello = json!({

@@ -78,10 +78,11 @@ impl Actor {
         });
     }
 
+    /// 按执行来源决定文件可发送的聊天，群派工文件仍留来源群。
     fn can_send_file(&self) -> Result<i64> {
         ensure!(!self.stop_requested, "turn is stopping");
         ensure!(
-            self.active_group.is_none() && self.active_request.is_none() && self.active_routine.is_none(),
+            self.active_delivery.is_none() && self.active_request.is_none() && self.active_routine.is_none(),
             "send_file and artifact cards are only available in the bot's own chat"
         );
         self.turn.ok_or_else(|| anyhow!("no turn is running: between turns, tell the user with send_message"))

@@ -16,7 +16,13 @@ import kotlinx.serialization.json.jsonObject
 
 @Serializable
 data class ComposerDraft(val botId: String, val text: String = "",
-    val files: List<OutgoingFile> = emptyList(), val nonce: String = UUID.randomUUID().toString())
+    val files: List<OutgoingFile> = emptyList(), val mentions: List<com.codync.android.core.Mention> = emptyList(), val nonce: String = UUID.randomUUID().toString()) {
+    /** 已发送内容的编辑是新意图；相同内容重传仍使用原 nonce。 */
+    internal fun forSaving(previous: ComposerDraft?, represented: Boolean): ComposerDraft {
+        val changed = previous != null && (previous.text != text || previous.files != files || previous.mentions != mentions)
+        return if (changed && represented) copy(nonce = UUID.randomUUID().toString()) else this
+    }
+}
 
 /** One bounded draft book per account/computer; a draft's nonce also identifies its durable send. */
 class DraftBook(private val directory: File, computerId: String) {
@@ -37,9 +43,9 @@ class DraftBook(private val directory: File, computerId: String) {
             .map { WireJson.decodeFromJsonElement<ComposerDraft>(it) }
     }
 
-    /** A crash between pending-send commit and draft removal cannot offer the same draft twice. */
+    /** 清理已排队草稿，但失败后明确恢复的草稿应跨重启保留，供编辑或原样重传。 */
     @Synchronized fun recover(snapshot: MirrorSnapshot): List<ComposerDraft> {
-        val queued = snapshot.pending.map { it.nonce }.toSet() + snapshot.entries.mapNotNull { it.clientNonce }
+        val queued = snapshot.pending.filter { it.status != com.codync.android.core.SendStatus.Failed }.map { it.nonce }.toSet() + snapshot.entries.mapNotNull { it.clientNonce }
         val drafts = read().filter { it.nonce !in queued }
         save(drafts)
         return drafts

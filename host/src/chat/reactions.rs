@@ -31,6 +31,7 @@ pub fn tool() -> Value {
 
 /// In a room, the newest message up to `shown` (the newest the bot's prompt showed) from `to`, or from anyone
 /// but `bot` when `None`.
+/// 只在 prompt 实际展示过的消息中选目标，后续消息不能推动查询窗口。
 pub fn in_room(hub: &Hub, lane: &Lane, bot: &str, to: Option<&str>, shown: i64) -> Result<String> {
     let to = to.map(|t| t.trim().to_lowercase()).filter(|t| !t.is_empty());
     let from = |e: &Entry| match (&to, e.data["author"].as_str()) {
@@ -41,7 +42,7 @@ pub fn in_room(hub: &Hub, lane: &Lane, bot: &str, to: Option<&str>, shown: i64) 
         (Some(_), None) => false,
     };
     hub.store
-        .messages_after(lane, 0, RECENT)?
+        .messages_through(lane, shown, RECENT)?
         .into_iter()
         .rev()
         .find(|e| e.seq <= shown && from(e))
@@ -75,6 +76,7 @@ mod tests {
     use crate::remote::identity::Identity;
     use crate::store::{BotConfig, Store};
 
+    /// 反应目标受展示快照约束，后续消息超过窗口也不能改变所见目标。
     #[test]
     fn room_reactions_pick_the_message_and_keep_it_read() {
         let dir = std::env::temp_dir().join(format!("codync-reactions-{}", uuid::Uuid::new_v4()));
@@ -122,6 +124,9 @@ mod tests {
         assert!(reacted_lately(&hub, &room, "b", &later.id).unwrap(), "still among the latest");
         more(1);
         assert!(!reacted_lately(&hub, &room, "b", &later.id).unwrap(), "long enough ago");
+        // 许多新消息到达之后仍能反应给 prompt 中实际展示的其他成员。
+        more(30);
+        assert_eq!(in_room(&hub, &room, "b", Some("Ann"), mine.seq).unwrap(), reply.id);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

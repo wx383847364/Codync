@@ -50,6 +50,7 @@ use super::net::Client;
 #[derive(Clone)]
 struct PendingSend {
     text: String,
+    mentions: Vec<crate::chat::mentions::Mention>,
     files: Vec<std::path::PathBuf>,
     nonce: String,
     busy: bool,
@@ -90,6 +91,7 @@ pub struct App {
     /// The composer's draft in each chat (bot id).
     pub drafts: HashMap<String, Editor>,
     /// The `/` list's highlighted row and the draft it was picked for.
+    pub mention_dismissed: Option<(String, usize)>,
     pub slash_pick: (String, usize),
     /// Files dropped on the composer (pasted paths), per draft like the text.
     pub files: HashMap<String, Vec<std::path::PathBuf>>,
@@ -160,6 +162,7 @@ pub struct App {
 }
 
 impl App {
+    /// 初始化终端状态并恢复草稿及其结构化提及身份。
     pub fn new(client: Client, tx: UnboundedSender<Msg>, url: String) -> Self {
         Self {
             download: None,
@@ -188,6 +191,7 @@ impl App {
             typing: false,
             chat_page: false,
             drafts: HashMap::new(),
+            mention_dismissed: None,
             slash_pick: (String::new(), 0),
             files: HashMap::new(),
             pasted: HashMap::new(),

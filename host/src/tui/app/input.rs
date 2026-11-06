@@ -85,11 +85,19 @@ impl App {
         self.nav_key(k);
     }
 
+    /// 输入阶段优先处理成员候选，确认选择不触发发送。
     fn composer_key(&mut self, k: KeyEvent) {
         let Some(key) = self.selected.clone() else {
             self.typing = false;
             return;
         };
+        // Esc 只隐藏当前查询；光标或正文变化后清除旧标记，避免相同查询永远被屏蔽。
+        if self.mention_dismissed.as_ref().is_some_and(|(text, cursor)| {
+            let draft = self.draft();
+            text != &draft.text || *cursor != draft.cursor
+        }) {
+            self.mention_dismissed = None;
+        }
         if self.slash_key(k) {
             return;
         }
@@ -102,9 +110,10 @@ impl App {
             KeyCode::Enter if newline => draft.insert("\n"),
             KeyCode::Char('j') if ctrl => draft.insert("\n"),
             KeyCode::Enter => {
-                let text = draft.text.trim().to_owned();
+                let text = draft.text.clone();
+                let mentions = draft.mentions.clone();
                 let files = self.files.get(&key).cloned().unwrap_or_default();
-                if text.is_empty() && files.is_empty() {
+                if text.trim().is_empty() && files.is_empty() {
                     return;
                 }
                 if files.is_empty() && self.built_in_command(&text) {
@@ -123,14 +132,20 @@ impl App {
                 let nonce = self
                     .sends
                     .get(&key)
-                    .filter(|s| s.text == text && s.files == files)
+                    .filter(|s| s.text == text && s.files == files && s.mentions == mentions)
                     .map_or_else(|| uuid::Uuid::new_v4().to_string(), |s| s.nonce.clone());
                 self.sends.insert(
                     key.clone(),
-                    PendingSend { text: text.clone(), files: files.clone(), nonce: nonce.clone(), busy: true },
+                    PendingSend {
+                        text: text.clone(),
+                        mentions: mentions.clone(),
+                        files: files.clone(),
+                        nonce: nonce.clone(),
+                        busy: true,
+                    },
                 );
                 self.chat_scroll = 0;
-                let mut body = json!({"botId": key, "text": text, "clientNonce": nonce});
+                let mut body = json!({"botId": key, "text": text, "clientNonce": nonce,"mentions":mentions});
                 if let Some(reply) = reply {
                     body["replyTo"] = reply.into();
                 }
@@ -178,6 +193,7 @@ impl App {
         self.trace_scroll = self.trace_scroll.saturating_add_signed(delta);
     }
 
+    /// 处理聊天导航与恢复操作，群内重试保存指向实际成员。
     fn nav_key(&mut self, k: KeyEvent) {
         let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
         let half = page(self.chat_height) / 2;
@@ -192,6 +208,24 @@ impl App {
             KeyCode::Char('u') if ctrl => self.scroll_focused(half),
             KeyCode::Char('q') => self.quit = true,
             KeyCode::Char('C') => self.open_connection(),
+            KeyCode::Char('V') => {
+                // 来源群恢复持有内存结果的成员，私聊保留当前成员入口。
+                if let Some(bot) = self.bot() {
+                    let targets: Vec<String> = self
+                        .bots
+                        .values()
+                        .filter(|member| {
+                            member.storage_error.is_some()
+                                && (member.id == bot.id
+                                    || (bot.group && member.working_chat.as_deref() == Some(&bot.id)))
+                        })
+                        .map(|member| member.id.clone())
+                        .collect();
+                    for target in targets {
+                        self.call("retryDeliverySave", json!({"botId":target}), After::Nothing);
+                    }
+                }
+            }
             KeyCode::Char('F') => self.retry_failed_run(),
             KeyCode::Char('I') if self.error.is_some() && self.bots.is_empty() => self.install_host(),
             KeyCode::Char('I') if self.bot().is_some_and(|b| b.lead) => self.overlays.push(Overlay::LeadAgent(0)),

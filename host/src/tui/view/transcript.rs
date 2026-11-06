@@ -139,6 +139,7 @@ fn intro(out: &mut Built, app: &App, b: &Bot, width: usize) {
 }
 
 /// One chat entry.
+/// 按消息类型生成终端内容，投递卡按来源事件和 attempt 显示。
 fn entry_lines(out: &mut Built, app: &App, b: &Bot, e: &Entry, info: &HashMap<i64, TurnInfo>, width: usize) {
     let t = theme();
     // In a group each reply is its author's; elsewhere the bot's own.
@@ -251,7 +252,25 @@ fn entry_lines(out: &mut Built, app: &App, b: &Bot, e: &Entry, info: &HashMap<i6
                 bot_message_line(out, app, e, (x.peer(), x.peer_name.as_deref()), &lead, failed, from);
                 return;
             }
-            let text = if let Some(status) = e.data["connectionRequest"]["status"].as_str() {
+            let text = if let Some(rows) = e.data["deliveryRows"].as_array() {
+                let mut lines = vec![format!(
+                    "Attempt {}: {}",
+                    e.data["deliveryAttempt"].as_i64().unwrap_or(1),
+                    e.data["deliveryBody"].as_str().unwrap_or_default()
+                )];
+                for row in rows {
+                    lines.push(format!(
+                        "{}: {} {}",
+                        app.author_name(row["targetBotId"].as_str()),
+                        row["status"].as_str().unwrap_or_default(),
+                        row["detail"].as_str().unwrap_or_default()
+                    ));
+                }
+                if rows.iter().any(|r| matches!(r["status"].as_str(), Some("failed" | "interrupted" | "noReply"))) {
+                    lines.push("F retries failed deliveries".into());
+                }
+                lines.join("\n")
+            } else if let Some(status) = e.data["connectionRequest"]["status"].as_str() {
                 let hint = if e.data["connectionRequest"]["kind"] == "agent" { "C signs in" } else { "C connects" };
                 format!(
                     "{} · {} · {}",

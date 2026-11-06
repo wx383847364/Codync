@@ -15,7 +15,7 @@ class SlashCommandsTest {
         val bot = Bot("b", "Bot", skills = listOf("review"))
         val skills = listOf(InstalledSkill("review", "Review", "Reads diffs", "src", "/p"), InstalledSkill("other", "Other", "", "src", "/q"))
         assertEquals(listOf("review"), SlashCommands.list(bot, "", skills).map { it.name }.filter { it != "fast" })
-        assertNull("a new session is in the bot's menu", SlashCommands.builtIn(bot, " /new "))
+        assertEquals("after", SlashCommands.builtIn(bot, " /new ")?.sessionMode)
         assertTrue(SlashCommands.list(Bot("g", "Team", kind = "group"), "", skills).isEmpty())
     }
 

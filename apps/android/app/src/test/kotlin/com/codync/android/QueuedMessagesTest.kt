@@ -45,4 +45,15 @@ class QueuedMessagesTest {
         val pending = listOf(PendingSend("n", "bot", "waiting", 1))
         assertEquals(emptyList<ChatItem>(), chatItems(entries, pending, busy = true).filterNot { it is ChatItem.Separator })
     }
+    /** 回包丢失后原样重传保留 nonce；改正文或同名身份必须成为新请求。 */
+    @Test fun `editing a restored send never reuses the accepted request nonce`() {
+        val before = ComposerDraft("g", "@Same work", mentions = listOf(com.codync.android.core.Mention("a", 0, 5)))
+        assertEquals(before.nonce, before.forSaving(before, represented = true).nonce)
+        val changedText = before.copy(text = "@Other work")
+        org.junit.Assert.assertNotEquals(before.nonce, changedText.forSaving(before, represented = true).nonce)
+        val changedIdentity = before.copy(mentions = listOf(com.codync.android.core.Mention("b", 0, 5)))
+        org.junit.Assert.assertNotEquals(before.nonce, changedIdentity.forSaving(before, represented = true).nonce)
+        assertEquals(before.nonce, changedText.forSaving(before, represented = false).nonce)
+    }
+
 }

@@ -46,9 +46,10 @@ class ConversationTest {
         assertEquals(500, long.replyQuote.text.length)
     }
 
+    /** send 新增结构化身份字段，附件与引用仍维持原请求语义。 */
     @Test fun `a send carries the message it quotes and its files`() {
         val send = PendingSend("n", "b", "Ship it", 1, replyTo = ReplyQuote("e", "user", "Ready?"))
-        assertEquals(buildJsonObject { put("botId", "b"); put("text", "Ship it"); put("clientNonce", "n"); put("replyTo", "e")
+        assertEquals(buildJsonObject { put("botId", "b"); put("text", "Ship it"); put("clientNonce", "n"); put("replyTo", "e"); putJsonArray("mentions") {}
             putJsonArray("attachments") { add("u1") } }, send.body(listOf("u1")))
         assertFalse("replyTo" in send.copy(replyTo = null).body())
     }
@@ -114,4 +115,15 @@ class ConversationTest {
             assertFails<IllegalArgumentException> { Entry.decode(value) }
         }
     }
+    /** 草稿、离线 pending 与重试序列化始终保留原 UTF-16 身份及未裁剪正文。 */
+    @Test fun `queued mentions retain stable identity and raw unicode offsets`() {
+        val send = PendingSend("n", "g", "  😀 @旧名 tail  ", 1, mentions = listOf(Mention("stable", 5, 8)))
+        val recovered = WireJson.decodeFromString<PendingSend>(WireJson.encodeToString(PendingSend.serializer(), send))
+        assertEquals(send, recovered)
+        assertEquals("  😀 @旧名 tail  ", recovered.body()["text"]?.jsonPrimitive?.content)
+        assertEquals("stable", recovered.body()["mentions"]?.jsonArray?.first()?.jsonObject?.get("botId")?.jsonPrimitive?.content)
+        assertEquals(emptyList<Mention>(), editMentions("@a", "@ab", listOf(Mention("a", 0, 2)), 2 until 2))
+        assertEquals(emptyList<Mention>(), editMentions("@a", "@a𠀀", listOf(Mention("a", 0, 2)), 2 until 2))
+    }
+
 }

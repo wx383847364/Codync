@@ -11,7 +11,7 @@ use serde_json::Value;
 pub const MIN_APP: &str = "2.36.0";
 
 /// The oldest host the terminal client works with.
-pub const MIN_HOST: &str = "2.20.1";
+pub const MIN_HOST: &str = "2.41.0";
 
 /// Which side has to update before a client and a host can work together.
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -69,6 +69,10 @@ pub enum Event {
     QueuedMessageRemoved,
     TurnStopped,
     TurnFinished,
+    GroupDeliveryAccepted,
+    GroupDeliveryFinished,
+    GroupDeliveryStorage,
+    GroupMentionRejected,
     /// A turn moved on to the bot's next agent (`agent::fallback`).
     AgentFellBack,
     UsageReadFailed,
@@ -125,6 +129,7 @@ pub enum Event {
 }
 
 impl Event {
+    /// 映射稳定事件名，群派工只记录使用与失败类别而不记录正文。
     fn name(self) -> &'static str {
         match self {
             Self::AppOpened => "app_opened",
@@ -154,6 +159,10 @@ impl Event {
             Self::QueuedMessageRemoved => "queued_message_removed",
             Self::TurnStopped => "turn_stopped",
             Self::TurnFinished => "turn_finished",
+            Self::GroupDeliveryAccepted => "group_delivery_accepted",
+            Self::GroupDeliveryFinished => "group_delivery_finished",
+            Self::GroupDeliveryStorage => "group_delivery_storage",
+            Self::GroupMentionRejected => "group_mention_rejected",
             Self::AgentFellBack => "agent_fell_back",
             Self::UsageReadFailed => "usage_read_failed",
             Self::SessionReset => "session_reset",

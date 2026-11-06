@@ -76,17 +76,18 @@ import Testing
                                        warns: true, accessory: .button("Try again")))
 }
 
+/// 使用兼容当前协议的电脑核验升级展示，最低 host 提升不改变该用例的业务目标。
 @MainActor @Test func theCodyncRowComparesWithTheLatestReleaseTheComputerFound() async throws {
     let (storage, suite) = context()
     defer { UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite) }
     let fake = FakeRemote(.ready(.relay))
-    await fake.setHello(helloJSON(version: "2.28.0", canUpdate: true, latestVersion: "2.30.0"))
+    await fake.setHello(helloJSON(version: "2.41.0", canUpdate: true, latestVersion: "2.42.0"))
     let store = BotStore(computer: randomComputer("Mac"), storage: storage, appVersion: VersionMismatch.minHost) { _ in fake }
     defer { store.retire() }
     store.setActive(true)
     #expect(await until { store.hello != nil })
     #expect(store.hostVersionLine()
-        == HostVersionLine(version: "2.28.0", detail: ["Version 2.30.0 is available."], accessory: .button("Update")))
+        == HostVersionLine(version: "2.41.0", detail: ["Version 2.42.0 is available."], accessory: .button("Update")))
     // Asked, the row shows it under way until the wait is over, then offers it again.
     store.requestHostUpdate()
     #expect(store.hostVersionLine()?.accessory == .updating)

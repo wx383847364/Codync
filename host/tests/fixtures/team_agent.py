@@ -161,9 +161,26 @@ def prompt(request):
         if cancel.is_set():
             send({"id": request["id"], "result": {"stopReason": "cancelled"}})
             return
+        # 群内真实MCP接力：配置只决定夹具行为，不替代host的来源上下文。
+        scripted = pathlib.Path("group-script.json")
+        if scripted.exists():
+            script = json.loads(scripted.read_text())
+            for task in script.get("tasks", []):
+                response = mcp_call("team", "message_bot", task)
+                assert not response.get("isError"), response
+            reply = script["reply"]
+            update({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": reply}})
+            send({"id": request["id"], "result": {"stopReason": "end_turn"}})
+            return
         # A room turn: answer only when the user spoke last, otherwise pass.
         room = text.split("New messages in the room (oldest first):\n", 1)[-1].split("\n\n", 1)[0]
-        last = room.strip().splitlines()[-1] if "New messages" in text else ""
+        lines = room.strip().splitlines()
+        last = lines[-1] if "New messages" in text and lines else ""
+        # 完整来源不在窗口时仍是本次请求；不能把窗口当作唯一任务正文。
+        if "Request (complete original):\n" in text:
+            source = text.split("Request (complete original):\n", 1)[1].split("\n\n", 1)[0]
+            if source.startswith("User:"):
+                last = source
         reply = "reply: group" if last.startswith("User:") else "(pass)"
         if last.startswith("User:") and "PING" in last:
             reply = "@b over to you"
@@ -202,6 +219,9 @@ for line in sys.stdin:
             "loadSession": True, "_meta": {"claudeCode": {}},
         }}})
     elif method in ("session/new", "session/load"):
+        # 测试在claimed与started之间强杀host，准备会话时绝不发送任务prompt。
+        while pathlib.Path("hold-session").exists():
+            time.sleep(0.01)
         servers = request["params"]["mcpServers"]
         with open("sessions.jsonl", "a") as log:
             log.write(json.dumps(request) + "\n")

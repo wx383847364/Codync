@@ -70,6 +70,7 @@ data class Entry(
         private fun isPass(text: String) =
             text.trim().trim('"', '.', '*').lowercase().let { it.isEmpty() || it == "(pass)" || it == "pass" }
 
+        /** 解析独立运行时故障与持久事件，未知事件按既有规则兼容。 */
         fun decode(value: JsonObject): Entry {
             val entry = WireJson.decodeFromJsonElement<Entry>(value)
             require(entry.id.isNotBlank() && entry.botId.isNotBlank() && entry.kind.isNotBlank() && entry.seq >= 0 && entry.rev >= 0) {
@@ -139,10 +140,14 @@ data class PendingSend(
     val replyTo: ReplyQuote? = null,
     /** The voice call it was said in (on-device or speech to text). */
     val call: String? = null,
+    val mentions: List<Mention> = emptyList(),
+    val draftKey: String? = null,
 ) {
     /** The `send` request for it, with the ids of its uploaded files. */
+    /** 构造实际发送正文，原始 UTF-16 提及范围与附件引用一起传输。 */
     fun body(attachments: List<String> = emptyList()): JsonObject = buildJsonObject {
         put("botId", botId); put("text", text); put("clientNonce", nonce)
+        put("mentions", WireJson.encodeToJsonElement(kotlinx.serialization.builtins.ListSerializer(Mention.serializer()), mentions))
         replyTo?.let { put("replyTo", it.id) }
         call?.let { put("call", it) }
         if (attachments.isNotEmpty()) put("attachments", JsonArray(attachments.map(::JsonPrimitive)))
@@ -156,6 +161,7 @@ sealed interface MirrorEvent {
     data class Icons(val icons: Map<String, CustomIcon>, val revision: Long = 0) : MirrorEvent
     /** The stream's first event; `network` is null from hosts before the network view (or one this app can't read). */
     data class Hello(val hostId: String, val rev: Long, val usage: JsonObject, val screen: JsonObject?, val network: NetworkView? = null) : MirrorEvent
+    data class DeliveryStorageError(val botId: String, val error: String?, val status: String, val activity: String, val workingChat: String?, val pendingNewSession: Boolean) : MirrorEvent
     data class BotChanged(val bot: Bot) : MirrorEvent
     data class EntryChanged(val entry: Entry) : MirrorEvent
     data class Usage(val value: JsonObject) : MirrorEvent
@@ -176,6 +182,7 @@ sealed interface MirrorEvent {
                 requireNotNull(value["rev"]?.jsonPrimitive?.longOrNull),
                 value["usage"]?.jsonObject ?: JsonObject(emptyMap()), value["screen"]?.takeUnless { it == JsonNull }?.jsonObject,
                 value["network"]?.takeUnless { it == JsonNull }?.let { runCatching { NetworkView.decode(it) }.getOrNull() })
+            "deliveryStorageError" -> DeliveryStorageError(requireNotNull(value.text("botId")), value.text("storageError"), value.text("status") ?: "idle", value.text("activity").orEmpty(), value.text("workingChat"), value["pendingNewSession"]?.jsonPrimitive?.booleanOrNull == true)
             "bot" -> BotChanged(HostClient.decode(value.getValue("bot").jsonObject))
             "entry" -> EntryChanged(Entry.decode(value.getValue("entry").jsonObject))
             "usage" -> Usage(value.getValue("usage").jsonObject)
@@ -201,3 +208,42 @@ data class MirrorSnapshot(
     val screen: JsonObject? = null,
     val icons: Map<String, CustomIcon> = emptyMap(),
 )
+
+/** 固定成员身份，偏移始终采用实际请求正文的 UTF-16 半开区间。 */
+@Serializable
+data class Mention(val botId: String, val start: Int, val end: Int)
+
+/** 片段外的编辑平移绑定；触及片段正文时解除绑定，避免改名误投。 */
+fun editMentions(before: String, after: String, mentions: List<Mention>, replacement: IntRange? = null): List<Mention> {
+    if (replacement != null) {
+        val delta = after.length - before.length
+        // 原生编辑范围只移动外部绑定，修改显示片段必须解除旧身份。
+        return mentions.mapNotNull { mention ->
+            val extendsName = mention.end == replacement.first && delta > 0 && (mention.end in after.indices && after.codePointAt(mention.end).let { Character.isLetterOrDigit(it) || it == '_'.code })
+            when {
+                mention.end <= replacement.first && !extendsName -> mention
+                mention.start >= replacement.last + 1 -> mention.copy(start = mention.start + delta, end = mention.end + delta)
+                else -> null
+            }
+        }
+    }
+    if (before == after) return mentions
+    var start = 0
+    var suffix = 0
+    while (start < before.length && start < after.length && before[start] == after[start]) start++
+    while (suffix < before.length && suffix < after.length && before[before.length - suffix - 1] == after[after.length - suffix - 1]) suffix++
+    // 重复字符有多个可能的编辑范围，保守解除可能被触及的身份。
+    val removed = maxOf(0, before.length - after.length, before.length - start - suffix)
+    val earliest = before.length - suffix - removed
+    val latestEnd = start + removed
+    val delta = after.length - before.length
+    return mentions.mapNotNull { mention -> when {
+        mention.end <= earliest && !(mention.end == earliest && delta > 0 && (mention.end in after.indices && after.codePointAt(mention.end).let { Character.isLetterOrDigit(it) || it == '_'.code })) -> mention
+        mention.start >= latestEnd -> mention.copy(start = mention.start + delta, end = mention.end + delta)
+        else -> null
+    } }
+}
+
+/** 聚合卡内的目标行，当前显示名从成员列表读取。 */
+@Serializable
+data class DeliveryRow(val deliveryId: String, val targetBotId: String, val status: String, val detail: String = "")

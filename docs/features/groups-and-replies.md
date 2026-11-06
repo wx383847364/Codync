@@ -32,7 +32,7 @@ quotes itself.
 
 | Method | Body | Notes |
 |---|---|---|
-| `send` | `botId, text, clientNonce, replyTo?` | `botId` is a bot or a group. `replyTo`: the id of a user message or final reply in that chat; anything else is refused. Works in the relay mailbox too. |
+| `send` | `botId, text, clientNonce, replyTo?, mentions?: [{botId,start,end}]` | `botId` is a bot or a group. `replyTo`: the id of a user message or final reply in that chat; anything else is refused. Works in the relay mailbox too. |
 | `createBot` | `{kind:"group", name, description?, members}` | Returns the existing group when these exact bots already share one. |
 | `updateBot` | `{id, name?, members?, pinned?, hidden?, section?}` | A group can't become a bot or the reverse. `section`: a name, or `null` for none. |
 | `deleteBot` | `botId` | A group's bots stay. A deleted bot leaves its groups. |
@@ -43,43 +43,58 @@ quotes itself.
 | `respondPermission` | `entryId, optionId?` | Routed to `data.author`, so cards in a group reach the bot that asked. |
 | `markRead` | `botId` | Reads the chat. A no-op when nothing there is unread, so clients call it whenever a chat is on screen. `send` marks its chat read. |
 
-## How a group answers (`host/src/chat/group.rs`, Grok Bot's design)
+## How a group answers (`host/src/chat/group.rs`)
 
-- The user's message starts a *room turn* in the group: up to 3 rounds, 10 replies in all.
-- Who answers the first round: the members the user @-mentioned (full name, name without
-  spaces, or first word; `@all` / `@everyone`) or replied to, or everyone if none is. A reply to
-  a member's message counts like `@`-mentioning it.
-- Who answers a later round: only the members another member @-mentioned in this room turn
-  (a member's `@all` / `@everyone`: all the others) and who haven't spoken or been asked since
-  (one that passed after seeing the mention isn't asked again). Nobody named,
-  and the room turn ends after the round: a member brings a teammate in by naming it, and a
-  `(pass)` costs no extra rounds. Members speak one at a time; each round starts one member later.
-- `message_bot` is refused in a room turn (its reply would go to the member's own chat); members
-  @-mention each other instead ([bot collaboration](bot-collaboration.md)).
-- A group's `description` ("About") tells its members what the room is for.
-- A member runs the turn in its **own main session** (its history is unified across chats),
-  told who's in the room and what was said since it last spoke there, framed as
-  `[Group chat: "<name>" - with …]`. Its final reply is the one message the room sees; replying
-  `(pass)` says nothing. A round where nobody speaks ends the room turn. A member can also
-  react to someone's message (`react(emoji, to?)`), so it can agree with a reaction and pass.
-  Room lines carry their reactions: `Ann: Shipped. (reactions: User 👍, Ben 🎉)`, and a reply
-  its quote: `User: [Codync: this replies to Ann's message: "…"] text`.
-- A member busy with a turn outside the room isn't waited for: the room shows "<name> is busy
-  in another chat and will answer here when it's done.", moves on, and the member answers in
-  the room once its other turn ends (with its own "done" push), on a prompt built then, so it
-  sees what the room said meanwhile. It isn't asked again in later rounds of that room turn.
-  Newer messages in the group, and Stop in the member's own chat, don't drop that late answer;
-  the group's Stop or removing the member from the group does, and a newer room turn that asks
-  the member again replaces it.
-- A new message in the group, or Stop, ends a running room turn before its next speaker.
-- Tool calls, thoughts and permission cards of a member's group turn are written to the
-  group (with `author`), not to the member's own chat. One "done" push per room turn, plus
-  one per late answer from a busy member.
-- Files sent to a group are kept in the group's data folder (`~/.codync/bots/<group>/uploads`);
-  each member's prompt lists their paths under the user's line.
-- Voice calls work in a group: each final reply is read with its speaker's name, a member's
-  pending permission card is announced (a group has no status of its own), and the realtime
-  operator is told the room's members.
+A persistent `deliveries` row is the sole dispatch authority. Each room has one runner,
+ordered by monotonic `room_seq`; actors conditionally claim only its specified ID. A busy
+member stays `queued`, with the same identity, source and sequence. New user messages do
+not cancel accepted deliveries. User entries and their `speak` deliveries commit together.
+
+`send.mentions` binds selected members by ID using UTF-16 half-open ranges into the actual
+request body. Clients preserve these bindings in drafts, offline sends, retries and history.
+The host validates before trimming, then shifts ranges with the trim. Outside bound spans,
+full names take priority; compact names and first words must be unique. Unknown `@word`
+is text, ambiguous names reject the send and keep the draft. Code fences, inline and
+indented code, quote lines, email and URLs do not dispatch. `@all` / `@everyone` expand to
+current members; quote replies include their author's target. A message without any
+assignment expression asks everyone. Stored history is never parsed again after renames.
+
+Both `speak` and tool-created `task` deliveries occupy the room's wait slot, up to ten
+minutes. Timeout only releases that slot; it does not stop the execution or change its
+state. Late completion uses a conditional update and cannot revive cancelled work.
+The source entry's complete text, attachments and quote (or the exact tool body) are the
+request; the newest 24 room messages provide supplemental context only.
+
+Each user entry starts a batch: at most 10 `speak` rows in `claimed`, `started` or
+`completed`; claim atomically reserves that budget. Three conversation rounds and a
+separate eight-hop chain limit remain independent; tools inherit the round and increment
+chain depth. Pending `task` rows (`queued`, `claimed`, `started`) count toward global 64
+and per-sender 16 capacity, with checks and insertion in one IMMEDIATE transaction.
+
+The state machine is `queued → claimed → started → completed / noReply / failed /
+interrupted / cancelled`. `started` must commit before prompt transmission. Restart
+requeues `claimed`, preserves `queued`, and marks `started` interrupted with an uncertain
+result; it never automatically replays uncertain work. Startup, idle transitions,
+post-commit notification and a roughly three-second scan wake room scheduling.
+
+Final reply, conditional terminal state and derived mentions commit atomically. Cards
+aggregate a source event and attempt, with one row per target; retries create a new
+delivery and attempt linked to the original. A `speak` pass is silent; a `task` pass says
+it provided no result. Group work uses the group lane and never records task text as
+user memory or sends its result into the sender's private chat. File/artifact sharing
+from a delivery is unavailable; use the final reply, and user attachments remain usable.
+
+Stop, member removal and group deletion persist cancellation before stopping execution.
+Private Stop keeps requests queued in other groups. `/new` defaults to switching after
+the current execution and result save; `/new-now` cancels, waits for the existing
+15-second grace/agent termination, persists interruption, then forgets the old session.
+`/new-cancel` withdraws a pending switch. Main and group turns share that session.
+
+On result storage failure, the actor retains its in-memory output and stops claiming.
+It retries every three seconds five times, then waits for `retryDeliverySave {botId}`.
+`deliveryStorageError` bypasses DB writes and is included (including null clear) in every
+reconnection snapshot. A continued write failure followed by process loss can lose the
+unsaved result; recovery says the outcome is uncertain rather than claiming completion.
 
 ## How a reply reaches the agent (`host/src/chat/prompt.rs` `of_entry`)
 

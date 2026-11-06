@@ -61,10 +61,11 @@ class HostUpdateNoticeTest {
             accessory = tryAgain), line("2.29.0", update = HostUpdate.Requested(now - HOST_UPDATE_WAIT_MS)))
     }
 
+    /** 使用兼容当前协议的电脑，验证界面仍正确比较最新可用版本。 */
     @Test fun theCodyncRowComparesWithTheLatestReleaseTheComputerFound() {
         val state = AppState(Computer("fixture", "Studio", "fixture")).copy(hello = buildJsonObject {
-            put("name", "Mini"); put("version", "2.28.0"); put("latestVersion", "2.30.0"); put("canUpdate", true)
+            put("name", "Mini"); put("version", "2.41.0"); put("latestVersion", "2.42.0"); put("canUpdate", true)
         })
-        assertEquals(HostVersionLine("2.28.0", listOf("Version 2.30.0 is available."), accessory = update), state.hostVersionLine(now))
+        assertEquals(HostVersionLine("2.41.0", listOf("Version 2.42.0 is available."), accessory = update), state.hostVersionLine(now))
     }
 }

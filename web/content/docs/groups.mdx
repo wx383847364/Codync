@@ -30,18 +30,18 @@ In the editor you can rename the group, add or remove members, and fill in **Wha
 
 When you send a message, the group runs a round of answers:
 
-1. **Who's asked.** The members you @-mentioned, or whose message you replied to, since your last message. If you mention nobody, or write `@all` or `@everyone`, every member is asked.
-2. **One at a time.** Members answer in order, each after the previous one finished, so each can read the replies before its own. Each round starts with a different member, so the same bot doesn't always go first.
-3. **Passing.** A member with nothing new to add passes, and nothing appears in the chat. A member can also react to a message and pass, to agree without writing.
-4. **More rounds.** If anyone spoke, another round follows, so members can answer each other. A member that @-mentions another brings it into the next round.
-5. **The end.** The exchange stops after three rounds, ten replies in all, or a round where every member passes.
+1. **Who is asked.** Selected or uniquely named members, plus the author you reply to. Without a target, or with `@all` / `@everyone`, everyone is asked.
+2. **One at a time.** Each member sees prior replies before its turn. A busy member keeps its request queued while the room moves on. Two independent requests to that member remain separate.
+3. **Passing.** A member with nothing to add can pass without a message. Tool-assigned work that passes shows that it provided no result.
+4. **Limits.** Each message starts a batch with three conversation rounds, ten member replies, and a separate eight-hop limit across mentions and tool requests. A turn taking longer than ten minutes releases the room's wait slot; its work continues and can finish later.
 
 Each member's reply is the one message the room sees. Its tool calls, thoughts and approval cards for that turn appear in the group. The member's own chat doesn't show them. Open **Full conversation** to see its steps.
 
 ### @-mentions
 
-To ask just one bot, mention it: its full name, its name without spaces, or its first word all work, in any letter case. On the desktop and iPhone, typing `@` in a group suggests its members.
+Type `@` at the cursor to see members. Pick one by click or tap; a keyboard supports up/down, Enter or Tab to insert, and Esc to close. Selection preserves the text after the cursor and never sends. Chinese input-method confirmation stays with the input method. Same-name members show an ID hint. Selected identities survive drafts, offline sends, retries and later renames.
 
+You can also type a full name, name without spaces or first word. Ambiguous names ask you to choose again and keep the draft; unknown `@word` remains text. Mentions inside code, quoted lines, email and links do not assign work.
 Replying to a member's message counts as mentioning it. To reply, long-press the message on iPhone, use **Reply** below the message on the desktop, or press `r` in the terminal UI.
 
 ### Reactions and files
@@ -50,35 +50,39 @@ You can react to messages in a group. Members see your reactions on the messages
 
 Files you attach in a group are available to every member.
 
-## A busy member answers later
+## Queued work and recovery
 
-A member may be working somewhere else when the group asks it, for example in its own chat or in another group. The room doesn't wait. It shows:
+A busy member keeps each accepted request queued and reads the room again when free.
+New messages never replace accepted work. Cards show each target's state and retry attempt;
+failed or interrupted work offers **Try again**, which preserves the old record.
 
-> Alice is busy in another chat and will answer here when it's done.
+Group **Stop**, removing a member or deleting the group cancels its unfinished work.
+Stopping a private chat preserves requests queued by other groups. After a restart, work
+that may already have started is marked interrupted with an uncertain outcome and waits
+for your decision to retry. Check for external effects before retrying uncertain work.
 
-and moves on to the next member. When Alice finishes her other work, she answers in the group, after reading what the room said in the meantime. She isn't asked again in later rounds of that exchange.
+If results cannot be saved, they stay in memory and the member pauses. **Retry save** is
+available beside the affected member in the source group and in its own chat, even if a card could not be written. The host retries saving
+five times at three-second intervals first. If storage stays unavailable and the process
+exits, unsaved results may be lost; Codync reports uncertainty and does not rerun them.
 
-Her late answer is dropped if you press Stop in the group, remove her from the group, or send a newer message that asks her again (the newer one replaces it). Other new messages in the group, and Stop in Alice's own chat, don't drop it.
+## Starting a new session
 
-If a member fails while answering, the room counts it as a pass and shows the error.
+`/new` waits for the current task and result save before switching; `/new-now` stops and
+switches after interruption has been saved; `/new-cancel` cancels the pending switch.
+A member's private chat and its groups share the session, so the switch affects all of them.
 
-## Stop
-
-Press **Stop** in the group (the send button turns into Stop while members work; `s` in the terminal UI). It ends the current exchange and stops members working in the group.
-
-Sending a new message also ends the running exchange before the next member is asked, and starts a new one with your message.
 
 ## What each member remembers
 
-- **One session per bot.** A member answers in the group in the same session as its own chat. It remembers the group conversation when you talk to it one-on-one later, and the other way round. When a bot's chat gets a [fresh session](/docs/bots#sessions), its groups do too.
-- **What it's shown.** On each turn, a member reads the room's messages since it last spoke there, the most recent ones if there are many, plus who's in the room and what the group is for.
-- **Private chats.** Members are told not to reveal what you discussed with them one-on-one. That's only an instruction to the agent: the same session holds both conversations.
-- **Long-term memory.** In a group, a bot can add to its [memory](/docs/memory) but can't change or remove what's there. Group chats don't feed dreaming, and a bot's history search covers only its own chat.
+- **Shared session.** A member uses the same session in its private chat and its groups. Starting a fresh session affects both.
+- **Complete request.** Each turn receives the original request, attachments and quote, plus recent room context. Prior replies are available to the next member.
+- **Private chats.** Members are instructed not to reveal private conversations. The session still holds both conversations.
+- **Long-term memory.** Group work does not feed user-conversation dreaming. A tool assignment is never recorded as the user's own words.
 
-## Notifications
+## Notifications and voice
 
-You get one "done" notification per exchange, from the last member that replied ("Alice in Ship room"), plus one for each late answer. When a member needs your approval, its card appears in the group and you get a "needs you" notification that opens the group.
-
+The group sends a done notification after an exchange, plus notifications for late replies. Approval notifications open the group.
 Voice calls work in groups too: each reply is read with its speaker's name. See [Voice](/docs/voice).
 
-To have bots work together without a shared room, see [Teamwork](/docs/teamwork).
+To collaborate without a shared room, see [Teamwork](/docs/teamwork).

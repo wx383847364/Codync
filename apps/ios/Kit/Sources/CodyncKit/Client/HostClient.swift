@@ -4,6 +4,7 @@ public enum HostEvent: Sendable {
     case icons([String: CustomIcon], revision: Int64)
     /// The stream's first event; `network` is nil from hosts before the network view.
     case hello(hostId: String, rev: Int64, usage: Usage, screen: ScreenState?, network: NetworkView?)
+    case deliveryStorageError(botId: String, error: String?, status: String, activity: String, workingChat: String?, pendingNewSession: Bool)
     case bot(Bot)
     case botDeleted(id: String, rev: Int64)
     case entry(Entry)
@@ -92,6 +93,7 @@ public struct HostClient: Sendable {
         }
     }
 
+    /// 解析持久事件和运行时故障快照，恢复与清除状态均明确覆盖。
     public static func parseEvent(_ data: Data) -> HostEvent? {
         struct Envelope: Decodable {
             var type: String
@@ -116,6 +118,9 @@ public struct HostClient: Sendable {
             let screen = (try? d.decode(ScreenWrap.self, from: data))?.screen
             let network = (try? d.decode(NetworkWrap.self, from: data))?.network
             return .hello(hostId: env.hostId ?? "", rev: env.rev ?? 0, usage: usage, screen: screen, network: network)
+        case "deliveryStorageError":
+            struct StorageError: Decodable {var botId: String; var storageError: String?; var status: String; var activity: String; var workingChat: String?; var pendingNewSession: Bool}
+            return (try? d.decode(StorageError.self, from: data)).map { .deliveryStorageError(botId: $0.botId, error: $0.storageError, status: $0.status, activity: $0.activity, workingChat: $0.workingChat, pendingNewSession: $0.pendingNewSession) }
         case "bot":
             if let stub = try? d.decode(StubWrap.self, from: data), stub.bot.deleted == true {
                 return .botDeleted(id: stub.bot.id, rev: stub.bot.rev)
@@ -245,15 +250,16 @@ public extension HostClient {
     /// `replyTo`: the chat message this one quotes.
     /// `pasted`: what the user pasted rather than typed, which memory never takes as their own words.
     /// `call`: the voice call it was said in (on-device or speech to text).
+    /// 按实际正文发送 UTF-16 身份，裁剪与路由由 host 统一校验。
     func send(botId: String, text: String, clientNonce: String, replyTo: String? = nil, attachments: [String]? = nil,
-              pasted: [String]? = nil, call: String? = nil) async throws -> Entry {
+              pasted: [String]? = nil, call: String? = nil, mentions: [Mention] = []) async throws -> Entry {
         struct Body: Encodable {
             var botId: String; var text: String; var clientNonce: String; var replyTo: String?; var attachments: [String]?
-            var pasted: [String]?; var call: String?
+            var pasted: [String]?; var call: String?; var mentions: [Mention]
         }
         struct Res: Decodable { var entry: Entry }
         let body = Body(botId: botId, text: text, clientNonce: clientNonce, replyTo: replyTo, attachments: attachments,
-                        pasted: pasted?.isEmpty == false ? pasted : nil, call: call)
+                        pasted: pasted?.isEmpty == false ? pasted : nil, call: call, mentions: mentions)
         let res: Res = try await self.call("send", body)
         return res.entry
     }

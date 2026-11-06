@@ -115,6 +115,7 @@ class MirrorDatabase(context: Context, directory: File, computerId: String) :
         otherHost || otherStamp
     }
 
+    /** 应用事件到镜像；独立运行态覆盖故障但不抬高持久游标。 */
     @Synchronized fun apply(event: MirrorEvent) = apply(listOf(event))
     @Synchronized fun apply(events: List<MirrorEvent>) = transaction { db ->
         for (event in events) when (event) {
@@ -130,6 +131,10 @@ class MirrorDatabase(context: Context, directory: File, computerId: String) :
                 setMeta(db, "usage", event.usage.toString())
                 event.screen?.let { setMeta(db, "screen", it.toString()) }
                 // Hello's head revision precedes catch-up; it is never a checkpoint.
+            }
+            is MirrorEvent.DeliveryStorageError -> {
+                val bot = rows(db, "SELECT payload FROM bots WHERE deleted=0") { WireJson.decodeFromString<Bot>(it) }.firstOrNull { it.id == event.botId }
+                if (bot != null) writeBot(db, bot.copy(storageError = event.error, status = event.status, activity = event.activity, workingChat = event.workingChat, pendingNewSession = event.pendingNewSession))
             }
             is MirrorEvent.BotChanged -> { writeBot(db, event.bot); bump(db, event.bot.rev) }
             is MirrorEvent.EntryChanged -> { writeEntry(db, event.entry); bump(db, event.entry.rev) }

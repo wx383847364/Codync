@@ -15,6 +15,7 @@ use super::style::{avatar, rgb, spin, theme};
 use super::time::elapsed;
 use super::transcript::build_chat;
 
+/// 呈现来源群、投递状态和成员保存故障，不依赖新卡片写入。
 pub(super) fn chat(buf: &mut Buffer, r: Rect, app: &mut App, narrow: bool) {
     let t = theme();
     app.hits.chat = r;
@@ -79,6 +80,29 @@ pub(super) fn chat(buf: &mut Buffer, r: Rect, app: &mut App, narrow: bool) {
             r.width - 2,
             &format!("{} Reconnecting to {}…", spin(app), if app.host.is_empty() { &app.url } else { &app.host }),
             s.add_modifier(Modifier::BOLD),
+        );
+        top += 1;
+    }
+
+    // 群内也显示成员的保存故障，V 会重试这些成员，不向群本身发送 actor 命令。
+    for member in app
+        .bots
+        .values()
+        .filter(|member| member.id == b.id || (b.group && member.working_chat.as_deref() == Some(&b.id)))
+    {
+        if let Some(error) = &member.storage_error {
+            put(buf, r.x + 1, top, r.width.saturating_sub(2), &format!("{}: {error} · V 重试保存", member.name), t.red);
+            top += 1;
+        }
+    }
+    if b.pending_new_session {
+        put(
+            buf,
+            r.x + 1,
+            top,
+            r.width.saturating_sub(2),
+            "将在当前任务结束后新建会话；主会话与群共享。/new-cancel 取消切换",
+            t.secondary,
         );
         top += 1;
     }
@@ -225,6 +249,7 @@ pub(super) fn chat(buf: &mut Buffer, r: Rect, app: &mut App, narrow: bool) {
 
 /// The `/` list over the bottom of the transcript: the commands matching what's typed, the
 /// highlighted one kept in view.
+/// 显示纵向命令或成员候选，并保持键盘高亮可见。
 fn command_menu(buf: &mut Buffer, body: Rect, app: &App) {
     let t = theme();
     let commands = app.slash_commands();
@@ -236,7 +261,17 @@ fn command_menu(buf: &mut Buffer, body: Rect, app: &App) {
         let bg = if i == sel { t.sel } else { t.panel };
         fill(buf, Rect::new(body.x, y, body.width, 1), bg);
         let name = if i == sel { t.bold } else { t.text };
-        let x = put(buf, body.x + 3, y, 26, &truncate(&format!("/{}", c.name), 26), name.patch(bg)) + 2;
+        let x = put(
+            buf,
+            body.x + 3,
+            y,
+            26,
+            &truncate(
+                &if c.action == SlashAction::Mention { format!("@{}", c.title) } else { format!("/{}", c.name) },
+                26,
+            ),
+            name.patch(bg),
+        ) + 2;
         let hint = match (i == sel, c.action) {
             (false, _) => "",
             (true, SlashAction::Skill) => "tab fills in",

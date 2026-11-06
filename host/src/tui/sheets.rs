@@ -335,6 +335,7 @@ pub fn agent(buf: &mut Buffer, area: Rect, app: &App, a: &AgentSetup) {
     footer(buf, inner, a.error.as_deref(), "↑↓ move · ↵ run · esc back");
 }
 
+/// 呈现当前弹层字段，支持成员选择及新会话选项。
 pub fn fields(buf: &mut Buffer, area: Rect, f: &Fields) {
     let t = theme();
     let tall = f.inputs.iter().any(|i| i.multiline);
@@ -383,6 +384,7 @@ pub fn fields(buf: &mut Buffer, area: Rect, f: &Fields) {
         }
         let shown = if input.secret {
             Editor {
+                mentions: vec![],
                 text: "•".repeat(input.ed.text.chars().count()),
                 cursor: "•".len() * input.ed.text[..input.ed.cursor].chars().count(),
             }

@@ -47,7 +47,7 @@ public enum SharedStore {
             self.suite = suite
         }
 
-        fileprivate static let names = ["computers", "bots", "usage", "lastComputerId", "composerDrafts", "computerOrder", "shortcutLeadComputer"]
+        fileprivate static let names = ["computers", "bots", "usage", "lastComputerId", "composerDrafts", "composerMentions", "computerOrder", "shortcutLeadComputer"]
         fileprivate func key(_ name: String) -> String { accountID == nil ? name : "account.\(id).\(name)" }
         public static func digest(_ value: String) -> String {
             SHA256.hash(data: Data(value.utf8)).map { String(format: "%02x", $0) }.joined()
@@ -79,6 +79,12 @@ public enum SharedStore {
             nonmutating set { write(newValue, "usage") }
         }
         /// Unsent text, isolated by account, computer and bot; not a transcript cache.
+        /// 绑定独立存储以兼容旧版纯文本草稿格式。
+        public var composerMentions: [ComputerID: [String: [Mention]]] {
+            get { read([ComputerID: [String: [Mention]]].self, "composerMentions") ?? [:] }
+            nonmutating set { write(newValue, "composerMentions") }
+        }
+
         public var composerDrafts: [ComputerID: [String: String]] {
             get { read([ComputerID: [String: String]].self, "composerDrafts") ?? [:] }
             nonmutating set { write(newValue, "composerDrafts") }

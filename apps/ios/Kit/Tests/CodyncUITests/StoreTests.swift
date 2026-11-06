@@ -403,6 +403,23 @@ func helloJSON(version: String, minApp: String? = nil, backends: String = "[]", 
     #expect(storage.composerDrafts[computer.id] == ["first": "Unsent!", "second": "New"])
 }
 
+/// 初始化拒绝孤立身份，删除目标时同时删除正文与绑定。
+@MainActor @Test func composerMentionsNeverOutliveTheirTextDraft() {
+    let (storage, suite) = context()
+    defer { UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite) }
+    let computer = randomComputer("Mac")
+    storage.composerDrafts[computer.id] = ["first": "@Alice"]
+    let mention = Mention(botId: "a", start: 0, end: 6)
+    storage.composerMentions[computer.id] = ["first": [mention], "orphan": [mention]]
+    let store = BotStore(computer: computer, storage: storage) { _ in FakeRemote(.connecting) }
+    defer { store.retire() }
+    #expect(store.composerMentions["first"] == [mention])
+    #expect(store.composerMentions["orphan"] == nil)
+    store.removeComposerDrafts(for: "first")
+    #expect(store.composerMentions["first"] == nil)
+    #expect(storage.composerMentions[computer.id]?["first"] == nil)
+}
+
 @MainActor @Test func composerDraftsPersistAcrossNavigationAndReopening() {
     let (storage, suite) = context()
     defer { UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite) }

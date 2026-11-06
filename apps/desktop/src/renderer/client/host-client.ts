@@ -69,6 +69,7 @@ export type HostEvent =
   | { type: 'icons'; iconsRevision: number; icons: import('@shared/custom-icons').CustomIcons }
   /** `network` is null from hosts before the network view. */
   | { type: 'hello'; hostId: string; rev: number; usage: Usage; screen: ScreenState | null; network: NetworkView | null; icons?: import('@shared/custom-icons').CustomIcons }
+  | { type: 'deliveryStorageError'; botId: string; storageError: string | null; status: Bot['status']; activity: string; workingChat: string | null; pendingNewSession: boolean }
   | { type: 'bot'; bot: Bot }
   | { type: 'botDeleted'; id: string; rev: number }
   | { type: 'entry'; entry: Entry }
@@ -87,6 +88,7 @@ export type HostEvent =
   /** An event this app version couldn't read (host newer/older than the app). */
   | { type: 'undecodable'; kind: string }
 
+/** 解析持久事件和独立运行时快照，保存故障可跨重连恢复。 */
 export function parseEvent(line: string): HostEvent | null {
   let raw: Record<string, unknown>
   try {
@@ -108,6 +110,8 @@ export function parseEvent(line: string): HostEvent | null {
         network: (raw.network as NetworkView | undefined) ?? null,
         icons: raw.icons as import('@shared/custom-icons').CustomIcons | undefined,
       }
+    case 'deliveryStorageError':
+      return { type, botId: String(raw.botId), storageError: typeof raw.storageError === 'string' ? raw.storageError : null, status: (raw.status as Bot['status']) ?? 'idle', activity: String(raw.activity ?? ''), workingChat: typeof raw.workingChat === 'string' ? raw.workingChat : null, pendingNewSession: raw.pendingNewSession === true }
     case 'bot': {
       const bot = raw.bot as (Bot & { deleted?: boolean }) | undefined
       if (!bot || typeof bot.id !== 'string') return { type: 'undecodable', kind: 'bot' }
@@ -196,8 +200,9 @@ export class HostClient {
   /** `pasted`: what the user pasted rather than typed, which memory never takes as their own words. `replyTo`: the
    * chat message this one replies to. */
   /** `call`: the voice call it was said in (on-device or speech to text). */
-  async send(botId: string, text: string, clientNonce: string, attachments: string[] | null, pasted: string[] = [], replyTo: string | null = null, call: string | null = null) {
-    return (await this.call<{ entry: Entry }>('send', { botId, text, clientNonce, attachments, ...(pasted.length ? { pasted } : {}), ...(replyTo ? { replyTo } : {}), ...(call ? { call } : {}) })).entry
+  /** 把原正文和 UTF-16 身份绑定一起交给 host 校验和持久化。 */
+  async send(botId: string, text: string, clientNonce: string, attachments: string[] | null, pasted: string[] = [], replyTo: string | null = null, call: string | null = null, mentions: import('@shared/mentions').Mention[] = []) {
+    return (await this.call<{ entry: Entry }>('send', { botId, text, clientNonce, attachments, mentions, ...(pasted.length ? { pasted } : {}), ...(replyTo ? { replyTo } : {}), ...(call ? { call } : {}) })).entry
   }
 
   /** Bytes per `upload` call: base64 of it stays well under the channel's 1 MiB message. */

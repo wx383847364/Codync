@@ -7,6 +7,7 @@ use anyhow::Result;
 
 impl Hub {
     /// A group is busy while one of its members works in it: that member's status and activity.
+    /// 群状态投影来源成员执行及保存故障，成员交接期间保留调度状态。
     pub fn group_runtime(&self, group: &BotConfig) -> Runtime {
         let busy = {
             let runtime = self.runtime.locked();
@@ -16,7 +17,17 @@ impl Hub {
                     .then(|| (m.clone(), r.clone()))
             })
         };
-        let Some((member, mut r)) = busy else { return Runtime::default() };
+        let Some((member, mut r)) = busy else {
+            // runner 在成员之间交接时仍是工作中，避免短暂 idle 使客户端误判整轮结束。
+            if self.groups.running(&crate::store::Lane::main(&group.id)) {
+                return Runtime {
+                    status: BotStatus::Working,
+                    activity: "Scheduling group deliveries…".into(),
+                    ..Runtime::default()
+                };
+            }
+            return Runtime::default();
+        };
         let name = self.bot_name(&member);
         r.activity = if r.activity.is_empty() { name } else { format!("{name}: {}", r.activity) };
         r
@@ -54,6 +65,7 @@ mod tests {
     use crate::store::{BotConfig, Store};
     use serde_json::json;
 
+    /// 删除成员后，存活群的queued卡片与取消终态一起发布，重连也能读到同一状态。
     #[tokio::test]
     async fn a_deleted_bot_leaves_its_groups_and_they_keep_their_latest_section() {
         let dir = std::env::temp_dir().join(format!("codync-groups-{}", uuid::Uuid::new_v4()));
@@ -68,7 +80,24 @@ mod tests {
             hub.store.save_bot(&serde_json::from_value::<BotConfig>(v).unwrap()).unwrap();
         }
         hub.rename_section("Work", Some("Play")).unwrap();
+        let source = hub.post_group("g", &json!({"text":"queued work"}), &["a".into()]).unwrap();
+        let mut events = hub.events.subscribe();
         hub.delete_bot("a").unwrap();
+        let id = format!("delivery-card-{}-1", source.id);
+        assert_eq!(hub.store.entry(&id).unwrap().data["deliveryRows"][0]["status"], "cancelled");
+        let mut published = false;
+        let mut previous = 0;
+        while let Ok(event) = events.try_recv() {
+            if let Some(rev) = event["rev"].as_i64() {
+                assert!(rev >= previous);
+                previous = rev;
+            }
+            if event["type"] == "entry" && event["entry"]["id"] == id {
+                assert_eq!(event["entry"]["data"]["deliveryRows"][0]["status"], "cancelled");
+                published = true;
+            }
+        }
+        assert!(published, "online clients receive the cancelled card immediately");
         let group = hub.store.bot("g").unwrap().unwrap().config;
         assert_eq!((group.members, group.section.as_deref()), (vec!["b".to_owned()], Some("Play")));
         std::fs::remove_dir_all(&dir).unwrap();

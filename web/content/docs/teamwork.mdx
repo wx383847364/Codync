@@ -10,6 +10,18 @@ Give each bot a clear name and [standing instructions](/docs/bots) that say what
 
 The bot finds Reviewer among your bots and sends it the request. When Reviewer's answer comes back, the bot sums it up for you in its own chat. Bots see only your visible bots: a bot you hid from the bot list can't be messaged, and neither can a group.
 
+## Work assigned inside a group
+
+In a [group chat](/docs/groups), a bot can assign another member with `message_bot`.
+The request stays queued while that member is busy, and its final answer stays in the
+same group. The room waits for it before asking the next member; after ten minutes the
+room can continue while the overdue work finishes. A status card shows every target
+and offers retry after failure or interruption. Selected member identity and the full
+request are preserved. A repeated tool request is deduplicated only when the caller
+reuses its optional idempotency key with exactly the same text.
+
+The private-chat exchanges below send their answers back to the requesting bot.
+
 ## What you see in the chats
 
 Each exchange shows as one small row that names the other bot. The request text itself stays out of the chat:
@@ -25,7 +37,7 @@ The recipient's tool calls and thinking are in its own **Full conversation**.
 
 ## How a message runs
 
-Bots never wait on each other. When one bot messages another:
+In a private-chat exchange, bots do not wait on each other. When one bot messages another:
 
 1. **The request is queued and the sender goes on at once.** It can finish its turn or keep working.
 2. **The recipient does the work** in its own chat's session, one thing at a time: a busy recipient finishes what it's doing first.

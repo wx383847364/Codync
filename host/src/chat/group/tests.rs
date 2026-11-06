@@ -5,69 +5,18 @@ fn bot(id: &str, name: &str) -> BotConfig {
     serde_json::from_value(json!({"id": id, "name": name, "backend": "claude", "cwd": "/tmp"})).expect("valid bot")
 }
 
-fn said(text: &str) -> Entry {
-    Entry {
-        id: "e".into(),
-        seq: 1,
-        bot_id: "g".into(),
-        rev: 1,
-        kind: "user".into(),
-        turn: 1,
-        data: json!({"text": text}),
-        created_at: 0,
-        updated_at: 0,
-    }
-}
-
+/// 使用真正入库解析验证名称和引用目标，不保留旧 sweep 算法副本。
 #[test]
 fn mentions_pick_responders_and_no_mention_means_everyone() {
     let members = [bot("a", "Alice Chen"), bot("b", "Bob"), bot("c", "尼采課")];
-    let ids = |m: &[BotConfig], text: &str| -> Vec<String> {
-        responders(m, &[said(text)]).into_iter().map(|b| b.id.clone()).collect()
-    };
-    assert_eq!(ids(&members, "hi all"), ["a", "b", "c"]);
-    assert_eq!(ids(&members, "@bob can you look"), ["b"]);
-    assert_eq!(ids(&members, "@alicechen and @Alice"), ["a"]);
-    assert_eq!(ids(&members, "@尼采課幫我整理"), ["c"], "CJK names can run into the message");
-    assert_eq!(ids(&members, "@bobby?"), ["a", "b", "c"], "a longer word isn't a mention");
-    assert_eq!(ids(&members, "@all go"), ["a", "b", "c"]);
-    let mut reply = said("why?");
-    reply.data["replyTo"] = json!({"id": "x", "author": "b", "text": "done"});
-    let replied: Vec<String> = responders(&members, &[reply]).into_iter().map(|b| b.id.clone()).collect();
-    assert_eq!(replied, ["b"], "a reply asks the bot it quotes");
-}
-
-#[test]
-fn later_rounds_ask_only_the_members_another_member_mentioned() {
-    let members = [bot("a", "Alice"), bot("b", "Bob"), bot("c", "Cara")];
-    let by = |author: &str, text: &str, seq: i64| Entry {
-        seq,
-        kind: "agent".into(),
-        data: json!({"text": text, "author": author}),
-        ..said(text)
-    };
-    let asked_ids = |messages: &[Entry], asked: &[(&str, i64)]| -> Vec<String> {
-        let asked = asked.iter().map(|(id, seq)| ((*id).to_owned(), *seq)).collect();
-        cited(&members, messages, &asked).into_iter().map(|b| b.id.clone()).collect()
-    };
-    let ids = |messages: &[Entry]| asked_ids(messages, &[]);
-    assert_eq!(ids(&[said("hi all"), by("a", "done", 2)]), Vec::<String>::new(), "nobody named: the room turn ends");
-    let named = [said("hi"), by("a", "@bob check", 2)];
-    assert_eq!(asked_ids(&named, &[("b", 2)]), Vec::<String>::new(), "Bob saw it and passed");
-    assert_eq!(asked_ids(&named, &[("b", 1)]), ["b"], "Bob was asked before he was named");
-    assert_eq!(ids(&[said("hi"), by("a", "@bob can you check?", 2)]), ["b"]);
-    assert_eq!(
-        ids(&[said("hi"), by("a", "@bob check", 2), by("b", "checked", 3)]),
-        Vec::<String>::new(),
-        "Bob already answered"
-    );
-    assert_eq!(ids(&[said("hi"), by("a", "@bob check", 2), by("b", "ok", 3), by("c", "@bob again", 4)]), ["b"]);
-    assert_eq!(ids(&[said("hi"), by("a", "@alice @all over to you", 2)]), ["b", "c"], "not yourself");
-    assert_eq!(
-        ids(&[said("@cara look"), by("a", "ok", 2)]),
-        Vec::<String>::new(),
-        "the user's mentions pick the first round"
-    );
+    let ids = |text: &str| crate::chat::mentions::targets(text, &[], &members, None, true).unwrap();
+    assert_eq!(ids("hi all"), ["a", "b", "c"]);
+    assert_eq!(ids("@bob can you look"), ["b"]);
+    assert_eq!(ids("@alicechen and @Alice"), ["a"]);
+    assert_eq!(ids("@尼采課幫我整理"), ["c"]);
+    assert_eq!(ids("@bobby?"), ["a", "b", "c"]);
+    assert_eq!(ids("@all go"), ["a", "b", "c"]);
+    assert_eq!(crate::chat::mentions::targets("why?", &[], &members, Some("b"), true).unwrap(), ["b"]);
 }
 
 use crate::api::devices::Caller;
@@ -147,13 +96,17 @@ impl Room {
             .map(|e| (e.data["author"].as_str().unwrap().to_owned(), e.data["text"].as_str().unwrap().to_owned()))
             .collect()
     }
-
+    /// 等待持久投递、成员及唯一 runner 都结束，不能把短暂 idle 当成完成。
     async fn settle(&self) {
         tokio::time::timeout(WAIT, async {
             loop {
                 tokio::time::sleep(Duration::from_millis(300)).await;
                 let idle = ["a", "b"].iter().all(|b| self.hub.runtime(b).status == BotStatus::Idle);
-                if idle && self.hub.bots_json(0).unwrap().iter().all(|b| b["status"] == "idle") {
+                if idle
+                    && self.hub.store.delivery_rooms(None).unwrap().is_empty()
+                    && !self.hub.groups.running(&Lane::main(&self.group))
+                    && self.hub.bots_json(0).unwrap().iter().all(|b| b["status"] == "idle")
+                {
                     break;
                 }
             }
@@ -339,7 +292,9 @@ async fn a_member_busy_in_its_own_chat_is_announced_and_answers_once_free() {
     let main = Lane::main(&room.group);
     // The room says why `a` is quiet right away instead of waiting out the ask timeout in silence.
     let notice = ask_busy_a(&room).await;
-    assert_eq!(notice.data["text"], "a is busy in another chat and will answer here when it's done.");
+    // 新状态卡展示持久 queued 行，替代原本不可查询的忙碌说明。
+    assert_eq!(notice.data["deliveryRows"][0]["status"], "queued");
+    assert_eq!(notice.data["deliveryRows"][0]["targetBotId"], "a");
     assert_eq!(room.replies(&main), [] as [(String, String); 0]);
 
     // Its own turn ends, then it answers the room.
@@ -458,3 +413,6 @@ fn pass_is_recognized_loosely() {
     }
     assert!(!is_pass("I'll pass this to Bob"));
 }
+
+#[path = "delivery_tests.rs"]
+mod delivery_tests;

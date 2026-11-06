@@ -8,6 +8,22 @@ Every bot receives the built-in `team` MCP server. `list_bots` returns the other
 
 The host records each exchange as one notice in both chats. Every client shows it as a compact row (centered in the apps, one ` · ` line in the terminal UI), "Messaged [avatar] Owen" in the sender's chat and "Message from [avatar] Egan" in the recipient's, with no request text. In a chat a run of consecutive exchanges with the same peer, in either direction, is one row, "3 messages with [avatar] Owen"; anything else the chat shows (a message, another notice, a card, an exchange with another peer) ends the run, trace entries do not, and the run is marked failed if any exchange failed. Only a failure is marked (danger color and a warning mark). Tapping the row opens a read-only "Egan ⇄ Owen" conversation sheet with the pair's whole history: author-labelled grey bubbles for each request and reply, time separators, "Waiting for Owen…" or the failure detail under a pending or failed exchange. It is laid out like the Full conversation sheet, with the pair as its title and an X to close. Tool details also remain in the trace. There is no additional team setup screen; a lead bot can set up the team itself (see Team management).
 
+## Requests from a group
+
+`message_bot(botId, message, idempotencyKey?)` uses the actor's trusted room and execution
+context to create a durable `task`. The tool returns queued immediately to its caller,
+while the single room runner waits for the recipient's result (ten-minute wait limit,
+execution continues after timeout). Target membership is checked at admission, claim and
+before sending. Hidden members of that room are eligible. Results stay in that group.
+
+An optional key is scoped to source member, room and target. Same key and exact body
+returns the original request and current status before checking capacity; a different
+body is a conflict. No key promises no cross-connection deduplication. Capacity checking
+and insertion are atomic (64 pending globally, 16 per sender). Two tool calls without a
+key remain two tasks, even to the same target. A final textual @ to a target already
+assigned by this execution is display-only. Round and chain depth propagate across
+text/tool transitions. The following private-chat exchange behavior remains separate.
+
 ## Bots on other computers
 
 When this computer is in a network with the user's other computers, `list_bots` also lists their bots (ids

@@ -51,6 +51,29 @@ impl Store {
         Ok(rev)
     }
 
+    /// 群成员更新、移除成员相关投递的取消及卡片必须一起提交，失败保留原成员列表。
+    pub fn update_bot(&self, cfg: &BotConfig) -> Result<(Vec<super::deliveries::Delivery>, Vec<super::Entry>)> {
+        let mut db = self.db.locked();
+        let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let before: String =
+            tx.query_row("SELECT config FROM bots WHERE id=?1 AND deleted=0", [&cfg.id], |r| r.get(0))?;
+        let before: BotConfig = serde_json::from_str(&before)?;
+        let rev = next_rev(&tx)?;
+        tx.execute(SAVE_BOT, params![cfg.id, rev, serde_json::to_string(cfg)?])?;
+        let mut cancelled = Vec::new();
+        let mut cards = Vec::new();
+        if cfg.is_group() {
+            for member in before.members.iter().filter(|member| !cfg.members.contains(member)) {
+                let (rows, entries) =
+                    super::deliveries::cancel_in_transaction(&tx, &cfg.id, Some(member), "成员已移除")?;
+                cancelled.extend(rows);
+                cards.extend(entries);
+            }
+        }
+        tx.commit()?;
+        Ok((cancelled, cards))
+    }
+
     /// Saves several bots in one transaction, each with its own rev: all of them or, on an error, none.
     pub fn save_bots(&self, cfgs: &[BotConfig]) -> Result<()> {
         let mut c = self.db.locked();
@@ -70,10 +93,14 @@ impl Store {
         Ok(rev)
     }
 
-    pub fn delete_bot(&self, id: &str) -> Result<i64> {
-        let c = self.db.locked();
+    /// 删除标记、相关投递取消和存活群卡片在同一事务提交，返回提交后需要发布的变化。
+    pub fn delete_bot(&self, id: &str) -> Result<(i64, Vec<super::deliveries::Delivery>, Vec<super::Entry>)> {
+        let mut db = self.db.locked();
+        let c = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let rev = next_rev(&c)?;
+        // 删除标记与取消持久投递同事务提交，封住取消后再次入队的窗口。
         c.execute("UPDATE bots SET rev = ?2, deleted = 1, session_id = NULL WHERE id = ?1", params![id, rev])?;
+        let (cancelled, cards) = super::deliveries::cancel_for_deletion(&c, id)?;
         c.execute("DELETE FROM entries WHERE bot_id = ?1", [id])?;
         codync_mem::store::drop_bot(&c, id)?;
         // Its dreaming bookmark, notices' revisions and the record of its moved memory.
@@ -92,7 +119,24 @@ impl Store {
         )?;
         // Its artifacts' details (`chat::artifacts`).
         c.execute("DELETE FROM kv WHERE k GLOB ?1", [format!("artifact.{id}.*")])?;
-        Ok(rev)
+        c.commit()?;
+        Ok((rev, cancelled, cards))
+    }
+
+    /// 新建主会话时一次提交主会话与parked会话清理；失败不允许actor清除旧内存会话。
+    pub fn reset_main_session(&self, bot: &str) -> Result<()> {
+        let mut c = self.db.locked();
+        let tx = c.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        tx.execute("UPDATE bots SET session_id=NULL WHERE id=?", [bot])?;
+        let prefix = format!("fallback.session.{bot}.");
+        tx.execute("DELETE FROM kv WHERE substr(k,1,length(?1))=?1", [prefix])?;
+        let seq: i64 = tx.query_row("SELECT COALESCE(MAX(seq),0) FROM entries WHERE bot_id=?", [bot], |r| r.get(0))?;
+        tx.execute(
+            "INSERT INTO kv(k,v) VALUES(?1,?2) ON CONFLICT(k) DO UPDATE SET v=?2",
+            params![format!("fallback.fresh.{bot}"), seq.to_string()],
+        )?;
+        tx.commit()?;
+        Ok(())
     }
 
     pub fn set_session(&self, id: &str, session: Option<&str>) -> Result<()> {

@@ -54,9 +54,10 @@ impl Actor {
 
     /// The bot's own chat, not a room, a routine or another bot's request: the conversation the user comes
     /// back to, and the only one compacted ahead of time.
+    /// 仅用户主会话允许压缩策略，群投递保持完整来源。
     fn in_main_chat(&self) -> bool {
         self.lane.chat == self.cfg.id
-            && self.active_group.is_none()
+            && self.active_delivery.is_none()
             && self.active_routine.is_none()
             && self.active_request.is_none()
             && self.turn_session.is_some()

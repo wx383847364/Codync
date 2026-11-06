@@ -52,8 +52,27 @@ impl App {
         }
     }
 
+    /// 消费 host 事件，运行时故障不更新数据库游标。
     fn on_event(&mut self, v: &Value) {
         match v["type"].as_str() {
+            Some("deliveryStorageError") => {
+                // 运行时事件没有数据库 rev，不能把它当持久游标推进。
+                if let Some(id) = v["botId"].as_str()
+                    && let Some(bot) = self.bots.get_mut(id)
+                {
+                    bot.storage_error = v["storageError"].as_str().map(str::to_owned);
+                    bot.working_chat = v["workingChat"].as_str().map(str::to_owned);
+                    bot.pending_new_session = v["pendingNewSession"].as_bool().unwrap_or(false);
+                    bot.status = match v["status"].as_str() {
+                        Some("error") => Status::Error,
+                        Some("working") => Status::Working,
+                        Some("needsInput") => Status::NeedsInput,
+                        _ => Status::Idle,
+                    };
+                    v["activity"].as_str().unwrap_or_default().clone_into(&mut bot.activity);
+                }
+            }
+
             Some("hello") => {
                 self.snapshot_floors();
                 self.network = v["network"].clone();
@@ -347,12 +366,13 @@ impl App {
         }
     }
 
+    /// 处理发送回执，失败保留原草稿和目标身份供再次操作。
     fn sent(&mut self, key: &str, result: Result<Value, String>) {
         let Some(sent) = self.sends.get_mut(key) else { return };
         sent.busy = false;
         match result {
             Ok(value) => {
-                if self.drafts.get(key).is_some_and(|d| d.text.trim() == sent.text)
+                if self.drafts.get(key).is_some_and(|d| d.text == sent.text && d.mentions == sent.mentions)
                     && self.files.get(key).map_or(&[][..], Vec::as_slice) == sent.files
                 {
                     self.drafts.remove(key);
@@ -438,6 +458,7 @@ mod tests {
     }
 
     #[test]
+    /// 拒发恢复原正文、附件、nonce 与提及身份，不能重新绑定显示名。
     fn send_failure_keeps_text_files_and_nonce_for_retry() {
         let mut app = test_app();
         let key = "bot";
@@ -446,7 +467,13 @@ mod tests {
         app.files.insert(key.into(), files.clone());
         app.sends.insert(
             key.into(),
-            PendingSend { text: "draft".into(), files: files.clone(), nonce: "same-nonce".into(), busy: true },
+            PendingSend {
+                mentions: vec![],
+                text: "draft".into(),
+                files: files.clone(),
+                nonce: "same-nonce".into(),
+                busy: true,
+            },
         );
         app.on_reply(After::Sent(key.into()), Err("Disconnected".into()));
         assert_eq!(app.drafts[key].text, "draft");
@@ -459,12 +486,13 @@ mod tests {
     }
 
     #[test]
+    /// 迟到成功回执不能清除之后输入的新草稿及其身份。
     fn late_send_success_does_not_erase_a_new_draft() {
         let mut app = test_app();
         app.drafts.insert("bot".into(), Editor::with("new draft"));
         app.sends.insert(
             "bot".into(),
-            PendingSend { text: "old draft".into(), files: vec![], nonce: "n".into(), busy: true },
+            PendingSend { mentions: vec![], text: "old draft".into(), files: vec![], nonce: "n".into(), busy: true },
         );
         app.on_reply(After::Sent("bot".into()), Ok(json!({})));
         assert_eq!(app.drafts["bot"].text, "new draft");

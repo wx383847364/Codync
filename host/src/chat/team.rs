@@ -42,6 +42,7 @@ conversation, working directory, tools and permissions, not your context. Coordi
 asking for edits in a shared project. Native subagents are managed by your own harness; these tools are for \
 collaborating with the user's existing bots.";
 
+/// 按当前执行来源公开协作工具，群内派工支持稳定目标和幂等键。
 pub fn tools() -> Value {
     json!([
         {
@@ -68,6 +69,7 @@ pub fn tools() -> Value {
                 "properties": {
                     "botId": {"type": "string", "description": "Recipient ID from list_bots (name@computer for a bot on another computer)."},
                     "message": {"type": "string", "description": "Task, relevant context, file paths and expected result."},
+                    "idempotencyKey": {"type":"string","description":"Reuse for retransmission of the same task only."},
                 },
                 "required": ["botId", "message"],
             },
@@ -345,7 +347,13 @@ pub(crate) fn visible_bots(store: &Store) -> Result<Vec<BotConfig>> {
 
 /// A team tool call. Listing asks the other computers (briefly) when it hasn't lately, and a
 /// message to a bot on another computer goes over the network; everything else is [`call`].
+/// 将协作工具请求送到可信来源对应的群或私聊执行路径。
 pub async fn call_async(hub: &Arc<Hub>, from: &str, name: &str, args: &Value) -> Result<Value> {
+    if name == "list_bots"
+        && let Some((room, _)) = hub.team.delivery(from)
+    {
+        return directory::group(hub, from, &room, args);
+    }
     match name {
         "list_bots" => {
             visible_bot(hub, from)?;
@@ -353,6 +361,9 @@ pub async fn call_async(hub: &Arc<Hub>, from: &str, name: &str, args: &Value) ->
             directory::list(hub, from, args, &remote, |_| true)
         }
         "message_bot" => {
+            if let Some((room, id)) = hub.team.delivery(from) {
+                return group_message(hub, from, &room, &id, args);
+            }
             let (to, message) = message_args(args)?;
             match hub.network.recipient(to)? {
                 Recipient::There(target) => remote::message(hub, &visible_bot(hub, from)?, &target, message).await,
@@ -364,11 +375,22 @@ pub async fn call_async(hub: &Arc<Hub>, from: &str, name: &str, args: &Value) ->
 }
 
 /// A team tool call among this computer's bots.
+/// 处理同步协作工具，群内派工不得退回私聊请求队列。
 fn call(hub: &Arc<Hub>, from: &str, name: &str, args: &Value) -> Result<Value> {
+    if let Some((room, id)) = hub.team.delivery(from) {
+        return match name {
+            "list_bots" => directory::group(hub, from, &room, args),
+            "message_bot" => group_message(hub, from, &room, &id, args),
+            _ => bail!("unknown team tool: {name}"),
+        };
+    }
     let source = visible_bot(hub, from)?;
     match name {
         "list_bots" => directory::list(hub, from, args, &[], |_| true),
         "message_bot" => {
+            if let Some((room, id)) = hub.team.delivery(from) {
+                return group_message(hub, from, &room, &id, args);
+            }
             let (to, message) = message_args(args)?;
             match hub.network.recipient(to)? {
                 Recipient::Here(to) => message_bot(hub, &source, &to, message),
@@ -377,6 +399,33 @@ fn call(hub: &Arc<Hub>, from: &str, name: &str, args: &Value) -> Result<Value> {
         }
         _ => bail!("unknown team tool: {name}"),
     }
+}
+
+/// 群内派工按可信执行上下文入库；结果只回来源群，不走私聊 `BotRequest`。
+fn group_message(hub: &Arc<Hub>, from: &str, room: &str, execution: &str, args: &Value) -> Result<Value> {
+    let to = args["botId"].as_str().ok_or_else(|| anyhow!("botId is required"))?;
+    let message = args["message"].as_str().unwrap_or_default();
+    check_message(message)?;
+    anyhow::ensure!(to != from, "a bot cannot message itself");
+    let parent = hub.store.delivery(execution)?.ok_or_else(|| anyhow!("unknown execution"))?;
+
+    let mut request = crate::store::deliveries::Delivery::speak(room, "", to);
+    request.kind = crate::store::deliveries::Kind::Task;
+    request.source_kind = "tool".into();
+    request.source_entry_id = None;
+    request.source_execution_id = Some(execution.into());
+    request.source_bot_id = Some(from.into());
+    request.body = Some(message.into());
+    request.batch_root_id = parent.batch_root_id;
+    request.round = parent.round;
+    request.chain_depth = parent.chain_depth + 1;
+    request.idempotency_key = args
+        .get("idempotencyKey")
+        .map(|key| key.as_str().map(str::to_owned).ok_or_else(|| anyhow!("invalid idempotencyKey")))
+        .transpose()?;
+    let delivery = hub.enqueue_delivery(&request)?;
+    crate::chat::group::ensure_runner(hub, room);
+    Ok(json!({"requestId":delivery.id,"status":delivery.status}))
 }
 
 /// `message_bot`'s recipient and message.

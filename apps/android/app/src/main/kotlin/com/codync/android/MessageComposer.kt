@@ -35,6 +35,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.input.InputTransformation
 import androidx.compose.foundation.text.input.TextFieldLineLimits
 import androidx.compose.foundation.text.input.rememberTextFieldState
 import androidx.compose.material3.Text
@@ -56,6 +57,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.isCtrlPressed
 import androidx.compose.ui.input.key.isMetaPressed
 import androidx.compose.ui.input.key.key
@@ -85,6 +87,7 @@ private enum class Trailing { Interrupt, Stop, Call, Send }
  * artifact's draft, apart from the chat's. `queued`: the user's messages waiting behind the bot's work, shown on top ([QueuedMessages]).
  */
 @OptIn(ExperimentalFoundationApi::class)
+/** 维护原生输入法、光标候选与结构化身份，选人不发送。 */
 @Composable fun MessageComposer(bot: Bot, state: AppState, store: AppStore, onCall: (() -> Unit)?,
     onInterrupt: (() -> Unit)? = null, replyTo: ReplyQuote? = null, cancelReply: () -> Unit = {}, about: String? = null,
     draftKey: String = bot.id, queued: List<Entry> = emptyList()) {
@@ -94,10 +97,24 @@ private enum class Trailing { Interrupt, Stop, Call, Send }
     val queuing = "draft-send:$draftKey" in state.busy
     val importing = "attachments" in state.busy
     // What this box sent to the store, so a draft set elsewhere (a routine request) can be told from our own echo.
+    // 只记录原生编辑范围，转换回调不修改Compose或Store状态。
+    val edits = remember(draftKey) { ArrayDeque<Triple<String, String, IntRange>>() }
+    val transformation = remember(draftKey) { InputTransformation {
+        if (changes.changeCount > 0) {
+            val ranges = (0 until changes.changeCount).map { changes.getOriginalRange(it) }
+            val from = ranges.minOf { it.min }
+            val to = ranges.maxOf { it.max }
+            edits.addLast(Triple(originalText.toString(), asCharSequence().toString(), from until to))
+        }
+    } }
     val echoes = remember(draftKey) { ArrayDeque<String>() }
     LaunchedEffect(text, draftKey) {
         snapshotFlow { text.text.toString() }.collect {
             echoes.addLast(it); while (echoes.size > 32) echoes.removeFirst()
+            while (edits.isNotEmpty()) {
+                val (before, after, range) = edits.removeFirst()
+                if (store.state.value.drafts[draftKey]?.text.orEmpty() == before) store.editDraft(draftKey, after, range)
+            }
             store.editDraft(draftKey, it)
         }
     }
@@ -155,13 +172,29 @@ private enum class Trailing { Interrupt, Stop, Call, Send }
     val startingCommand = typed == "/"
     LaunchedEffect(startingCommand) { if (startingCommand && online) store.refreshPlugins() }
     // The one way a group's box differs: @ asks one of its bots.
-    val mentions = if (bot.kind != "group") emptyList() else mentionQuery(typed)?.let { query ->
+    val mentionKey = "${text.selection.start}:${text.selection.end}:$typed"
+    var mentionIndex by remember(mentionKey) { mutableStateOf(0) }
+    // 关闭仅作用于当前查询，编辑或移动光标后解除临时关闭。
+    var dismissedMention by remember(mentionKey) { mutableStateOf<String?>(null) }
+    val mentions = if (dismissedMention == mentionKey || bot.kind != "group") emptyList() else mentionQuery(typed, text.selection.start)?.takeIf { text.selection.collapsed }?.let { query ->
         members.filter { query.isEmpty() || it.name.contains(query, true) }
     }.orEmpty()
+    /** 原子替换查询并恢复光标，尾文与后方绑定一起保留。 */
+    fun selectMention(member: Bot) {
+        val end = text.selection.start
+        val start = typed.lastIndexOf('@', end - 1)
+        if (start < 0) return
+        val token = "@${member.name} "
+        store.bindMention(draftKey, typed.substring(0, start) + token + typed.substring(end), Mention(member.id, start, start + token.length - 1))
+        text.edit { replace(start, end, token); selection = androidx.compose.ui.text.TextRange(start + token.length) }
+        dismissedMention = mentionKey
+    }
     fun clear() = text.edit { replace(0, length, "") }
+    /** 把群快捷操作按成员发送给 host，统一执行会话切换语义。 */
     fun run(command: SlashCommand) {
         val skill = command.skill
         when {
+            command.sessionMode != null -> { store.command("newSession", body("botId" to bot.id, "mode" to command.sessionMode)); clear() }
             skill != null -> text.setTextAndPlaceCursorAtEnd("/$skill ")
             else -> { store.toggleFastMode(bot); clear() }
         }
@@ -173,6 +206,12 @@ private enum class Trailing { Interrupt, Stop, Call, Send }
         if (command != null) run(command) else store.sendDraft(draftKey, bot.id, typed, replyTo) { clear(); cancelReply() }
     }
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+    // 来源群直接展示成员保存故障，按持有内存结果的成员身份重试。
+    (if (bot.kind == "group") members.filter { it.workingChat == bot.id } else listOf(bot)).filter { it.storageError != null }.forEach { member ->
+        Text("${member.name}: ${member.storageError}", style = Type.footnote, color = Palette.danger)
+        SecondaryButton("重试保存", action = { store.command("retryDeliverySave", body("botId" to member.id)) })
+    }
+    if (bot.pendingNewSession) Text("将在当前任务结束后新建会话；主会话与群共享。输入 /new-cancel 取消切换。", style = Type.footnote, color = Palette.secondary)
     // Over the box, past the + button.
     QueuedMessages(queued, state, store, Modifier.padding(start = 16.dp + FIELD_HEIGHT + 8.dp, end = 16.dp))
     AnimatedVisibility(commands.isNotEmpty(), enter = fadeIn(Motion.fade()) + expandVertically(Motion.layoutSize),
@@ -180,7 +219,7 @@ private enum class Trailing { Interrupt, Stop, Call, Send }
         CommandList(commands, ::run, Modifier.padding(horizontal = 16.dp))
     }
     AnimatedVisibility(mentions.isNotEmpty(), enter = fadeIn(Motion.fade()), exit = fadeOut(Motion.fade())) {
-        MentionChips(mentions, state.bots) { member -> text.setTextAndPlaceCursorAtEnd(typed.substring(0, typed.lastIndexOf('@')) + "@${member.name} ") }
+        MentionChips(mentions, state.bots, mentionIndex, ::selectMention)
     }
     Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 6.dp, bottom = 16.dp), verticalAlignment = Alignment.Bottom,
         horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -213,11 +252,23 @@ private enum class Trailing { Interrupt, Stop, Call, Send }
                 horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 // A hardware keyboard's Enter is a new line; Ctrl/Meta+Enter (⌘↩ on iOS) sends, and never stops or calls.
                 val sendKey = Modifier.onPreviewKeyEvent { e ->
+                    // 原生composition未提交时，Enter/方向键全部交给输入法。
+                    if (e.type == KeyEventType.KeyDown && text.composition == null && mentions.isNotEmpty() && !e.isCtrlPressed && !e.isMetaPressed) {
+                        val step = when(e.key) { Key.DirectionDown -> 1; Key.DirectionUp -> -1; else -> 0 }
+                        when {
+                            step != 0 -> { mentionIndex = (mentionIndex + step + mentions.size) % mentions.size; return@onPreviewKeyEvent true }
+                            e.key == Key.Escape -> { dismissedMention = mentionKey; return@onPreviewKeyEvent true }
+                            !e.isShiftPressed && (e.key == Key.Enter || e.key == Key.Tab) -> {
+                                if (e.nativeKeyEvent.repeatCount == 0) selectMention(mentions[mentionIndex.coerceIn(0, mentions.lastIndex)])
+                                return@onPreviewKeyEvent true
+                            }
+                        }
+                    }
                     val ctrlEnter = e.type == KeyEventType.KeyDown && e.key == Key.Enter && (e.isCtrlPressed || e.isMetaPressed)
                     if (ctrlEnter && trailing == Trailing.Send && canSend) send()
                     ctrlEnter
                 }
-                BasicTextField(state = text, enabled = !queuing, modifier = Modifier.weight(1f).focusRequester(focus).contentReceiver(receiver).then(sendKey).padding(vertical = 10.dp),
+                BasicTextField(state = text, inputTransformation = transformation, enabled = !queuing, modifier = Modifier.weight(1f).focusRequester(focus).contentReceiver(receiver).then(sendKey).padding(vertical = 10.dp),
                     textStyle = Type.body.copy(color = Palette.text), cursorBrush = SolidColor(Palette.accent),
                     lineLimits = TextFieldLineLimits.MultiLine(maxHeightInLines = 8),
                     decorator = { input -> Box { if (text.text.isEmpty()) Text(placeholder, style = Type.body, color = Palette.tertiary, maxLines = 1, overflow = TextOverflow.Ellipsis); input() } })

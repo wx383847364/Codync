@@ -43,6 +43,7 @@ impl Hub {
         Ok(self.bot_value(&cfg.id).unwrap_or(Value::Null))
     }
 
+    /// 更新配置与取消被移除成员投递原子提交，再发布卡片和定向停止通知。
     pub fn update_bot(&self, patch: &Value) -> Result<Value> {
         let id = patch["id"].as_str().ok_or_else(|| anyhow!("id required"))?.to_owned();
         // Read, merge and save under one lock: a section rename in between would otherwise be written back.
@@ -62,7 +63,13 @@ impl Hub {
             validate(&cfg)?;
             crate::agent::workspace::prepare(&mut cfg)?;
             crate::agent::own_memory::settle(&mut cfg, &row.config, patch);
-            self.store.save_bot(&cfg)?;
+            let (cancelled, cards) = self.store.update_bot(&cfg)?;
+            // 配置 rev 早于取消卡片；先发布它，断线游标不能越过尚未发送的成员变更。
+            if let Some(bot) = self.bot_value(&id) {
+                let _ = self.events.send(json!({"type":"bot","rev":bot["rev"],"bot":bot}));
+            }
+            self.delivery_entries(&cards);
+            self.stop_cancelled_deliveries(&cancelled);
             (row.config, cfg)
         };
         crate::network::publish(self);
@@ -77,20 +84,22 @@ impl Hub {
         Ok(self.bot_value(&id).unwrap_or(Value::Null))
     }
 
+    /// 删除标记与取消投递先提交，再关闭 actor 和清理成员资源。
     pub fn delete_bot(&self, id: &str) -> Result<()> {
         self.routines.disable_bot(&self.store, id)?;
+        // 标记删除和取消先提交，再停止执行，不能让旧actor在删除窗口接受新工作。
+        {
+            let _g = self.emit_lock.locked();
+            let (rev, cancelled, cards) = self.store.delete_bot(id)?;
+            let _ = self.events.send(json!({"type":"bot","rev":rev,"bot":{"id":id,"deleted":true,"rev":rev}}));
+            self.delivery_entries(&cards);
+            self.stop_cancelled_deliveries(&cancelled);
+        }
         self.team.end_turn(id);
-        self.groups.stop(self, id);
         let _ = self.send_cmd(id, Cmd::Shutdown);
         self.bots.locked().remove(id);
         self.runtime.locked().remove(id);
         self.dev_servers.forget_bot(&self.store, id);
-        {
-            let _g = self.emit_lock.locked();
-            let rev = self.store.delete_bot(id)?;
-            let _ =
-                self.events.send(json!({"type": "bot", "rev": rev, "bot": {"id": id, "deleted": true, "rev": rev}}));
-        }
         crate::network::publish(self);
         // Its shared files and artifacts are unreachable once the bot is deleted.
         let folders = [crate::chat::files::root(id), crate::chat::artifacts::root(id)];

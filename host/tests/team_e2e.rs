@@ -255,3 +255,140 @@ async fn message_ping_pong_stops_at_the_hop_limit_and_a_new_user_turn_can_delega
         previous_rev = sync["rev"].as_i64().unwrap();
     }
 }
+
+/// 真正杀掉 host 子进程并用原数据目录重启，不能用丢弃 Hub 模拟崩溃。
+async fn restart_group_host(host: &mut Host) {
+    host.child.kill().unwrap();
+    host.child.wait().unwrap();
+    let (child, base) = common::serve(&host.home).await;
+    host.child = child;
+    host.base = base;
+}
+
+/// 查询来源事件的聚合卡，避免按 UUID 或当前显示名猜测投递身份。
+async fn group_card(host: &Host, room: &str, source: &str, status: &str) -> Value {
+    host.wait_for(room, |e| {
+        e["id"] == format!("delivery-card-{source}-1")
+            && e["data"]["deliveryRows"].as_array().is_some_and(|rows| rows.iter().all(|row| row["status"] == status))
+    })
+    .await
+}
+
+/// 同名成员选人、UTF-16裁剪、后续改名与两个忙碌请求共用真实agent流程。
+#[tokio::test]
+async fn selected_group_identity_and_two_busy_requests_survive_rename() {
+    let host = Host::start().await;
+    let a = host.bot("A").await;
+    let b = host.bot("B").await;
+    for id in [&a, &b] {
+        host.call("updateBot", json!({"id":id,"name":"Twin"})).await;
+    }
+    let room = host.call("createBot", json!({"kind":"group","name":"Room","members":[a,b]})).await["bot"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    host.call("send", json!({"botId":a,"text":"BLOCK private"})).await;
+    host.wait_for(&a, |e| e["kind"] == "user" && e["data"]["status"] == "sent").await;
+    let mut sources = Vec::new();
+    for text in ["  😀 @Twin first original  ", "  😀 @Twin second original  "] {
+        let sent =
+            host.call("send", json!({"botId":room,"text":text,"mentions":[{"botId":a,"start":5,"end":10}]})).await;
+        assert_eq!(sent["entry"]["data"]["mentions"], json!([{"botId":a,"start":3,"end":8}]));
+        let source = sent["entry"]["id"].as_str().unwrap().to_owned();
+        let card = group_card(&host, &room, &source, "queued").await;
+        assert_eq!(card["data"]["deliveryRows"][0]["targetBotId"], a);
+        sources.push(source);
+    }
+    host.call("updateBot", json!({"id":a,"name":"Renamed"})).await;
+    std::fs::write(host.home.join("A/release"), "").unwrap();
+    for source in &sources {
+        group_card(&host, &room, source, "completed").await;
+    }
+    let prompts = host.fixture_log("A", "prompts.jsonl");
+    assert!(prompts.iter().any(|p| p.as_str().unwrap_or_default().contains("first original")));
+    assert!(prompts.iter().any(|p| p.as_str().unwrap_or_default().contains("second original")));
+    let private = host.call("history", json!({"botId":a})).await;
+    assert!(finals(&private).iter().all(|t| !t.contains("original")), "group results never enter private chat");
+}
+
+/// queued和claimed在子进程重启后恢复，started/prompt之后只标中断，不自动重放。
+#[tokio::test]
+async fn group_crash_requeues_claimed_and_never_replays_started() {
+    let mut host = Host::start().await;
+    let a = host.bot("Held").await;
+    std::fs::write(host.home.join("Held/hold-session"), "").unwrap();
+    let room = host.call("createBot", json!({"kind":"group","name":"Crash room","members":[a]})).await["bot"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let sent = host.call("send", json!({"botId":room,"text":"first after claim"})).await;
+    let source = sent["entry"]["id"].as_str().unwrap().to_owned();
+    group_card(&host, &room, &source, "claimed").await;
+    // 会话尚在准备，投递已claimed但prompt绝未发送。
+    assert!(!host.home.join("Held/prompts.jsonl").exists());
+    host.child.kill().unwrap();
+    host.child.wait().unwrap();
+    std::fs::remove_file(host.home.join("Held/hold-session")).unwrap();
+    let (child, base) = common::serve(&host.home).await;
+    host.child = child;
+    host.base = base;
+    group_card(&host, &room, &source, "completed").await;
+    let sent = host.call("send", json!({"botId":room,"text":"BLOCK uncertain"})).await;
+    let source = sent["entry"]["id"].as_str().unwrap().to_owned();
+    group_card(&host, &room, &source, "started").await;
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while host.fixture_log("Held", "prompts.jsonl").len() < 2 {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap();
+    restart_group_host(&mut host).await;
+    let interrupted = group_card(&host, &room, &source, "interrupted").await;
+    assert!(interrupted["data"]["deliveryRows"][0]["detail"].as_str().unwrap().contains("不确定"));
+    tokio::time::sleep(Duration::from_secs(4)).await;
+    assert_eq!(host.fixture_log("Held", "prompts.jsonl").len(), 2, "started is never automatically replayed");
+    let id = interrupted["data"]["deliveryRows"][0]["deliveryId"].as_str().unwrap();
+    let retry = host.call("retryDelivery", json!({"deliveryId":id})).await;
+    assert_eq!(retry["delivery"]["attempt"], 2);
+    assert_ne!(retry["delivery"]["id"], id);
+    host.call("stop", json!({"botId":room})).await;
+}
+
+/// 三个真实ACP子进程经MCP在同群接力，工具正文不进入任何发送者私聊。
+#[tokio::test]
+async fn group_tools_relay_through_three_members_without_display_mentions_duplicating_work() {
+    let host = Host::start().await;
+    let a = host.bot("Lead").await;
+    let b = host.bot("Reviewer").await;
+    let c = host.bot("Verifier").await;
+    std::fs::write(host.home.join("Lead/group-script.json"),json!({"tasks":[{"botId":b,"message":"review exact task body","idempotencyKey":"review-1"},{"botId":b,"message":"review exact task body","idempotencyKey":"review-1"}],"reply":"@Reviewer please review"}).to_string()).unwrap();
+    std::fs::write(
+        host.home.join("Reviewer/group-script.json"),
+        json!({"tasks":[{"botId":c,"message":"verify the result"}],"reply":"@Verifier please verify"}).to_string(),
+    )
+    .unwrap();
+    std::fs::write(
+        host.home.join("Verifier/group-script.json"),
+        json!({"tasks":[],"reply":"Verified in the source group"}).to_string(),
+    )
+    .unwrap();
+    host.call("updateBot", json!({"id":b,"hidden":true})).await;
+    let room = host.call("createBot", json!({"kind":"group","name":"Relay","members":[a,b,c]})).await["bot"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    host.call("send", json!({"botId":room,"text":"@Lead begin relay"})).await;
+    host.wait_for(&room, |e| e["kind"] == "agent" && e["data"]["author"] == c && e["data"]["final"] == true).await;
+    assert_eq!(
+        host.fixture_log("Reviewer", "prompts.jsonl").len(),
+        1,
+        "key retransmit and display @ do not duplicate work"
+    );
+    assert_eq!(host.fixture_log("Verifier", "prompts.jsonl").len(), 1);
+    let reviewer = host.fixture_log("Reviewer", "prompts.jsonl");
+    assert!(reviewer[0].as_str().unwrap().contains("review exact task body"));
+    for id in [&a, &b, &c] {
+        assert!(finals(&host.call("history", json!({"botId":id})).await).is_empty(), "all results stay in group");
+    }
+}

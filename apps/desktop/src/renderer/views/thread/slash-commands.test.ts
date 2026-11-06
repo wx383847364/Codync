@@ -21,7 +21,7 @@ test('built-in commands come first, then only the bot\'s own skills, by name or 
   const bot = normalizeBot({ id: 'b', skills: ['pdf', 'code-review'], fastModeSupport: 'offered' })
   assert.deepEqual(slashCommands(bot, '', installed).map((c) => c.name), ['fast', 'pdf', 'code-review'])
   assert.deepEqual(slashCommands(bot, 'review', installed).map((c) => c.name), ['code-review'])
-  assert.deepEqual(slashCommands(bot, 'new', installed), [], 'a new session is in the bot\'s menu')
+  assert.deepEqual(slashCommands(bot, 'new', installed).map((c) => c.name), ['new', 'new-now', 'new-cancel'])
   assert.deepEqual(slashCommands(normalizeBot({ id: 'b', skills: ['pdf'] }), 'xl', installed), [])
   assert.deepEqual(slashCommands(normalizeBot({ id: 'b' }), '', []).map((c) => c.name), ['fast'], 'offered until the agent says otherwise')
   assert.deepEqual(slashCommands(normalizeBot({ id: 'b', fastModeSupport: 'unsupported' }), '', []), [], 'no Fast mode on offer')
@@ -50,7 +50,7 @@ test('a group lists its bots\' commands: Fast mode for all of them, then every s
 test('sending just a built-in command runs it; anything else is a message', () => {
   const bot = normalizeBot({ id: 'b', fastModeSupport: 'offered' })
   assert.equal(builtInCommand(bot, '/fast ')?.action.kind, 'fast')
-  assert.equal(builtInCommand(bot, '/new'), null, 'reaches the agent as typed')
+  assert.deepEqual(builtInCommand(bot, '/new')?.action, { kind: 'session', mode: 'after' })
   assert.equal(builtInCommand(bot, '/fast please'), null)
   assert.equal(builtInCommand(normalizeBot({ id: 'b', fastModeSupport: 'unsupported' }), '/fast'), null, 'without Fast mode it reaches the agent')
 })

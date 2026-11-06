@@ -20,6 +20,7 @@ mod background_work;
 mod cmd;
 mod codex_names;
 mod compaction;
+mod delivery;
 mod fallback;
 mod fast_mode;
 mod files;
@@ -41,7 +42,6 @@ pub(crate) use launch::{launch_commands, select_model, start_agent, system_promp
 use crate::agent::acp::{self, Acp, Incoming};
 use crate::agent::config::FastModeSupport;
 use crate::chat::context::{Identity, Snapshot};
-use crate::chat::group::GroupTurn;
 use crate::chat::memory;
 use crate::hub::{BotStatus, Hub};
 use crate::store::{BotConfig, Entry, EntryKind, Lane, now_ms};
@@ -67,6 +67,7 @@ pub struct BotHandle {
     pub task: tokio::task::JoinHandle<()>,
 }
 
+/// 创建成员 actor，持久投递只接受房间指定的执行命令。
 pub fn spawn(hub: Arc<Hub>, base: BotConfig) -> BotHandle {
     let (tx, rx) = mpsc::unbounded_channel();
     let session_id = hub.store.bot(&base.id).ok().flatten().and_then(|b| b.session_id);
@@ -92,7 +93,9 @@ pub fn spawn(hub: Arc<Hub>, base: BotConfig) -> BotHandle {
         run_sessions: HashMap::new(),
         lane,
         turn_session: None,
-        active_group: None,
+        active_delivery: None,
+        pending_completion: None,
+        pending_new_session: None,
         active_routine: None,
         routine_deadline: None,
         routine_timed_out: false,
@@ -256,7 +259,9 @@ struct Actor {
     lane: Lane,
     /// The session the current turn prompts.
     turn_session: Option<String>,
-    active_group: Option<GroupTurn>,
+    active_delivery: Option<delivery::ActiveDelivery>,
+    pending_completion: Option<delivery::PendingCompletion>,
+    pending_new_session: Option<bool>,
     active_routine: Option<String>,
     routine_deadline: Option<Instant>,
     routine_timed_out: bool,
@@ -349,6 +354,7 @@ type Done = Result<Value>;
 
 impl Actor {
     /// The running turn is over, with every steer answered (`turn_ended`): it finishes or goes on with the next agent.
+    /// 完成当前执行或受控回退，先处理结果再推进排队工作。
     async fn on_turn_done(&mut self, done: Done, done_tx: &mpsc::UnboundedSender<Done>) {
         // Updates sent before the prompt response are already queued; apply them first.
         while let Some(inc) = self.conn.as_mut().and_then(|c| c.rx.try_recv().ok()) {
@@ -371,10 +377,13 @@ impl Actor {
             Some(sid) if failed => self.close_reopenable(&sid).await,
             _ => {}
         }
+        self.apply_pending_session();
+        crate::chat::group::wake(&self.hub, Some(&self.cfg.id));
         self.next_in_queue(done_tx).await;
     }
 
     /// `interrupted`: the previous host process stopped a turn in the bot's chat; resume it first.
+    /// 串行处理成员命令与执行更新，定时重试保存并唤醒房间。
     async fn run(mut self, mut rx: mpsc::UnboundedReceiver<Cmd>, interrupted: Option<Lane>) {
         let (done_tx, mut done_rx) = mpsc::unbounded_channel::<Done>();
         let mut flush_tick = tokio::time::interval(Duration::from_millis(300));
@@ -385,6 +394,7 @@ impl Actor {
         } else if let Some(lane) = interrupted {
             self.resume_interrupted(lane, &done_tx).await;
         }
+        let mut delivery_ticks = 0u8;
         loop {
             tokio::select! {
                 cmd = rx.recv() => {
@@ -411,6 +421,11 @@ impl Actor {
                         self.cancel_deadline = None;
                         if let Some(c) = self.conn.take() { c.acp.kill().await; }
                     }
+                    // 周期补查保证丢失的提交后通知和启动窗口不会遗失 queued 投递。
+                    delivery_ticks=(delivery_ticks+1)%10;
+                    if delivery_ticks==0 {crate::chat::group::wake(&self.hub,None);}
+                    self.retry_delivery_save(false);
+                    self.apply_pending_session();
                     self.release_idle().await;
                     // The idle check may have queued a compaction.
                     if self.turn.is_none() && !self.queue.is_empty() {
@@ -422,7 +437,7 @@ impl Actor {
         self.files.cancel();
         self.hub.team.end_turn(&self.cfg.id);
         self.complete_request(Err(anyhow!("recipient shut down")), true);
-        self.complete_group(Err(anyhow!("bot shut down")));
+        self.finish_delivery(crate::store::deliveries::Status::Interrupted, None, Some("bot shut down".into()));
         if let Some(c) = self.conn.take() {
             c.acp.kill().await;
         }

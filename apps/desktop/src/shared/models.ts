@@ -80,6 +80,8 @@ export interface Bot {
   rev: number
   status: BotStatus | string
   activity: string
+  storageError?: string | null
+  pendingNewSession?: boolean
   startedAt?: number | null
   workingChat?: string | null
   unread: number
@@ -286,7 +288,15 @@ export interface AgentSwitch {
   carried: string | null
 }
 
+export interface DeliveryRow { deliveryId: string; targetBotId: string; status: string; detail: string }
+
 export interface EntryData {
+  deliveryAttempt?: number
+  parentDeliveryId?: string | null
+  deliveryId?: string
+  deliveryBody?: string
+  deliveryRows?: DeliveryRow[]
+  mentions?: import('./mentions').Mention[]
   /** Structured conversation data added to the existing team-tool notice. */
   botMessage?: BotMessage
   /** notice: the agent summarized its context; kept out of the chat. */

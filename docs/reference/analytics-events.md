@@ -181,3 +181,8 @@ rating. Neither StoreKit nor Google Play provides those outcomes. The [invitatio
 describes timing, exclusions, and cooldowns.
 
 Both phones also report `link_opened` with `link: issues` for their independent **Report an issue** action, and `link: app_store` for **Update Codync** (Android opens Google Play).
+
+Group delivery events: `group_delivery_accepted` (`kind`, `source`, target count or
+`keyed`), `group_delivery_finished` (`outcome`), `group_delivery_storage` (`outcome`,
+`category`), and `group_mention_rejected` (`category`). These never include message
+text, prompts, names, bot/delivery IDs, keys or file content.
