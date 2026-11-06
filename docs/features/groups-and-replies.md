@@ -52,6 +52,8 @@ not cancel accepted deliveries. User entries and their `speak` deliveries commit
 
 `send.mentions` binds selected members by ID using UTF-16 half-open ranges into the actual
 request body. Clients preserve these bindings in drafts, offline sends, retries and history.
+The member menu cycles with up/down in both directions, including first/last wraparound
+and repeated key presses. Enter/Tab inserts without sending; Esc closes the menu.
 The host validates before trimming, then shifts ranges with the trim. Outside bound spans,
 full names take priority; compact names and first words must be unique. Unknown `@word`
 is text, ambiguous names reject the send and keep the draft. Code fences, inline and

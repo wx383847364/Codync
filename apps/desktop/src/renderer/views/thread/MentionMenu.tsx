@@ -30,7 +30,11 @@ export function useMentionMenu(text: string, members: Bot[], select: (bot: Bot, 
     if (!step && !confirm && event.key !== 'Escape') return false
     event.preventDefault()
     event.stopPropagation()
-    if (step) setPick({ key, index: (index + step + shown.length) % shown.length })
+    // 连续方向键可能在同一轮渲染内到达，必须累加最新状态，首尾都按候选数回绕。
+    if (step) setPick((previous) => {
+      const current = previous.key === key ? Math.min(previous.index, shown.length - 1) : 0
+      return { key, index: (current + step + shown.length) % shown.length }
+    })
     else if (confirm && !event.repeat) choose(shown[index]!)
     else if (event.key === 'Escape') setDismissed(key)
     return true
