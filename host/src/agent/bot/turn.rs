@@ -127,7 +127,9 @@ impl Actor {
         self.first_prompt = None;
         self.stop_requested = false;
         self.cancel_deadline = None;
-        let team_turn = if let Some(active) = &self.active_delivery {
+        let team_turn = if self.group_compaction.is_some() {
+            crate::chat::team::Turn::Maintenance
+        } else if let Some(active) = &self.active_delivery {
             crate::chat::team::Turn::Delivery { room: active.delivery.room_id.clone(), id: active.delivery.id.clone() }
         } else if self.active_request.is_some() {
             crate::chat::team::Turn::Request
@@ -160,7 +162,8 @@ impl Actor {
         // persisted notices are marked interrupted instead of silently repeating work. Nor is a call's opening (the
         // call is over). A reply turn is resumed.
         self.set_inflight(
-            self.active_request.is_none()
+            self.group_compaction.is_none()
+                && self.active_request.is_none()
                 && self.active_delivery.is_none()
                 && self.active_routine.is_none()
                 && !self.active_prompt,
@@ -194,6 +197,11 @@ impl Actor {
         if let Some(sid) = session {
             self.sync_mode(&sid).await?;
             self.sync_fast_mode(&sid).await;
+        }
+        if hidden && self.session_fresh && self.group_compaction.is_some() {
+            // 无法重载旧 sid 时新会话无须整理；必须结束维护标记，原投递仍 queued。
+            self.finish_group_compaction(&Err(anyhow!("context maintenance skipped after session reload failed")));
+            return Ok(());
         }
         if hidden && self.session_fresh {
             // A new session must never silently repeat an interrupted routine, and has nothing to compact.
@@ -245,7 +253,10 @@ impl Actor {
             self.set_inflight(true);
         }
         // From here what changes in its memory folders is the bot's, however it changed them.
-        memory::turns::begin_turn(&self.cfg.id, &sid, self.hub.runtime(&self.cfg.id).message);
+        if self.group_compaction.is_none() {
+            // 维护没有用户或业务来源，也不能成为文件记忆变更的归属回合。
+            memory::turns::begin_turn(&self.cfg.id, &sid, self.hub.runtime(&self.cfg.id).message);
+        }
         // Written before this returns, so a Stop right after is sent after the prompt.
         let answer = acp.send("session/prompt", params).await?;
         if !self.turn_memory_revision.is_empty()
@@ -263,6 +274,10 @@ impl Actor {
     /// 完成当前 attempt，先保留投递结果；保存故障期间保留来源 lane 供群状态恢复。
     pub(super) fn finish_turn(&mut self, done: &Done) {
         if self.turn.is_none() {
+            return;
+        }
+        if self.group_compaction.is_some() {
+            self.finish_group_compaction(done);
             return;
         }
         // 写库失败时从仍在内存的流缓冲保留完整结果，不从可能滞后的 entry 重建。
@@ -490,7 +505,9 @@ impl Actor {
     /// What started the turn that is starting or running.
     /// 标识真实执行来源，群派工不计作用户消息或用户记忆。
     pub(super) fn source(&self) -> TurnSource {
-        if self.active_routine.is_some() {
+        if self.group_compaction.is_some() {
+            TurnSource::Host
+        } else if self.active_routine.is_some() {
             TurnSource::Routine
         } else if self.active_delivery.is_some() {
             TurnSource::Group

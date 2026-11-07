@@ -28,6 +28,7 @@ times you can only add. search_memory finds lines of your memory files; search_h
 said in your past chats. When the user asks you to forget something, take it out of MEMORY.md and your notes, and \
 don't bring it back from your chat history either.";
 
+/// 注册主聊和可信群执行共用的历史读取协议，不允许任意指定聊天范围。
 pub fn tools() -> Value {
     let mut tools = json!([
         {
@@ -42,10 +43,17 @@ pub fn tools() -> Value {
         },
         {
             "name": "search_history",
-            "description": "Read your full chat history with the user, newest first: messages containing every given word (case-insensitive), or without a query, every message. Returns dated messages with ids, and next: pass it as from for the page before.",
+            "description": "Outside a group, read your own chat history with the user, newest first. In a group, supply the contextDeliveryId in the current prompt: searches and full-original reads are restricted to that live source group. Discover messages/plans/unfinished deliveries with kind and from/next. Read a complete message/plan by entryId or task by deliveryId, then offset/nextOffset and returned version until complete. Restart from offset=0 if the material changes. Large attachments/quotes metadata can be read separately with part=metadata. No arbitrary room or private-chat access in group scope.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
+                    "contextDeliveryId": {"type":"string","description":"Group only: exact live execution ID from the current protected task packet."},
+                    "entryId": {"type":"string","description":"Group only: read full visible message or plan, in bounded Unicode-scalar pages."},
+                    "deliveryId": {"type":"string","description":"Group only: read the original body of a task or spoken assignment."},
+                    "offset": {"type":"integer","minimum":0,"description":"Original material's Unicode-scalar offset; use nextOffset to continue."},
+                    "version": {"type":"string","description":"For offset>0 use the version returned by the first page; changed material requires restarting from offset=0."},
+                    "part": {"type":"string","enum":["text","metadata"],"description":"Full original text or its complete metadata JSON."},
+                    "kind": {"type":"string","enum":["messages","plans","deliveries"],"description":"Group discovery list; deliveries lists unfinished or requiring human action."},
                     "query": {"type": "string", "description": "Words that must all appear, separated by spaces."},
                     "from": {"type": "string", "description": "A message id (from a result, next, or a memory's source): start at that message and go back."},
                     "limit": {"type": "integer", "description": "Maximum results (default 10, at most 30)."},
@@ -60,11 +68,24 @@ pub fn tools() -> Value {
     tools
 }
 
+/// 依据宿主当前执行选择私聊或本群检索，模型参数不能扩大可读范围。
 pub async fn call(hub: &Arc<Hub>, bot_id: &str, name: &str, args: &Value) -> Result<Value> {
     let cfg = hub.store.bot(bot_id)?.filter(|b| !b.deleted).ok_or_else(|| anyhow!("unknown bot"))?.config;
     match name {
         "search_memory" => search_memory(hub, &cfg, args["query"].as_str().unwrap_or_default()).await,
-        "search_history" => search_history(hub, &cfg, args).await,
+        "search_history" => {
+            if let Some((_, id)) = hub.team.delivery(bot_id) {
+                crate::chat::group::history::read(hub, bot_id, &id, args).await
+            } else {
+                if args.get("contextDeliveryId").is_some()
+                    || args.get("entryId").is_some()
+                    || args.get("deliveryId").is_some()
+                {
+                    bail!("group history requires a live group execution");
+                }
+                search_history(hub, &cfg, args).await
+            }
+        }
         "read_memory" | "edit_memory" => super::file_tools::call(hub, &cfg, name, args).await,
         _ => bail!("unknown memory tool: {name}"),
     }

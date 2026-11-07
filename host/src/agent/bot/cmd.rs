@@ -111,5 +111,6 @@ pub(super) enum Queued {
     /// A compaction the host decided on (see `compaction`); `idle` while the user is away.
     Compact {
         idle: bool,
+        group: Option<super::group_context::Maintenance>,
     },
 }

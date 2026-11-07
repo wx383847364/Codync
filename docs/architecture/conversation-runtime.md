@@ -23,3 +23,13 @@ and block claims until bounded automatic retries or manual save succeeds. `sweep
 `resume` have no dispatch role. Group rounds, reply totals and handoff depth are tracing
 metadata, never completion conditions. Members explicitly hand the result or a blocking
 question to the user; host idle means no runnable work, not a semantic completion verdict. See [groups and replies](../features/groups-and-replies.md).
+
+Group input is assembled from a transactional protected snapshot (`store/group_context`)
+and bounded sourced background (`chat/group/context`), with a delivery-bound, revalidated
+paged history reader. Full task/user originals, stable mention identities and open plan
+entries survive background budgeting. Group context maintenance (`agent/bot/group_context`)
+runs before claim in the existing actor/session, marked `team::Turn::Maintenance` until
+completion including Stop grace. It filters streamed content and denies built-in and
+configured connector tool calls; private summaries never enter group entries. Reported
+usage is distinct from prompt estimates. Inadequate known space blocks only the queued
+request with an actionable notice; it never terminalizes work or replays started work.

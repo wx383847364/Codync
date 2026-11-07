@@ -24,6 +24,7 @@ mod delivery;
 mod fallback;
 mod fast_mode;
 mod files;
+mod group_context;
 mod launch;
 mod lifecycle;
 mod modes;
@@ -103,6 +104,10 @@ pub fn spawn(hub: Arc<Hub>, base: BotConfig) -> BotHandle {
         session_fresh: false,
         profile_resend: HashSet::new(),
         compacting: None,
+        group_compaction: None,
+        context_blocks: HashMap::new(),
+        context_attempts: HashMap::new(),
+        context_usage_at: HashMap::new(),
         raw_prompt: false,
         handoff: None,
         compaction_notice: None,
@@ -273,6 +278,11 @@ struct Actor {
     profile_resend: HashSet<String>,
     /// The running turn is a compaction the host started (`Some(true)` while the user is away).
     compacting: Option<bool>,
+    group_compaction: Option<group_context::Maintenance>,
+    context_blocks: HashMap<String, group_context::Blocked>,
+    /// 维护元数据写失败仍记住本次结果，防止同一存储故障引起重复整理。
+    context_attempts: HashMap<String, group_context::Attempt>,
+    context_usage_at: HashMap<String, i64>,
     /// The next prompt goes as it is: a command such as `/compact`, with nothing put before or after it.
     raw_prompt: bool,
     /// What the next prompt carries from the conversation it starts over from.
@@ -364,7 +374,9 @@ impl Actor {
                 inc => self.on_incoming(Some(inc)).await,
             }
         }
-        if let Err(error) = &done
+        // 整理失败只结束维护，不能按业务回退链把 /compact 发给另一模型执行。
+        if self.group_compaction.is_none()
+            && let Err(error) = &done
             && self.fall_back(error, done_tx).await
         {
             return;
@@ -424,6 +436,8 @@ impl Actor {
                     // 周期补查保证丢失的提交后通知和启动窗口不会遗失 queued 投递。
                     delivery_ticks=(delivery_ticks+1)%10;
                     if delivery_ticks==0 {crate::chat::group::wake(&self.hub,None);}
+                    // 超时仅结束维护，投递仍保持排队。
+                    self.expire_group_compaction().await;
                     self.retry_delivery_save(false);
                     self.apply_pending_session();
                     self.release_idle().await;

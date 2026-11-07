@@ -93,6 +93,14 @@ impl Hub {
         Ok(())
     }
 
+    /// 上下文资源不足只附可恢复说明，不改变 queued；按 rev 顺序发布到来源群。
+    pub fn delivery_context_problem(&self, id: &str, bot: &str, detail: &str) -> Result<()> {
+        let _guard = self.emit_lock.locked();
+        let entries = self.store.delivery_context_problem(id, bot, detail)?;
+        self.delivery_entries(&entries);
+        Ok(())
+    }
+
     /// 持久取消和发布成功后调用方才能停止执行。
     pub fn cancel_deliveries(&self, room: &str, target: Option<&str>, reason: &str) -> Result<()> {
         let _guard = self.emit_lock.locked();

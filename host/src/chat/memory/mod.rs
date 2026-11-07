@@ -118,16 +118,30 @@ fn put_backs(store: &Store, key: &str) -> Vec<String> {
 /// Before the session's next message: its changes that were put back, and, when memory changed since the session
 /// last heard, the whole memory as it is now. The revision is the one to acknowledge once delivered.
 pub fn change_notice(store: &Store, cfg: &BotConfig, session: &str) -> Option<(String, String)> {
+    let notice = peek_change_notice(store, cfg, session, None);
+    if notice.is_some() {
+        // 仅真实组合 prompt 才消费 put-back 提醒，预算预检不能吞掉它。
+        let _ = store.kv_delete(&put_back_key(&cfg.id, session));
+    }
+    notice
+}
+
+/// 只读预览同一份记忆提醒供领取前预算使用，不改变待发送通知与记忆水位。
+pub fn peek_change_notice(
+    store: &Store,
+    cfg: &BotConfig,
+    session: &str,
+    opening_revision: Option<&str>,
+) -> Option<(String, String)> {
     let revision = current_revision(store, &cfg.id);
-    let changed =
-        !revision.is_empty() && store.kv_get(&announced_key(&cfg.id, session)).unwrap_or_default() != revision;
+    // compose 先 opened 再取通知；预览模拟该水位，不能把 profile 中的同一记忆计算两遍。
+    let announced = opening_revision
+        .map_or_else(|| store.kv_get(&announced_key(&cfg.id, session)).unwrap_or_default(), str::to_owned);
+    let changed = !revision.is_empty() && announced != revision;
     let key = put_back_key(&cfg.id, session);
     let put_back = put_backs(store, &key);
     if !changed && put_back.is_empty() {
         return None;
-    }
-    if !put_back.is_empty() {
-        let _ = store.kv_delete(&key);
     }
     let mut parts = put_back;
     if changed {
@@ -222,5 +236,27 @@ mod tests {
         let (notice, _) = change_notice(&store, &cfg, "routine").expect("the routine's session hears it");
         assert!(notice.contains("Your change to MEMORY.md was put back"), "{notice}");
         assert!(change_notice(&store, &cfg, "routine").is_none(), "told once");
+    }
+    /// 预算预览按即将补发的 profile 水位去重记忆，同时不得消费 put-back 或真的确认发送。
+    #[test]
+    fn preview_of_an_opening_omits_duplicate_memory_but_preserves_putbacks() {
+        let store = Store::open(std::path::Path::new(":memory:")).unwrap();
+        let cfg: BotConfig = serde_json::from_value(
+            serde_json::json!({"id":"preview","name":"Preview","backend":"claude","cwd":"/tmp"}),
+        )
+        .unwrap();
+        opened(&store, &cfg.id, "s", "old").unwrap();
+        store.kv_set(&revision_key(&cfg.id), "new").unwrap();
+        assert!(peek_change_notice(&store, &cfg, "s", None).is_some());
+        assert!(peek_change_notice(&store, &cfg, "s", Some("new")).is_none());
+        put_back(&store, &cfg.id, "s", "MEMORY.md", "KEEP_ORIGINAL_NOTICE");
+        let preview = peek_change_notice(&store, &cfg, "s", Some("new")).unwrap();
+        assert!(preview.0.contains("KEEP_ORIGINAL_NOTICE"));
+        assert!(!preview.0.contains("Your memory changed"));
+        assert_eq!(peek_change_notice(&store, &cfg, "s", Some("new")).unwrap(), preview);
+        assert_eq!(store.kv_get(&announced_key(&cfg.id, "s")).as_deref(), Some("old"));
+        opened(&store, &cfg.id, "s", "new").unwrap();
+        assert_eq!(change_notice(&store, &cfg, "s").unwrap(), preview);
+        assert!(change_notice(&store, &cfg, "s").is_none());
     }
 }

@@ -416,3 +416,6 @@ fn pass_is_recognized_loosely() {
 
 #[path = "delivery_tests.rs"]
 mod delivery_tests;
+
+#[path = "context_runtime_tests.rs"]
+mod context_runtime_tests;

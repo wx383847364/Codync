@@ -140,7 +140,9 @@ async fn a_member_busy_elsewhere_keeps_both_accepted_room_requests() {
     tokio::time::sleep(Duration::from_secs(2)).await;
     // 每个来源各产生一次执行；窗口可能同时含两条，但不能合并为一次任务。
     let prompts = std::fs::read_to_string(folder.join("prompts.jsonl")).unwrap();
-    let rooms: Vec<&str> = prompts.lines().filter(|p| p.contains("[Group chat")).collect();
+    // 群上下文已改为完整保护包，仍逐次核验两个独立来源都执行，不能按旧窗口标题找回合。
+    let rooms: Vec<&str> =
+        prompts.lines().filter(|p| p.contains("Protected task material. Context delivery ID:")).collect();
     assert!(rooms.iter().any(|p| p.contains("User: second")), "{rooms:?}");
     assert!(rooms.iter().any(|p| p.contains("User: first")), "{rooms:?}");
     assert_eq!(rooms.len(), 2, "both accepted requests execute: {rooms:?}");

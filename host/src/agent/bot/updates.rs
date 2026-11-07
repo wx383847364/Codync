@@ -70,6 +70,13 @@ impl Actor {
     }
 
     pub(super) fn on_update(&mut self, u: &Value) {
+        // 原生整理的文本可能含其他聊天，只处理使用量和压缩完成事件。
+        if self.group_compaction.is_some()
+            && !matches!(u["sessionUpdate"].as_str(), Some("usage_update" | "compaction_update"))
+        {
+            return;
+        }
+
         let turn = self.turn.unwrap_or(0);
         match u["sessionUpdate"].as_str().unwrap_or_default() {
             "agent_message_chunk" => {
@@ -147,7 +154,11 @@ impl Actor {
                 }
             }
             "plan" => {
-                let data = json!({"entries": u["entries"].clone(), "author": self.cfg.id});
+                // 保存计划的来源投递，供整理后恢复未完成步骤。
+                let mut data = json!({"entries": u["entries"].clone(), "author": self.cfg.id});
+                if let Some(active) = &self.active_delivery {
+                    data["deliveryId"] = active.delivery.id.clone().into();
+                }
                 match &self.plan_entry {
                     Some(id) => {
                         self.hub.set_entry(id, &data);
@@ -164,6 +175,14 @@ impl Actor {
     }
 
     pub(super) async fn on_permission(&mut self, rpc_id: Value, params: Value) {
+        // 原生整理不执行工作；意外工具权限请求一律拒绝而不生成群审批卡。
+        if self.group_compaction.is_some() {
+            if let Some(conn) = &self.conn {
+                let _ = conn.acp.respond(rpc_id, acp::permission_answer(None)).await;
+            }
+            return;
+        }
+
         let options = params["options"].as_array().cloned().unwrap_or_default();
         let tool = &params["toolCall"];
         if self.cfg.permission == Permission::Auto
@@ -201,6 +220,7 @@ impl Actor {
         self.show_card(&title, data, Answer::Agent(rpc_id));
     }
 
+    /// 维护期间包括发送前和结束后的缓冲权限都拒绝；其他后台请求仍沿用原审批策略。
     /// A permission request from work the agent goes on with after its turn ended (a background subagent): no turn
     /// shows a card for it, so it gets what a turn would answer without asking, under the bot's Approve automatically,
     /// for one of this bot's own sessions, unless the user stopped its last turn. Anything else is declined.
@@ -208,9 +228,10 @@ impl Actor {
         let Some(conn) = &self.conn else { return };
         let own = params["sessionId"].as_str().is_some_and(|sid| conn.loaded.contains_key(sid));
         let options = params["options"].as_array().cloned().unwrap_or_default();
-        let pick = (self.cfg.permission == Permission::Auto && own && !self.stop_requested)
-            .then(|| auto_pick(&options))
-            .flatten();
+        let pick =
+            (self.group_compaction.is_none() && self.cfg.permission == Permission::Auto && own && !self.stop_requested)
+                .then(|| auto_pick(&options))
+                .flatten();
         tracing::info!(bot = %self.id(), approved = pick.is_some(), title = params["toolCall"]["title"].as_str(), "permission asked outside a turn");
         let _ = conn.acp.respond(rpc_id, acp::permission_answer(pick)).await;
     }
@@ -349,7 +370,7 @@ impl Actor {
             if let Some(source) = source {
                 source.id
             } else {
-                crate::chat::reactions::in_room(&self.hub, &self.lane, &self.cfg.id, to, active.shown_seq)?
+                crate::chat::reactions::in_room(&self.hub, &self.lane, &self.cfg.id, to, &active.shown_entries)?
             }
         } else if let Some(id) = self.turn_entries.last() {
             id.clone()

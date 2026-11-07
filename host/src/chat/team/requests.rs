@@ -22,6 +22,8 @@ pub enum Turn {
     Chat(u8),
     /// Answering another bot's request: the answer goes back in its reply, so it messages no one.
     Request,
+    /// 整理回合不允许工作工具。
+    Maintenance,
     /// 群投递的可信来源，不接受模型提供房间或执行身份。
     Delivery { room: String, id: String },
 }
@@ -69,6 +71,11 @@ impl Requests {
         }
     }
 
+    /// 工具桥据此隔离整理，不能派工或修改用户记忆。
+    pub fn maintaining(&self, bot: &str) -> bool {
+        matches!(self.0.locked().active.get(bot), Some(Turn::Maintenance))
+    }
+
     pub fn start_turn(&self, bot: &str, turn: Turn) {
         self.0.locked().active.insert(bot.to_owned(), turn);
     }
@@ -85,6 +92,7 @@ impl RequestState {
         match self.active.get(from) {
             None => bail!("the requesting bot is no longer working"),
             Some(Turn::Delivery { .. }) => bail!("group deliveries use durable admission"),
+            Some(Turn::Maintenance) => bail!("tools are unavailable during context maintenance"),
             Some(Turn::Request) => {
                 bail!(
                     "message_bot isn't available while answering another bot's request: say what you need in your reply"

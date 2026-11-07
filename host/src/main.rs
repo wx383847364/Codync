@@ -221,6 +221,9 @@ enum McpServer {
     Local {
         #[arg(long)]
         connector: String,
+        /// 宿主启动的代理绑定成员身份；省略时兼容旧的手动 CLI。
+        #[arg(long)]
+        bot: Option<String>,
         #[arg(long, default_value_t = service::DEFAULT_PORT)]
         port: u16,
     },
@@ -287,6 +290,9 @@ enum McpServer {
     Remote {
         #[arg(long)]
         connector: String,
+        /// 宿主启动的代理绑定成员身份；省略时兼容旧的手动 CLI。
+        #[arg(long)]
+        bot: Option<String>,
         #[arg(long, default_value_t = service::DEFAULT_PORT)]
         port: u16,
     },
@@ -341,6 +347,7 @@ fn write_token_file(token: &str) -> Result<()> {
     Ok(())
 }
 
+/// 分派用户命令和宿主启动的 MCP 代理，connector 的可选成员参数保持旧 CLI 兼容。
 #[tokio::main]
 async fn main() -> Result<()> {
     // Every TLS connection (the relay, HTTPS) uses aws-lc-rs, also in builds that have ring too.
@@ -488,8 +495,10 @@ async fn main() -> Result<()> {
         Sub::Mcp { server: McpServer::Memory { bot, port } } => mcp::serve(bot, port, mcp::Server::Memory).await,
         Sub::Mcp { server: McpServer::Composio { bot, port } } => mcp::serve(bot, port, mcp::Server::Composio).await,
         Sub::Mcp { server: McpServer::Network { name, port } } => mcp::serve(name, port, mcp::Server::Network).await,
-        Sub::Mcp { server: McpServer::Local { connector, port } } => mcp::serve_local(connector, port).await,
-        Sub::Mcp { server: McpServer::Remote { connector, port } } => mcp::serve_remote(connector, port).await,
+        Sub::Mcp { server: McpServer::Local { connector, bot, port } } => mcp::serve_local(connector, bot, port).await,
+        Sub::Mcp { server: McpServer::Remote { connector, bot, port } } => {
+            mcp::serve_remote(connector, bot, port).await
+        }
         Sub::Tui { url, token, port } => tui::run(url, port, token).await,
     }
 }

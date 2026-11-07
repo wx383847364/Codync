@@ -91,10 +91,8 @@ pub struct Connector {
 }
 
 impl Connector {
-    /// ACP `McpServer`. Remote servers run through this host's `remote` proxy (`codync-host mcp remote`),
-    /// which keeps sign-in tokens fresh and works with agents that only speak stdio.
-    /// A remote server still waiting for sign-in is left out.
-    pub fn acp(&self, exe: &std::path::Path, port: u16) -> Option<Value> {
+    /// 为成员绑定可信 bot 身份；本地和远端代理均在转发工作工具前检查维护门禁，未登录远端仍不接入。
+    pub fn acp(&self, exe: &std::path::Path, port: u16, bot: &str) -> Option<Value> {
         let kind = if self.command.is_some() {
             "local"
         } else {
@@ -104,7 +102,7 @@ impl Connector {
             }
             "remote"
         };
-        Some(crate::mcp::acp_server(&self.id, exe, &[kind, "--connector", &self.id], port))
+        Some(crate::mcp::acp_server(&self.id, exe, &[kind, "--connector", &self.id, "--bot", bot], port))
     }
 
     /// What clients see: everything but the secret values.
@@ -336,6 +334,7 @@ mod tests {
         assert_eq!(slug("中文"), "item");
     }
 
+    /// connector 的 ACP 定义必须绑定成员，凭据仍只由代理读取。
     #[test]
     fn connectors_become_acp_servers() {
         let mut c = Connector {
@@ -351,20 +350,21 @@ mod tests {
             oauth: None,
         };
         let exe = std::path::Path::new("/bin/codync-host");
-        let config = c.acp(exe, 1).unwrap();
+        let config = c.acp(exe, 1, "member").unwrap();
         assert_eq!(config["args"][1], "local");
+        assert_eq!(config["args"], json!(["mcp", "local", "--connector", "gh", "--bot", "member", "--port", "1"]));
         let only_data_dir = json!([{"name": "CODYNC_HOME", "value": crate::service::data_dir()}]);
         assert_eq!(config["env"], only_data_dir, "never the connector's secrets");
         assert!(!config.to_string().contains("secret"));
         assert!(c.public().get("env").is_none(), "secrets never leave the host");
         c.command = None;
         c.url = Some("https://example.com/mcp".into());
-        let remote = c.acp(exe, 1).unwrap();
+        let remote = c.acp(exe, 1, "member").unwrap();
         assert_eq!(remote["args"][1], "remote", "remote servers go through the proxy");
         assert_eq!(remote["env"], only_data_dir);
         assert_eq!(c.public()["canSignIn"], false, "only servers Codync has its own app for");
         c.oauth = Some(oauth::OAuth::default());
-        assert!(c.acp(exe, 1).is_none(), "not signed in yet");
+        assert!(c.acp(exe, 1, "member").is_none(), "not signed in yet");
         assert_eq!(c.public()["auth"], "signedOut");
         assert_eq!(c.public()["canSignIn"], false, "already signs in");
         c.url = Some("https://api.githubcopilot.com/mcp/".into());

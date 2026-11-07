@@ -77,10 +77,10 @@ pub(super) fn schema(c: &Connection) -> Result<()> {
     Ok(())
 }
 
-const COLS: &str = "id,room_id,kind,source_kind,source_entry_id,source_execution_id,source_bot_id,target_bot_id,body,room_seq,batch_root_id,attempt,parent_id,round,chain_depth,idempotency_key,status,claimed_at,started_at,finished_at,last_error";
+pub(super) const COLS: &str = "id,room_id,kind,source_kind,source_entry_id,source_execution_id,source_bot_id,target_bot_id,body,room_seq,batch_root_id,attempt,parent_id,round,chain_depth,idempotency_key,status,claimed_at,started_at,finished_at,last_error";
 
 /// 仅接收本模块写出的枚举值；损坏状态通过 SQL 错误显式暴露。
-fn row(r: &rusqlite::Row) -> rusqlite::Result<Delivery> {
+pub(super) fn row(r: &rusqlite::Row) -> rusqlite::Result<Delivery> {
     let kind: String = r.get(2)?;
     let status: String = r.get(16)?;
     Ok(Delivery {
@@ -120,12 +120,12 @@ fn wire<T: Serialize>(value: &T) -> String {
 }
 
 /// 在已有事务中读取投递，不再获取 Store 锁。
-fn get(c: &Connection, id: &str) -> Result<Option<Delivery>> {
+pub(super) fn get(c: &Connection, id: &str) -> Result<Option<Delivery>> {
     Ok(c.query_row(&format!("SELECT {COLS} FROM deliveries WHERE id=?"), [id], row).optional()?)
 }
 
 /// 校验房间、目标及发起成员仍有效；入队、领取和发送前都必须调用。
-fn eligible(c: &Connection, room: &str, target: &str, source: Option<&str>) -> Result<bool> {
+pub(super) fn eligible(c: &Connection, room: &str, target: &str, source: Option<&str>) -> Result<bool> {
     Ok(c.query_row(
         "SELECT EXISTS(SELECT 1 FROM bots g JOIN bots t ON t.id=?2
         WHERE g.id=?1 AND g.deleted=0 AND t.deleted=0 AND json_extract(g.config,'$.kind')='group'
@@ -349,13 +349,45 @@ impl Store {
         }
         // 同一 ID 只能从 queued 领取一次；成员资格和状态都在本事务内核验。
         let changed = tx.execute(
-            "UPDATE deliveries SET status='claimed',claimed_at=?3 WHERE id=?1 AND target_bot_id=?2 AND status='queued'",
+            "UPDATE deliveries SET status='claimed',claimed_at=?3,last_error=NULL WHERE id=?1 AND target_bot_id=?2 AND status='queued'",
             params![id, bot, now_ms()],
         )?;
-        let cards = if changed == 1 { vec![completion::card(&tx, &delivery)?] } else { vec![] };
+        let mut cards = if changed == 1 { vec![completion::card(&tx, &delivery)?] } else { vec![] };
+        if changed == 1 && delivery.last_error.is_some() {
+            let exists: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM entries WHERE id=?1)",
+                [format!("delivery-context-{id}")],
+                |r| r.get(0),
+            )?;
+            if exists {
+                cards.push(completion::entry(&tx,&format!("delivery-context-{id}"),&delivery.room_id,EntryKind::Notice,0,&serde_json::json!({"text":"上下文条件已恢复，继续处理已保留的派工。","style":"info","deliveryId":id,"contextMaintenance":true}))?);
+            }
+        }
         let result = if changed == 1 { get(&tx, id)? } else { None };
         tx.commit()?;
         Ok((result, cards))
+    }
+
+    /// 窗口不足只给 queued 投递附可恢复说明，原文、顺序和状态不被取消。
+    pub fn delivery_context_problem(&self, id: &str, bot: &str, detail: &str) -> Result<Vec<Entry>> {
+        let mut c = self.db.locked();
+        let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let Some(d) = get(&tx, id)? else { return Ok(vec![]) };
+        if d.status != Status::Queued || d.target_bot_id != bot || d.last_error.as_deref() == Some(detail) {
+            return Ok(vec![]);
+        }
+        tx.execute("UPDATE deliveries SET last_error=?2 WHERE id=?1 AND status='queued'", params![id, detail])?;
+        let mut cards = vec![completion::card(&tx, &d)?];
+        cards.push(completion::entry(
+            &tx,
+            &format!("delivery-context-{id}"),
+            &d.room_id,
+            EntryKind::Notice,
+            0,
+            &serde_json::json!({"text":detail,"style":"error","deliveryId":id,"contextMaintenance":true}),
+        )?);
+        tx.commit()?;
+        Ok(cards)
     }
 
     /// started 提交后才允许发送 prompt；失败保持 claimed，由恢复或后续补查处理。

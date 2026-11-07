@@ -11,8 +11,8 @@ pub(super) struct ActiveDelivery {
     pub delivery: Delivery,
     pub output: Option<String>,
     pub output_open: bool,
-    /// 当前 prompt 实际展示的消息序号上界，与投递排序序号分开。
-    pub shown_seq: i64,
+    /// 当前 prompt 确实展示的消息 ID；序号上界不能代表全部历史已读。
+    pub shown_entries: Vec<String>,
     pub reply: oneshot::Sender<bool>,
 }
 
@@ -43,6 +43,51 @@ impl Actor {
             let _ = reply.send(false);
             return;
         }
+        let queued = match self.hub.store.delivery(&id) {
+            Ok(Some(d)) if d.status == Status::Queued && d.target_bot_id == self.cfg.id => d,
+            Ok(_) => {
+                self.context_blocks.remove(&id);
+                let _ = reply.send(false);
+                return;
+            }
+            Err(error) => {
+                tracing::error!(%error,"delivery preflight lookup failed");
+                let _ = reply.send(false);
+                return;
+            }
+        };
+        // 维护先于领取；DB、会话和房间条件不变时不重复构建超窗任务包。
+        match self
+            .context_is_blocked(&queued)
+            .and_then(|blocked| if blocked { Ok(true) } else { self.prepare_group_context(&queued, None) })
+        {
+            Ok(true) => {
+                let _ = reply.send(false);
+                return;
+            }
+            Err(error) => {
+                tracing::error!(%error,"context preflight failed; delivery kept queued");
+                let _ = reply.send(false);
+                return;
+            }
+            Ok(false) => {}
+        }
+        let prepared = crate::chat::group::delivery_prompt(&self.hub, &queued, &self.cfg);
+        if let Ok(packet) = &prepared {
+            let estimated = self.group_prompt_estimate(&packet.prompt).await;
+            match estimated.and_then(|estimate| self.prepare_group_context(&queued, Some(estimate))) {
+                Ok(true) => {
+                    let _ = reply.send(false);
+                    return;
+                }
+                Err(error) => {
+                    tracing::error!(%error,"context space check failed; delivery kept queued");
+                    let _ = reply.send(false);
+                    return;
+                }
+                Ok(false) => {}
+            }
+        }
         let claimed = self.hub.claim_delivery(&id, &self.cfg.id);
         match claimed {
             Ok(Some(delivery)) => {
@@ -51,16 +96,26 @@ impl Actor {
                     reply,
                     output: None,
                     output_open: false,
-                    shown_seq: 0,
+                    shown_entries: Vec::new(),
                 });
-                let prepared = crate::chat::group::delivery_prompt(&self.hub, &delivery, &self.cfg);
                 match prepared {
-                    Ok((prompt, shown)) => {
+                    Ok(prepared) => {
+                        self.context_blocks.remove(&id);
+                        // 仅上报数量和估算来源；未知的真实窗口保持 null，不作为零计费量展示。
+                        let (used, size) = self.reported_group_context();
+                        crate::analytics::capture(&self.hub,crate::analytics::Event::GroupContextPrepared,
+                            serde_json::json!({"outcome":"prepared","protected_estimated_tokens":prepared.protected_estimate,"background_estimated_tokens":prepared.background_estimate,"background_budget":crate::chat::group::background_budget(),"context_used":used,"context_size":size}).as_object().cloned().unwrap_or_default());
+                        tracing::debug!(
+                            protected_estimate = prepared.protected_estimate,
+                            background_estimate = prepared.background_estimate,
+                            cutoff = prepared.cutoff,
+                            "group context prepared"
+                        );
                         if let Some(active) = self.active_delivery.as_mut() {
-                            active.shown_seq = shown;
+                            active.shown_entries = prepared.shown;
                         }
                         if let Err(error) =
-                            self.start_turn(Lane::main(&delivery.room_id), &[], &prompt, false, done_tx).await
+                            self.start_turn(Lane::main(&delivery.room_id), &[], &prepared.prompt, false, done_tx).await
                         {
                             if self
                                 .hub

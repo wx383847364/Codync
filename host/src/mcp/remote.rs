@@ -6,12 +6,10 @@ use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::mpsc;
 
-/// `codync-host mcp remote`: a stdio MCP server that forwards every message to a remote
-/// connector with the headers and fresh sign-in token the host gives it. Speaks streamable
-/// HTTP, and falls back to the older HTTP+SSE transport when the server doesn't.
-pub async fn serve_remote(connector: String, port: u16) -> Result<()> {
+/// 代理远端 MCP，绑定成员时拦截维护期的新工具；初始化、通知及旧 CLI 保持原协议。
+pub async fn serve_remote(connector: String, bot: Option<String>, port: u16) -> Result<()> {
     let token = std::fs::read_to_string(crate::service::data_dir().join("token")).unwrap_or_default();
-    let remote = Remote { port, token: token.trim().to_owned(), connector };
+    let remote = Remote { port, token: token.trim().to_owned(), connector, bot };
     // Both transports answer through one writer: the SSE one answers from its own stream.
     let (tx, mut rx) = mpsc::unbounded_channel::<Value>();
     let writer = tokio::spawn(async move {
@@ -31,6 +29,13 @@ pub async fn serve_remote(connector: String, port: u16) -> Result<()> {
     let mut stream: Option<tokio::task::JoinHandle<()>> = None;
     while let Some(line) = lines.next_line().await? {
         let Ok(msg) = serde_json::from_str::<Value>(&line) else { continue };
+        // 批量消息逐项保留 ID；门禁拒绝工作工具时仍允许同批的只读初始化或通知。
+        let (msg, refused) =
+            super::connector_message(msg, &remote.connector, remote.bot.as_deref(), port, &remote.token).await;
+        for response in refused {
+            tx.send(response)?;
+        }
+        let Some(msg) = msg else { continue };
         let replies = match &legacy {
             Some(endpoint) => remote.post_legacy(endpoint, &msg).await,
             None => match remote.forward(&msg, &mut session).await {
@@ -47,12 +52,19 @@ pub async fn serve_remote(connector: String, port: u16) -> Result<()> {
                 Err(e) => Err(e),
             },
         };
-        let replies = replies.unwrap_or_else(|e| match msg.get("id").filter(|id| !id.is_null()) {
-            // Only requests get an answer; a failed notification is dropped.
-            Some(id) => {
-                vec![json!({"jsonrpc": "2.0", "id": id, "error": {"code": -32603, "message": format!("{e:#}")}})]
-            }
-            None => vec![],
+        // 重试期间门禁变化时也必须逐个响应批量请求，通知本身仍没有响应。
+        let replies = replies.unwrap_or_else(|e| {
+            let batch = msg.as_array().map_or_else(|| std::slice::from_ref(&msg), Vec::as_slice);
+            // 保留原始 ID，不能把拒绝的请求误当作已发送或让调用方永久等待。
+            batch
+                .iter()
+                .filter_map(|message| {
+                    message
+                        .get("id")
+                        .filter(|id| !id.is_null())
+                        .map(|id| json!({"jsonrpc":"2.0","id":id,"error":{"code":-32603,"message":format!("{e:#}")}}))
+                })
+                .collect()
         });
         for reply in replies {
             tx.send(reply)?;
@@ -72,15 +84,16 @@ struct Remote {
     port: u16,
     token: String,
     connector: String,
+    bot: Option<String>,
 }
 
 impl Remote {
-    /// The connector's URL and headers, with a fresh sign-in token (`stale` forces a refresh).
-    async fn target(&self, stale: bool) -> Result<(String, reqwest::header::HeaderMap)> {
+    /// 每次转发和 HTTP 重试都携带可信来源及方法，工具许可不能缓存到维护期使用。
+    async fn target(&self, stale: bool, method: Option<&str>) -> Result<(String, reqwest::header::HeaderMap)> {
         let res = crate::http()
             .post(format!("http://127.0.0.1:{}/api/connectorTarget", self.port))
             .bearer_auth(&self.token)
-            .json(&json!({"id": self.connector, "stale": stale}))
+            .json(&json!({"id": self.connector, "stale": stale, "botId":self.bot,"method":method}))
             .timeout(Duration::from_secs(30))
             .send()
             .await
@@ -100,11 +113,10 @@ impl Remote {
         Ok((target["url"].as_str().unwrap_or_default().to_owned(), headers))
     }
 
-    /// Sends one message over streamable HTTP; returns what the server answered (JSON, or
-    /// the events of an SSE stream). None: the server doesn't speak streamable HTTP.
+    /// 通过 HTTP 转发，重试鉴权前重新检查维护；None 表示需回退到旧 SSE 协议。
     async fn forward(&self, msg: &Value, session: &mut Option<String>) -> Result<Option<Vec<Value>>> {
         for stale in [false, true] {
-            let (url, headers) = self.target(stale).await?;
+            let (url, headers) = self.target(stale, super::connector_method(msg)).await?;
             let mut req = crate::http()
                 .post(&url)
                 .headers(headers)
@@ -154,11 +166,10 @@ impl Remote {
         anyhow::bail!("{} still refuses the sign-in; sign in again in Extensions", self.connector)
     }
 
-    /// Opens the older transport's event stream, which carries every answer from now on
-    /// (sent to `tx`); returns the URL messages are posted to and the task reading the stream.
+    /// 打开旧 SSE 的只读响应流，server 通知仍独立转发；真正工具请求由 `post_legacy` 再检查。
     async fn open_legacy(&self, tx: mpsc::UnboundedSender<Value>) -> Result<(String, tokio::task::JoinHandle<()>)> {
         for stale in [false, true] {
-            let (url, headers) = self.target(stale).await?;
+            let (url, headers) = self.target(stale, None).await?;
             let res = crate::http()
                 .get(&url)
                 .headers(headers)
@@ -200,11 +211,10 @@ impl Remote {
         anyhow::bail!("{} still refuses the sign-in; sign in again in Extensions", self.connector)
     }
 
-    /// Posts one message on the older transport. Answers normally arrive on the stream;
-    /// a server that answers in the body is heard too.
+    /// 每次旧 SSE 请求及鉴权重试都重新检查工具门禁，响应仍可从独立 SSE 流或正文返回。
     async fn post_legacy(&self, endpoint: &str, msg: &Value) -> Result<Vec<Value>> {
         for stale in [false, true] {
-            let (_, headers) = self.target(stale).await?;
+            let (_, headers) = self.target(stale, super::connector_method(msg)).await?;
             let res = crate::http()
                 .post(endpoint)
                 .headers(headers)
@@ -289,5 +299,63 @@ mod tests {
         assert_eq!(sse_data("event: message\ndata: {\"id\":1}\n\n").unwrap()["id"], 1);
         assert_eq!(sse_data("data:{\"a\":\ndata: 2}\n\n").unwrap()["a"], 2);
         assert!(sse_data(": ping\n\n").is_none());
+    }
+
+    /// HTTP 与旧 SSE 的鉴权重试都重新检查来源门禁，维护开始后不再转发工作请求。
+    #[tokio::test]
+    async fn connector_retries_check_maintenance_before_forwarding_again() {
+        use axum::{Json, Router, http::StatusCode, routing::post};
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+        for legacy in [false, true] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let url = format!("http://127.0.0.1:{port}/mcp");
+            let targets = Arc::new(AtomicUsize::new(0));
+            let calls = Arc::new(AtomicUsize::new(0));
+            let target_count = targets.clone();
+            let call_count = calls.clone();
+            // 首次取得凭据后模拟进入维护，后续刷新凭据必须直接拒绝。
+            let target = move |Json(body): Json<Value>| {
+                let count = target_count.clone();
+                let url = url.clone();
+                // 校验每次请求均使用宿主绑定成员，而不是模型参数。
+                async move {
+                    assert_eq!(body["botId"], "bound-member");
+                    assert_eq!(body["method"], "tools/call");
+                    if count.fetch_add(1, Ordering::SeqCst) == 0 {
+                        (StatusCode::OK, Json(json!({"url":url,"headers":{}})))
+                    } else {
+                        (StatusCode::BAD_REQUEST, Json(json!({"error":"context maintenance"})))
+                    }
+                }
+            };
+            // 远端要求重新鉴权，确认第二次工作调用不会真的抵达它。
+            let work = move || {
+                let count = call_count.clone();
+                async move {
+                    count.fetch_add(1, Ordering::SeqCst);
+                    StatusCode::UNAUTHORIZED
+                }
+            };
+            let router = Router::new().route("/api/connectorTarget", post(target)).route("/mcp", post(work));
+            // 仅启动当前测试自己的内存服务，完成后显式停止。
+            let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+            let remote =
+                Remote { port, token: "token".into(), connector: "connector".into(), bot: Some("bound-member".into()) };
+            let message = json!({"id":"same-id","method":"tools/call"});
+            let result = if legacy {
+                remote.post_legacy(&format!("http://127.0.0.1:{port}/mcp"), &message).await
+            } else {
+                remote.forward(&message, &mut None).await.map(Option::unwrap_or_default)
+            };
+            assert!(result.unwrap_err().to_string().contains("context maintenance"));
+            assert_eq!(targets.load(Ordering::SeqCst), 2);
+            assert_eq!(calls.load(Ordering::SeqCst), 1);
+            server.abort();
+            let _ = server.await;
+        }
     }
 }

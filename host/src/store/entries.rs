@@ -52,6 +52,29 @@ pub(super) fn write_entry(
     Ok(c.query_row(&format!("SELECT {ENTRY_COLS} FROM entries WHERE id=?"), [id], row_entry)?)
 }
 
+/// 在调用方读事务内复用可见消息搜索，不另取锁，也不改变原有私聊搜索语义。
+pub(super) fn search_messages_on(
+    c: &rusqlite::Connection,
+    bot_id: &str,
+    terms: &[String],
+    from: Option<i64>,
+    limit: i64,
+) -> Result<Vec<Entry>> {
+    let mut sql = format!(
+        "SELECT {ENTRY_COLS} FROM entries WHERE bot_id = ?1 AND seq <= ?3 AND {NOT_REMOVED} AND
+               (kind = 'user' OR (kind = 'agent' AND json_extract(data, '$.final') = 1))"
+    );
+    for i in 0..terms.len() {
+        let _ = write!(sql, " AND instr(lower(json_extract(data, '$.text')), ?{}) > 0", i + 4);
+    }
+    sql.push_str(" ORDER BY seq DESC LIMIT ?2");
+    let mut args: Vec<rusqlite::types::Value> =
+        vec![bot_id.to_owned().into(), limit.into(), from.unwrap_or(i64::MAX).into()];
+    args.extend(terms.iter().map(|t| t.to_lowercase().into()));
+    let mut st = c.prepare(&sql)?;
+    Ok(st.query_map(rusqlite::params_from_iter(args), row_entry)?.collect::<rusqlite::Result<_>>()?)
+}
+
 impl Store {
     /// 通过共享写入路径保存消息，已删除聊天不能被迟到执行复活。
     pub fn insert_entry(&self, lane: &Lane, kind: EntryKind, turn: i64, data: &Value) -> Result<Entry> {
@@ -217,21 +240,9 @@ impl Store {
     /// contain every term (case-insensitive for ASCII), newest first, from `from` (a `seq`) back.
     // ponytail: substring scan, no index (CJK needs no tokenizer this way): 0.6 s over 180k messages of one bot.
     // An FTS5 trigram table once a bot's search passes a second.
+    /// 私聊搜索复用同一事务内查询，群检索另由可信投递校验权限。
     pub fn search_messages(&self, bot_id: &str, terms: &[String], from: Option<i64>, limit: i64) -> Result<Vec<Entry>> {
-        let mut sql = format!(
-            "SELECT {ENTRY_COLS} FROM entries WHERE bot_id = ?1 AND seq <= ?3 AND {NOT_REMOVED} AND
-               (kind = 'user' OR (kind = 'agent' AND json_extract(data, '$.final') = 1))"
-        );
-        for i in 0..terms.len() {
-            let _ = write!(sql, " AND instr(lower(json_extract(data, '$.text')), ?{}) > 0", i + 4);
-        }
-        sql.push_str(" ORDER BY seq DESC LIMIT ?2");
-        let mut args: Vec<rusqlite::types::Value> =
-            vec![bot_id.to_owned().into(), limit.into(), from.unwrap_or(i64::MAX).into()];
-        args.extend(terms.iter().map(|t| t.to_lowercase().into()));
-        let c = self.db.locked();
-        let mut st = c.prepare(&sql)?;
-        Ok(st.query_map(rusqlite::params_from_iter(args), row_entry)?.collect::<rusqlite::Result<_>>()?)
+        search_messages_on(&self.db.locked(), bot_id, terms, from, limit)
     }
 
     /// The newest `limit` bot-to-bot notices in `bot_id`'s main chat that involve `peer_id`, oldest first.
@@ -286,19 +297,6 @@ impl Store {
         Ok(rows)
     }
 
-    /// 按实际展示上界查询最近可见消息；先限定序号再截窗口，后来的正文不能挤掉旧目标。
-    pub fn messages_through(&self, lane: &Lane, shown: i64, limit: i64) -> Result<Vec<Entry>> {
-        let c = self.db.locked();
-        let mut st = c.prepare(&format!(
-            "SELECT {ENTRY_COLS} FROM entries WHERE bot_id=?1 AND seq<=?2 AND {NOT_REMOVED} AND
-             (kind='user' OR (kind='agent' AND json_extract(data,'$.final')=1)) ORDER BY seq DESC LIMIT ?3"
-        ))?;
-        let mut rows =
-            st.query_map(params![lane.chat, shown, limit], row_entry)?.collect::<rusqlite::Result<Vec<_>>>()?;
-        rows.reverse();
-        Ok(rows)
-    }
-
     /// The newest `kind` entry in `lane` after `after_seq`.
     pub fn last_of_kind(&self, lane: &Lane, kind: EntryKind, after_seq: i64) -> Option<Entry> {
         let c = self.db.locked();
@@ -310,18 +308,6 @@ impl Store {
             row_entry,
         );
         logged("last entry of kind", row.optional()).flatten()
-    }
-
-    /// The `seq` of `bot`'s last reply in `lane` (0 if it hasn't spoken there).
-    pub fn last_spoke(&self, lane: &Lane, bot: &str) -> i64 {
-        let c = self.db.locked();
-        let n = c.query_row(
-            "SELECT COALESCE(MAX(seq), 0) FROM entries WHERE bot_id = ?1 AND kind = 'agent'
-               AND json_extract(data, '$.final') = 1 AND json_extract(data, '$.author') = ?2",
-            params![lane.chat, bot],
-            |r| r.get(0),
-        );
-        logged("last spoke", n).unwrap_or(0)
     }
 
     /// Permission cards left `pending` (and sends left `queued`) by a crash or restart

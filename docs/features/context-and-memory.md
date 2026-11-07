@@ -160,7 +160,7 @@ Claude Code's own memory; the rules live in the `codync-mem` crate, and `chat/me
   from `usage_update`, compactions, and when turns end. How long the provider keeps prompts cached is learned
   from turns that came after a pause (`cache.life.<bot>`); until then it is an hour for Claude on a subscription
   and five minutes otherwise. Each turn's cached read and write tokens are logged (`turn usage`).
-- **Compacting ahead of time**, in the bot's own chat only (never rooms, routines or bot requests):
+- **Compacting ahead of time in the bot's own chat** (routines and private bot requests do not trigger this policy; group maintenance uses the separate safe-boundary policy below):
   - at the end of a turn past three quarters of the window or 200k tokens, whichever is less;
   - while idle, with a one-hour cache and over 100k in use, five minutes before the cache expires.
 
@@ -216,10 +216,25 @@ Claude Code's own memory; the rules live in the `codync-mem` crate, and `chat/me
   line: what the user said counts as their own words (spoken, not typed), the voice's lines and what it relayed to
   the bot (`from: voice`) are context only ([voice call](voice-call.md#the-call-on-the-host)). Group rooms don't
   feed dreaming.
-- `search_history` covers the bot's own chat, not group chats it took part in. It finds messages by words, or
+- Outside a group execution, `search_history` covers the bot's own chat. It finds messages by words or
   reads back from a message id (`from`, then each page's `next`); `search_memory` gives each `MEMORY.md` line's
-  source message, so a bot can check where a memory came from.
+  source message, so a bot can check where a memory came from. During a started group delivery, history
+  reads require its `contextDeliveryId` and are restricted to that source group's visible material,
+  with bounded exact pages and content versions (see below).
 - A bot told by something it read in the user's own turn (a web page, a file) can still change or take out
   memory; routines, rooms and other bots can't.
 
 A reply stays in its chat's session, and its quote stays out of what memory takes as the user's words; see [groups and replies](groups-and-replies.md). Group and delegated requests don't feed dreaming.
+
+## Group task context
+
+A group shares each member's underlying session with its own chat. The host protects the
+full original task, current assignment, later user requirements, identities, attachments,
+quotes and open plans on each dispatch; supplementary progress alone is limited to 2,048
+estimated tokens / 8,192 bytes. Earlier visible room material is read exactly by ID and
+version in bounded `search_history` pages. Known adapters compact their current session
+at a safe boundary before claiming new group work. Maintenance cannot make business tool
+calls or contribute user memory, and its full summary stays private. Unknown usage and
+estimates are explicitly distinguished from actual context usage and provider billing.
+A task too large for known available space remains queued with a recovery notice; neither
+a summary nor a count limit declares it completed. See [groups](groups-and-replies.md).

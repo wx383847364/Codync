@@ -197,3 +197,9 @@ Group delivery events: `group_delivery_accepted` (`kind`, `source`, target count
 `keyed`), `group_delivery_finished` (`outcome`), `group_delivery_storage` (`outcome`,
 `category`), and `group_mention_rejected` (`category`). These never include message
 text, prompts, names, bot/delivery IDs, keys or file content.
+
+Group context events: `group_context_prepared` (`outcome`, protected/background estimated
+tokens, background budget, nullable reported context used/size) and
+`group_context_compacted` (`outcome`: confirmed/unconfirmed/failed/cancelled/timeout,
+context before, nullable fresh context after/size). They contain no prompt, original
+text, excerpts, plan steps, summary, file paths or task/room IDs. Estimates are not billing.

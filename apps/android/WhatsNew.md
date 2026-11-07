@@ -10,15 +10,15 @@ else a generic "Bug fixes and improvements" line. Delete old sections.
 ## 2.42.0
 
 ### zh-Hant
-- 群組協作不再被固定輪數、回覆次數或交接深度截斷；交付成果或需要你的回覆時才等待。
-- @ 成員支援方向鍵循環選擇，草稿、離線與重送保留成員身分。
-- 可傳送大型附件，傳送前可預覽圖片；派工詳情預設收合，不重複訊息全文。
-- 不登入也能透過 Wi-Fi 或 Tailscale 連線；加入帳號後可使用中繼連線。遠端畫面遵循連線設定。
-- 重試不會遺失附件；新會話可等目前工作完成，或立即停止後切換。儲存故障會保留結果並提供重試。
+- 群組協作持續至交付或需要你的回覆，不再受固定次數限制。
+- 群組減少重複背景，保留任務原文、要求與待辦；支援整理上下文，空間不足時保留排隊並提示處理。
+- @ 成員支援方向鍵循環選擇；草稿、離線及重送保留身分。
+- 可傳大型附件與預覽圖片；派工詳情預設收合，不重複全文。
+- 不登入也能用 Wi-Fi 或 Tailscale；帳號可啟用中繼。重試保留附件，儲存故障可重試保存。
 
 ### en-US
-- Groups keep collaborating until delivery or your input is needed.
-- Cycle through @ members with arrow keys; drafts and retries keep their identities.
-- Send large files and preview images before sending. Delivery details fold without repeating messages.
-- Continue without an account over Wi-Fi or Tailscale; add an account for relay access.
-- Retries keep attachments. New sessions can wait or stop current work. Storage errors retain results for retry.
+- Groups continue until delivery or your input, without fixed turn limits.
+- Less repeated group context; original tasks, requirements and open work stay intact. Supported agents compact context; insufficient space keeps work queued with guidance.
+- Cycle @ members with arrow keys; drafts and retries keep identities.
+- Large files, image previews and folded delivery details.
+- Wi-Fi/Tailscale without an account; relay with one. Attachments and unsaved results survive retries.

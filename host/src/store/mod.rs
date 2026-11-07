@@ -9,6 +9,7 @@ mod bots;
 pub mod deliveries;
 mod devices;
 mod entries;
+pub(crate) mod group_context;
 mod memory;
 mod model;
 mod schema;

@@ -92,7 +92,7 @@ impl Actor {
         saved.into_iter().find(|(k, _)| k == key).map(|(_, v)| v.into())
     }
 
-    /// ACP connectors, team collaboration, and optional team management and computer control.
+    /// 组装当前成员的 MCP 定义，所有 connector 绑定成员身份，便于整理期间阻止新的工作工具。
     pub(super) fn mcp_servers(&self) -> Result<Value> {
         let Ok(exe) = std::env::current_exe() else {
             tracing::warn!("can't locate codync-host for MCP servers");
@@ -103,7 +103,7 @@ impl Actor {
             (if self.cfg.connectors.is_empty() { Vec::new() } else { crate::market::connectors(&self.hub.store)? })
                 .iter()
                 .filter(|c| self.cfg.connectors.contains(&c.id))
-                .filter_map(|c| c.acp(&exe, port))
+                .filter_map(|c| c.acp(&exe, port, &self.cfg.id))
                 .collect();
         let composio = crate::market::composio::enabled_for(&self.hub.store, &self.cfg.connectors)?;
         let builtin = [

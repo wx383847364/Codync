@@ -78,6 +78,8 @@ pub enum Event {
     GroupDeliveryAccepted,
     GroupDeliveryFinished,
     GroupDeliveryStorage,
+    GroupContextPrepared,
+    GroupContextCompacted,
     GroupMentionRejected,
     /// A turn moved on to the bot's next agent (`agent::fallback`).
     AgentFellBack,
@@ -175,6 +177,8 @@ impl Event {
             Self::GroupDeliveryAccepted => "group_delivery_accepted",
             Self::GroupDeliveryFinished => "group_delivery_finished",
             Self::GroupDeliveryStorage => "group_delivery_storage",
+            Self::GroupContextPrepared => "group_context_prepared",
+            Self::GroupContextCompacted => "group_context_compacted",
             Self::GroupMentionRejected => "group_mention_rejected",
             Self::AgentFellBack => "agent_fell_back",
             Self::UsageReadFailed => "usage_read_failed",

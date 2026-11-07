@@ -124,3 +124,11 @@ A bot made this way records its creator (`createdBy`, next to `createdAt`); clie
 - `host/src/chat/manage.rs` (+ `Cmd::Approve` in `agent/bot/updates.rs`): team management; `host/tests/manage_e2e.rs` walks an allowed `create_bot`, a denied `update_bot`, and cards that end when the turn stops or the agent cancels the call, through the real `manage` MCP process.
 
 Run `cargo test` and `cargo clippy --all-targets -- -D warnings` in `host/`.
+
+Group context uses complete task/user originals and saved open plans plus bounded sourced
+progress, rather than copying all room history into every request. The current delivery
+ID scopes `search_history` exact reads to the source room; older details remain available
+without exposing private chats. Native same-session context maintenance can run between
+saved results and the next claim. It has no work tools or final reply and does not spend
+a collaboration round. Background and maintenance budgets never cancel accepted work.
+See [group input and recovery](groups-and-replies.md#how-a-group-answers-hostsrcchatgrouprs).

@@ -64,8 +64,36 @@ assignment expression asks everyone. Stored history is never parsed again after 
 Both `speak` and tool-created `task` deliveries occupy the room's wait slot, up to ten
 minutes. Timeout only releases that slot; it does not stop the execution or change its
 state. Late completion uses a conditional update and cannot revive cancelled work.
-The source entry's complete text, attachments and quote (or the exact tool body) are the
-request; the newest 24 room messages provide supplemental context only.
+Every turn protects the complete original user task, current source (or exact tool body),
+attachments, structured mention IDs and UTF-16 ranges, direct quotes, later user messages,
+and saved open plans. Entries are deduplicated by ID, never by matching text. Later user
+messages retain their own task and reply identities; they are not silently rebound as
+new authorization for an earlier task. Plans are tracked by entry, so another assignment's
+new plan cannot hide earlier open items. The delivery ledger remains authoritative for
+pending, failed and interrupted work; normal speak passes and superseded failures are not
+open work. Displaying at most 64 ledger headers is pagination, not a work limit.
+
+Supplemental room progress uses sourced excerpts with a 2,048 estimated-token and 8,192-byte
+budget. This replaces the fixed 24-message window; only actual shown IDs are reaction
+candidates. Protected material is exempt and never shortened to fit. `search_history`
+inside a live delivery reads only that source group's visible messages, plans and delivery
+bodies, with bounded discovery and exact Unicode-scalar pages. Each page revalidates the
+execution and membership; continuation requires its content `version`. An updated plan
+requires restarting from offset zero, rather than joining different versions. Large
+attachment/quote metadata has its own lossless `part=metadata` pages.
+
+Existing sessions still accumulate agent/tool context. When reported usage reaches the
+smaller of 64k and 75% of the model window, or the incoming task needs more space, known
+adapters get native compaction in the same session before the next delivery is claimed,
+after previous results are durable. Maintenance has no business tools, memory attribution,
+ordinary final reply or derived dispatch. Its potentially private summary stays in a
+private checkpoint; the group sees only a content-free status. Failed, unconfirmed or
+ineffective attempts do not retry endlessly on unchanged context. Unsupported adapters
+continue with bounded background. Known insufficient space leaves the exact delivery
+queued with a visible notice to change model or deliberately start a new session. There
+is no silent session reset. Unknown/stale usage is not zero, and estimates are not provider
+billing: full originals, tools, model output and private/shared session history can still
+consume substantial tokens. A maintenance timeout cancels maintenance only, not work.
 
 Each user entry starts a batch. Round and chain depth are retained for tracing, without
 fixed round, reply-count or handoff-depth cutoffs. Members continue authorized work and

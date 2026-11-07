@@ -8,11 +8,12 @@ import { api, attach, sandbox, steerBot } from './sandbox.ts'
 type History = { entries: { kind: string; data: { final?: boolean; text?: string; mentions?: { botId: string; start: number; end: number }[] } }[] }
 
 /** 超过旧轮次、发言与深度上限后交付给用户，状态仍折叠且不重复来源正文。 */
-test('relay continues past fixed limits to user handoff with folded metadata and no repeated reply', async () => {
+test('relay compacts bounded background past fixed limits while preserving originals and open work', async () => {
   const { browser, page } = await attach()
   const suffix = Date.now()
   const workspace = join(tmpdir(), `codync-compact-relay-${suffix}`)
   const marker = `SOURCE_REPLY_${suffix}`
+  const original = `@StatusA${suffix} ${'原始任务𠀀😀保持附件与验收要求。'.repeat(600)} ROOT_REQUIREMENT_TAIL_${suffix}`
   const names = [`StatusA${suffix}`, `StatusB${suffix}`]
   const ids: string[] = []
   let group: string | undefined
@@ -29,14 +30,17 @@ test('relay continues past fixed limits to user handoff with folded metadata and
         reply: i === 0 && step === 12
           ? `USER_HANDOFF_${suffix} 已交付实现与审核结果，请用户确认。`
           : `@${names[1 - i]} ${marker} **结论**\n${'仅在来源消息显示此长段说明。'.repeat(30)}`,
+        // 真实 usage 触发领取前原生维护；开放计划不能被后续接力背景挤掉。
+        ...(i === 0 && step === 0 ? { usage: { used: 70_000, size: 200_000 }, plan: [{ content: `OPEN_TODO_${suffix}`, status: 'in_progress', priority: 'high' }] } : {}),
         tasks: step % 2 === 1 ? [{ botId: ids[1 - i], message: `继续第 ${step} 项修改和复核`, idempotencyKey: `${suffix}-${i}-${step}` }] : [],
       }))
       writeFileSync(join(workspace, `${i}`, 'group-script.json'), JSON.stringify({ steps }))
     }
+    writeFileSync(join(workspace, '0', 'group-compact.json'), JSON.stringify({ usage: { used: 20_000, size: 200_000 } }))
     const name = `Compact delivery room ${suffix}`
     group = (await api<{ bot: { id: string } }>(page, 'createBot', { name, kind: 'group', members: ids })).bot.id
     await page.locator('.roster-row', { hasText: name }).click()
-    await api(page, 'send', { botId: group, text: `@${names[0]} start relay` })
+    await api(page, 'send', { botId: group, text: original })
     await expect.poll(async () => (await api<History>(page, 'history', { botId: group })).entries.filter((e) => e.kind === 'agent' && e.data.final === true).length, { timeout: 25_000 }).toBe(25)
     const db = new DatabaseSync(join(homedir(), `.codync-dev-${sandbox().name}`, 'codync.db'), { readOnly: true })
     try {
@@ -73,6 +77,21 @@ test('relay continues past fixed limits to user handoff with folded metadata and
     const prompts = readFileSync(join(workspace, '0', 'prompts.jsonl'), 'utf8')
     expect(prompts).toContain('There is no fixed group round, reply-count, or handoff-depth limit')
     expect(prompts).toContain('genuinely need the user')
+    // 检查真实ACP入参，而非仅看最终气泡；补充背景单独受预算，完整来源不裁切。
+    const requests = readFileSync(join(workspace, '0', 'prompt-requests.jsonl'), 'utf8').trim().split('\n').map((line) => JSON.parse(line) as { sessionId: string; prompt: { text: string }[] })
+    const work = requests.filter((request) => !request.prompt[0].text.startsWith('/compact'))
+    expect(work).toHaveLength(13)
+    expect(new Set(requests.map((request) => request.sessionId)).size).toBe(1)
+    for (const request of work) {
+      expect(request.prompt[0].text).toContain(original)
+      const excerpt = request.prompt[0].text.split('Saved room progress excerpts')[1]?.split('Context estimates only:')[0] ?? ''
+      expect(Buffer.byteLength(excerpt, 'utf8')).toBeLessThanOrEqual(8_192)
+      const background = /supplementary=(\d+)\/2048/.exec(request.prompt[0].text)
+      expect(Number(background?.[1])).toBeLessThanOrEqual(2_048)
+    }
+    expect(work.at(-1)?.prompt[0].text).toContain(`OPEN_TODO_${suffix}`)
+    expect(readFileSync(join(workspace, '0', 'compactions.jsonl'), 'utf8').trim().split('\n')).toHaveLength(1)
+    expect(JSON.stringify((await api<History>(page, 'history', { botId: group })).entries)).not.toContain('COMPACT_PRIVATE')
     // 交付后由用户的新消息开启下一项，不自动重放前一批已完成记录。
     await api(page, 'send', { botId: group, text: `@${names[0]} 用户确认，请继续下一项` })
     await expect.poll(async () => (await api<History>(page, 'history', { botId: group })).entries.filter((e) => e.kind === 'agent' && e.data.final === true).length).toBe(26)

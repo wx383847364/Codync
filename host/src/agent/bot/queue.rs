@@ -14,6 +14,7 @@ use tokio::sync::mpsc;
 impl Actor {
     /// 根据持久投递身份处理取消与会话操作，旧通知不得取消新的群执行。
     pub(super) async fn on_cmd(&mut self, cmd: Cmd, done_tx: &mpsc::UnboundedSender<Done>) -> bool {
+        let Some(cmd) = self.maintenance_command(cmd) else { return true };
         match cmd {
             Cmd::Delivery { id, reply } => self.begin_delivery(id, reply, done_tx).await,
             Cmd::RetryDeliverySave => {
@@ -44,6 +45,16 @@ impl Actor {
             Cmd::Steered { entry_id, outcome } => self.steer_answered(&entry_id, &outcome, done_tx).await,
             Cmd::Unqueue { entry_id } => self.unqueue(&entry_id),
             Cmd::CancelGroup { chat, delivery_ids } => {
+                // 取消准确的维护来源，旧队列项不能在 Stop 后再启动。
+                for id in &delivery_ids {
+                    self.context_blocks.remove(id);
+                }
+                self.queue.retain(|q| !matches!(q,Queued::Compact {group:Some(g),..} if g.room==chat && delivery_ids.contains(&g.delivery)));
+                if self.group_compaction.as_ref().is_some_and(|g| g.room == chat && delivery_ids.contains(&g.delivery))
+                {
+                    self.cancel_turn().await;
+                }
+
                 // 取消范围由已提交事务返回，不能仅凭房间名停掉后来开始的投递。
                 if self
                     .active_delivery
@@ -138,7 +149,10 @@ impl Actor {
 
     /// 停止当前成员执行与私聊队列，其他群的持久 queued 请求仍保留。
     pub(super) async fn stop(&mut self) {
-        self.hub.team.end_turn(&self.cfg.id);
+        if self.group_compaction.is_none() {
+            // 维护的 MCP 禁令保留到进程确认结束或被强杀，避免 Stop 的取消宽限期泄漏工具。
+            self.hub.team.end_turn(&self.cfg.id);
+        }
         if let Err(error) = self.hub.routines.cancel_queued(&self.hub.store, &self.cfg.id) {
             tracing::error!(error = format!("{error:#}"), "couldn't cancel queued routines");
         }
@@ -271,10 +285,14 @@ impl Actor {
                     continue;
                 }
                 Some(Queued::Compact { .. }) => {
-                    let Some(Queued::Compact { idle }) = self.queue.pop_front() else {
+                    let Some(Queued::Compact { idle, group }) = self.queue.pop_front() else {
                         unreachable!("front is a compaction")
                     };
-                    self.start_compaction(idle, done_tx).await;
+                    if let Some(group) = group {
+                        self.start_group_compaction(group, done_tx).await;
+                    } else {
+                        self.start_compaction(idle, done_tx).await;
+                    }
                     continue;
                 }
                 _ => {}
