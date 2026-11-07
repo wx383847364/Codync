@@ -3,7 +3,7 @@ import { groupFastMode } from '@shared/fast-mode'
 import { artifactDraftKey, artifactQuote, type Artifact } from '@shared/artifacts'
 import { isGroup, isWorkingIn, quoteOf, type Entry } from '@shared/models'
 import type { PickedFile } from '@shared/ipc'
-import { MentionMenu, useMentionMenu } from './MentionMenu'
+import { useMentionMenu } from './MentionMenu'
 import { Icon } from '../../components/Icon'
 import { IconButton } from '../../components/Controls'
 import { RecordingPill } from '../../components/RecordingPill'
@@ -17,19 +17,19 @@ import { type OutgoingFile } from '../../store/bot-store'
 import { pluginsFor } from '../marketplace/plugins'
 import { pastedFiles, readPicked } from './composer-files'
 import { composerEnter } from './composer-keyboard'
-import { CommandMenu, useCommandMenu } from './CommandMenu'
+import { CommandMenu, MentionMenu, useComposerMenu } from './ComposerMenu'
 import { ComposerAttachment } from './ComposerAttachment'
 import { QuoteRow } from './ChatRows'
 import { useDictation } from './dictation-platform'
 import { DictationEngineMenu } from './DictationEngineMenu'
-import { builtInCommand, slashCommands, slashQuery, type SlashCommand } from './slash-commands'
+import { builtInCommand, returnRuns, slashCommands, slashQuery, type SlashCommand } from './slash-commands'
 import { useVoiceShortcut } from './voice-shortcut-keys'
 
 type Trailing = 'interrupt' | 'stop' | 'call' | 'send'
 
 /**
  * The message box under a chat: send, or stop while the bot (or the group) is working there. A leading `/` lists
- * the commands (a group's are its bots'); in a group, typing `@` suggests its bots. While `reply` is set, the
+ * the commands (a group's are its bots'); in a group, typing `@` lists its bots. While `reply` is set, the
  * message it quotes sits at the top of the box and goes out with the next send. Under an artifact, `about` is the
  * artifact: the box keeps a draft of its own, and every message replies to the artifact's card.
  */
@@ -124,6 +124,8 @@ function DestinationComposer({ botId, reply, about, cancelReply, onCall, onInter
     const caret = start + token.length + 1
     // 选择只插入草稿，下一帧恢复原输入焦点并把光标放在成员片段后。
     requestAnimationFrame(() => {
+      // 上次选择的帧回调不得覆盖用户随后输入的新草稿或移动其光标。
+      if (drafts.get(draftKey) !== next) return
       field.current?.focus()
       field.current?.setSelectionRange(caret, caret)
       mentionMenu.selection({ start: caret, end: caret })
@@ -157,7 +159,7 @@ function DestinationComposer({ botId, reply, about, cancelReply, onCall, onInter
     }
     field.current?.focus()
   }
-  const menu = useCommandMenu(draft, commands, run)
+  const commandMenu = useComposerMenu(draft, commands, run, returnRuns)
 
   /** 接收所选附件，不按总大小拒绝；发送仍由既有分片协议完成。 */
   const append = (incoming: PickedFile[]) => {
@@ -177,13 +179,16 @@ function DestinationComposer({ botId, reply, about, cancelReply, onCall, onInter
     dictation.cancel()
     if (command) return run(command)
     setSubmitting(true)
-    const accepted = await store.send(draft, botId, { files, mentions: drafts.mentions(draftKey), pasted: pasted.current, replyTo: reply ? quoteOf(reply) : about && artifactQuote(about) })
+    const sentMentions = drafts.mentions(draftKey)
+    const sentFiles = new Set(files.map((file) => file.id))
+    const accepted = await store.send(draft, botId, { files, mentions: sentMentions, pasted: pasted.current, replyTo: reply ? quoteOf(reply) : about && artifactQuote(about) })
     setSubmitting(false)
     if (!accepted) return
     cancelReply?.()
     pasted.current = []
-    if (drafts.get(draftKey) === draft) setDraft('')
-    setFiles([])
+    // 上传期间新加的附件和重新选择的同名成员仍属于下一份草稿。
+    if (drafts.get(draftKey) === draft && JSON.stringify(drafts.mentions(draftKey)) === JSON.stringify(sentMentions)) setDraft('')
+    setFiles((current) => current.filter((file) => !sentFiles.has(file.id)))
     field.current?.focus()
   }
   useVoiceShortcut(dictation, draft, submit, () => field.current?.focus())
@@ -216,8 +221,8 @@ function DestinationComposer({ botId, reply, about, cancelReply, onCall, onInter
         }}
       >
         <div className="composer-surface">
-          <MentionMenu menu={mentionMenu} />
-          <CommandMenu commands={menu.shown} index={menu.index} hover={menu.hover} pick={run} />
+          <MentionMenu menu={{ ...mentionMenu, pick: mentionMenu.choose }} />
+          <CommandMenu menu={commandMenu} />
           <ComposerReveal open={!!reply}>
             {reply ? (
               <HStack gap={4} className="composer-reply">
@@ -267,7 +272,7 @@ function DestinationComposer({ botId, reply, about, cancelReply, onCall, onInter
                 // 候选和组合输入先处理确认键，之后才允许执行发送快捷键。
                 onKeyDown={(e) => {
                   if (mentionMenu.onKey(e, composing.current || e.nativeEvent.isComposing || e.keyCode === 229)) return
-                  if (menu.onKey(e, composing.current || e.nativeEvent.isComposing || e.keyCode === 229)) return
+                  if (commandMenu.onKey(e, composing.current || e.nativeEvent.isComposing || e.keyCode === 229)) return
                   if (e.key === 'Escape' && reply) {
                     e.preventDefault()
                     cancelReply?.()

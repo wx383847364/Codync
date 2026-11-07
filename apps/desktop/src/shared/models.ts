@@ -319,6 +319,8 @@ export interface EntryData {
   /** notice: a failed routine run the user can run again (`retryRoutineRun`). */
   retry?: boolean
   text?: string
+  /** 原样保留粘贴片段，失败重试仍与用户输入区分。 */
+  pasted?: string[]
   final?: boolean
   /** user: queued | sent | cancelled | failed · tool: pending | in_progress | completed | failed · permission: pending | answered | cancelled | expired */
   status?: string
@@ -578,10 +580,16 @@ export interface PairingRequest {
   requestId: string
   deviceName: string
   platform?: string | null
-  /** The phone's account, which the computer joins. */
+  /** The phone's account, which the computer can join. */
   email?: string | null
   /** The 6 digits the phone shows too. */
   code: string
+  /** The phone is signed in and the Codync cloud is on, so the computer can join its account. */
+  canJoin?: boolean | null
+  /** The computer can stay out of an account: the phone then connects only over Wi-Fi or Tailscale. */
+  phoneOnly?: boolean | null
+  /** The phones that lose access if the computer joins. */
+  removes?: string[] | null
   expiresAt?: number | null
 }
 

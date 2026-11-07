@@ -4,12 +4,9 @@ import { readSharedFile } from '../../shared/files.ts'
 import { prefs } from '../lib/prefs'
 import { BotSync } from './bot-sync'
 
-/** A file picked in the composer, sent with the next message. */
-export interface OutgoingFile {
-  id: string
-  name: string
-  data: Uint8Array
-}
+import { filesToResend, type OutgoingFile } from './outgoing-files.ts'
+import { trNow } from '../lib/l10n.ts'
+export type { OutgoingFile } from './outgoing-files.ts'
 
 /** What a message carries besides its text; `replyTo` shows on the bubble until the computer's own quote replaces it. */
 export interface SendOptions {
@@ -34,7 +31,7 @@ export class BotSending extends BotSync {
     const trimmed = text.trim()
     if ((!trimmed && !files.length) || this.retired) return Promise.resolve(false)
     this.lastSentNonce = nonce
-    const data: Entry['data'] = { text, mentions, status: 'sending', clientNonce: nonce }
+    const data: Entry['data'] = { text, mentions, pasted, status: 'sending', clientNonce: nonce }
     if (call) data.call = call
     if (replyTo) data.replyTo = replyTo
     if (files.length) {
@@ -87,12 +84,14 @@ export class BotSending extends BotSync {
   /** 会话切换由 host 等执行与落盘边界，客户端只发送选择。 */
   switchSession(botId: string, mode: string) { return this.perform((c) => c.call('newSession', { botId, mode })) }
 
+  /** 重试保留原身份；本机附件丢失时拒绝发送，不能悄悄降为纯文本。 */
   retry(entry: Entry) {
-    const files = (entry.data.clientNonce && this.outgoingFiles.get(entry.data.clientNonce)) || []
+    const files = filesToResend(entry, this.outgoingFiles)
+    if (!files) return this.setError(trNow("This message's files aren't on this device anymore. Delete it and attach them again."))
     const text = entry.data.text ?? ''
     if (!text && !files.length) return
     this.dropEntry(entry)
-    this.send(text, entry.botId, { files, nonce: entry.data.clientNonce, replyTo: entry.data.replyTo, mentions: entry.data.mentions })
+    this.send(text, entry.botId, { files, nonce: entry.data.clientNonce, replyTo: entry.data.replyTo, pasted: entry.data.pasted, call: entry.data.call, mentions: entry.data.mentions })
   }
 
   discard(entry: Entry) {

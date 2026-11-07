@@ -148,8 +148,9 @@ private enum class Trailing { Interrupt, Stop, Call, Send }
     } }
     val online = state.actualConnection is LinkState.Ready
     val empty = text.text.isBlank() && files.isEmpty()
-    // Offline computers still take text when the relay can hold it; files need the computer.
-    val canSend = !empty && !importing && !queuing && (online || state.actualConnection is LinkState.ComputerOffline && files.isEmpty())
+    // Offline computers still take text: the relay holds it for them, or with no relay this phone does. Files need the computer.
+    val canHold = state.actualConnection is LinkState.ComputerOffline || holdsOnPhone(state.computer.cloud, state.actualConnection)
+    val canSend = !empty && !importing && !queuing && (online || canHold && files.isEmpty())
     val working = bot.isWorking(bot.id)
     val bare = text.text.isEmpty() && files.isEmpty()
     val trailing = when {
@@ -176,7 +177,7 @@ private enum class Trailing { Interrupt, Stop, Call, Send }
     var mentionIndex by remember(mentionKey) { mutableStateOf(0) }
     // 关闭仅作用于当前查询，编辑或移动光标后解除临时关闭。
     var dismissedMention by remember(mentionKey) { mutableStateOf<String?>(null) }
-    val mentions = if (dismissedMention == mentionKey || bot.kind != "group") emptyList() else mentionQuery(typed, text.selection.start)?.takeIf { text.selection.collapsed }?.let { query ->
+    val mentions = if (dismissedMention == mentionKey || bot.kind != "group") emptyList() else mentionQuery(typed, text.selection.start, members)?.takeIf { text.selection.collapsed }?.let { query ->
         members.filter { query.isEmpty() || it.name.contains(query, true) }
     }.orEmpty()
     /** 原子替换查询并恢复光标，尾文与后方绑定一起保留。 */
@@ -219,7 +220,7 @@ private enum class Trailing { Interrupt, Stop, Call, Send }
         CommandList(commands, ::run, Modifier.padding(horizontal = 16.dp))
     }
     AnimatedVisibility(mentions.isNotEmpty(), enter = fadeIn(Motion.fade()), exit = fadeOut(Motion.fade())) {
-        MentionChips(mentions, state.bots, mentionIndex, ::selectMention)
+        MentionList(mentions, state.bots, ::selectMention, Modifier.padding(horizontal = 16.dp), mentionIndex)
     }
     Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 6.dp, bottom = 16.dp), verticalAlignment = Alignment.Bottom,
         horizontalArrangement = Arrangement.spacedBy(8.dp)) {

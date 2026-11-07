@@ -136,6 +136,7 @@ extension BotStore {
         var data = EntryData(text: text, status: "sending", clientNonce: nonce)
         data.mentions = mentions
         data.call = call
+        data.pasted = pasted.isEmpty ? nil : pasted
         // Shown at once; the computer's own quote replaces it.
         data.replyTo = replyTo
         if !files.isEmpty {
@@ -186,9 +187,11 @@ extension BotStore {
                 return .delivered
             } catch {
                 if outgoingFiles[nonce] != nil { lastError = "Couldn't send the files: \(error.localizedDescription)" }
-                lastError = error.localizedDescription
-                markLocal(nonce: nonce, botId: botId, status: "failed")
-                return .failed
+                // 无 relay 的临时掉线留在本机队列，不复制成第二份草稿。
+                let holds = computer.cloud == nil && (error as? HostError)?.isTransient == true
+                if !holds { lastError = error.localizedDescription }
+                markLocal(nonce: nonce, botId: botId, status: holds ? "held" : "failed")
+                return holds ? .queued : .failed
             }
         }
     }
@@ -250,6 +253,13 @@ extension BotStore {
 
     /// Takes a waiting message back out of the mailbox, unless the computer already has it.
     public func cancelQueued(_ entry: Entry) {
+        if computer.cloud == nil || entry.data.status == "held" {
+            // No relay holds it: it only waits on this phone.
+            discard(entry)
+            if let bot = bots[entry.botId] { onSent?(bot, .cancelled) }
+            saveCache()
+            return
+        }
         guard let nonce = entry.data.clientNonce, let remote = transport as? any RemoteTransport else { return }
         Task {
             switch await remote.cancelQueued(clientNonce: nonce) {
@@ -279,20 +289,24 @@ extension BotStore {
     /// "Failed" is safe even if one was delivered: the events catch-up replaces it by clientNonce,
     /// and a resend reuses that nonce, so the computer never runs it twice.
     func reconcileQueued(_ remote: any RemoteTransport) async {
-        let waiting = entries.values.flatMap { $0 }.filter { $0.data.status == "waiting" }
-        guard !waiting.isEmpty else { return }
-        let heldItems: [QueuedItem]
+        let local = entries.values.flatMap { $0 }
+        // What waits on this phone goes now, also when the computer has joined an account since. With no relay
+        // now, what a relay held can't be asked about: it goes with the same nonce too.
+        sendHeld(local.filter { $0.data.status == "held" || ($0.data.status == "waiting" && computer.cloud == nil) })
+        let waiting = local.filter { $0.data.status == "waiting" }
+        guard computer.cloud != nil, !waiting.isEmpty else { return }
+        let relayItems: [QueuedItem]
         do {
-            heldItems = try await remote.listQueued()
+            relayItems = try await remote.listQueued()
         } catch {
             log.debug("mailbox reconciliation deferred: \(error.localizedDescription)")
             return
         }
-        let held = Dictionary(heldItems.map { ($0.nonce, $0.state) }, uniquingKeysWith: { a, _ in a })
+        let inRelay = Dictionary(relayItems.map { ($0.nonce, $0.state) }, uniquingKeysWith: { a, _ in a })
         guard !retired else { return }
         for e in waiting {
             guard let nonce = e.data.clientNonce else { continue }
-            switch held[nonce] {
+            switch inRelay[nonce] {
             case "queued": break
             case .some: markLocal(nonce: nonce, botId: e.botId, status: "delivering")
             case nil: markLocal(nonce: nonce, botId: e.botId, status: "failed")
@@ -301,15 +315,37 @@ extension BotStore {
         saveCache()
     }
 
+    /// 恢复本机暂存时核验附件仍存在，避免丢失文件后误发纯文本。
+    private func sendHeld(_ held: [Entry]) {
+        guard !held.isEmpty else { return }
+        for entry in held.sorted(by: { $0.createdAt < $1.createdAt }) {
+            if filesGone(entry), let nonce = entry.data.clientNonce {
+                markLocal(nonce: nonce, botId: entry.botId, status: "failed")
+            } else {
+                retry(entry)
+            }
+        }
+        saveCache()
+    }
+
+    /// 恢复本机暂存时核验附件仍存在，避免丢失文件后误发纯文本。
+    private func filesGone(_ entry: Entry) -> Bool {
+        entry.data.attachments?.isEmpty == false && entry.data.clientNonce.flatMap { outgoingFiles[$0] } == nil
+    }
+
     /// 重发同一请求身份，区别于投递卡主动创建新 attempt。
     public func retry(_ entry: Entry) {
+        guard !filesGone(entry) else {
+            lastError = "This message's files aren't on this device anymore. Delete it and attach them again."
+            return
+        }
         let files = entry.data.clientNonce.flatMap { outgoingFiles[$0] } ?? []
         guard let text = entry.data.text, !text.isEmpty || !files.isEmpty else { return }
         entries[entry.botId]?.removeAll { $0.id == entry.id }
         // The same clientNonce: if the computer got it after all, it won't run twice (the host
         // skips a nonce it has). Every seal still takes a fresh ephemeral key (§6.4).
         send(text, to: entry.botId, replyTo: entry.data.replyTo, nonce: entry.data.clientNonce ?? UUID().uuidString,
-             files: files, mentions: entry.data.mentions ?? [])
+             files: files, pasted: entry.data.pasted ?? [], call: entry.data.call, mentions: entry.data.mentions ?? [])
     }
 
     /// A sent file's bytes: on disk after the first fetch (sent files never change).

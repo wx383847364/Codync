@@ -5,7 +5,7 @@ import UniformTypeIdentifiers
 
 /// The message box under a chat: send, or stop while the bot (or the group) is working
 /// there. A leading `/` lists commands (a group's act on its bots); in a group, typing `@`
-/// suggests its bots.
+/// lists its bots.
 struct Composer: View {
     let botId: String
     /// The message the next send quotes, shown above the field until sent or cancelled.
@@ -48,8 +48,8 @@ struct Composer: View {
     private var isEmpty: Bool { draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && files.isEmpty }
 
     private var canSend: Bool {
-        // Offline computers still take messages when the relay can hold them for it (text only).
-        !isEmpty && (model.connection == .online || (model.canQueue && files.isEmpty))
+        // Offline computers still take text: the relay holds it for them, or with no relay this phone does.
+        !isEmpty && (model.connection == .online || ((model.canQueue || model.holdsOnPhone) && files.isEmpty))
     }
 
     private var canAttach: Bool { bot != nil }
@@ -72,6 +72,7 @@ struct Composer: View {
     /// 按光标查询过滤成员，同名成员保留独立身份候选。
     private var suggestions: [Bot] {
         guard let query = mentionQuery, dismissedMention != mentionKey else { return [] }
+        guard query.first?.isWhitespace != true, !members.contains(where: { query.lowercased() == "\($0.name.lowercased()) " }) else { return [] }
         return members.filter {
             query.isEmpty || $0.name.localizedCaseInsensitiveContains(query)
         }
@@ -134,22 +135,8 @@ struct Composer: View {
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
             if !suggestions.isEmpty {
-                ScrollViewReader { proxy in
-                    ScrollView(.vertical, showsIndicators: false) {
-                        VStack(alignment: .leading, spacing: 6) {
-                            ForEach(Array(suggestions.enumerated()), id: \.element.id) { index, member in
-                                // 触摸和键盘共用同一候选顺序，高亮行自动滚入视野。
-                                SuggestionChip(title: "\(member.name) · \(member.id.prefix(8))") {
-                                    CharacterAvatar(bot: member, size: 18, animated: false)
-                                } action: { mention(member) }
-                                .background(index == mentionIndex ? Palette.surface : .clear, in: RoundedRectangle(cornerRadius: 10))
-                                .id(index)
-                            }
-                        }.padding(.horizontal, 16)
-                    }
-                    .onChange(of: mentionIndex) { _, index in withAnimation(Motion.layout) { proxy.scrollTo(index) } }
-                }
-                .frame(maxHeight: 240)
+                MentionList(members: suggestions, selected: mentionIndex, pick: mention)
+                    .padding(.horizontal, 16)
                 .transition(.move(edge: .bottom).combined(with: .opacity))
             }
             field
@@ -470,25 +457,5 @@ struct Composer: View {
             files = []
             replyingTo = nil
         }
-    }
-}
-
-/// One suggestion above the box: a bot to @mention.
-private struct SuggestionChip<Icon: View>: View {
-    let title: String
-    @ViewBuilder let icon: Icon
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: 6) {
-                icon
-                Text(title).font(.subheadline).foregroundStyle(Palette.text)
-            }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-            .background(Palette.surface, in: Capsule())
-        }
-        .buttonStyle(PressScale())
     }
 }

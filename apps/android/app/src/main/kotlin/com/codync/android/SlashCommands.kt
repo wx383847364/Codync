@@ -1,39 +1,11 @@
 package com.codync.android
 
-import androidx.compose.foundation.relocation.BringIntoViewRequester
-import androidx.compose.foundation.relocation.bringIntoViewRequester
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.remember
-import androidx.compose.foundation.background
-import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.dp
 import com.codync.android.core.Bot
 import com.codync.android.core.FastModeState
 import com.codync.android.core.GroupFastMode
 import com.codync.android.core.InstalledSkill
 import com.codync.android.core.fastModeDetail
 import com.codync.android.core.fastModeState
-import com.codync.android.design.*
-import com.kyant.shapes.Capsule
-import com.kyant.shapes.RoundedRectangle
 
 /** A command in the composer's `/` list (iOS `SlashCommand`): Fast mode, or one of the bot's skills. */
 internal data class SlashCommand(val name: String, val icon: String, val title: String, val detail: String, val warning: Boolean,
@@ -83,42 +55,12 @@ internal object SlashCommands {
     }
 }
 
-/** The `/` list above the box: each command's icon, name and what it does; tapping one runs it (iOS `CommandList`). */
-@Composable internal fun CommandList(commands: List<SlashCommand>, pick: (SlashCommand) -> Unit, modifier: Modifier = Modifier) {
-    Column(modifier.fillMaxWidth().heightIn(max = 280.dp).glass(RoundedRectangle(20.dp)).verticalScroll(rememberScrollState())
-        .padding(vertical = 6.dp)) {
-        for (command in commands) Row(Modifier.fillMaxWidth().plainButton { pick(command) }
-            .semantics(mergeDescendants = true) { contentDescription = command.title }.padding(horizontal = 14.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            Box(Modifier.width(20.dp), contentAlignment = Alignment.Center) { Symbol(command.icon, size = 17.dp, tint = Palette.secondary) }
-            Text(command.title, style = Type.subheadline, color = Palette.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(command.detail, Modifier.weight(1f), style = Type.subheadline, color = if (command.warning) Palette.warning else Palette.secondary,
-                maxLines = 1, overflow = TextOverflow.Ellipsis)
-        }
-    }
-}
-
-/** 群成员的纵向候选列表，ID 前缀用于区分同名成员。 */
-/** The bots to @mention above a group's box: chips with their faces (iOS `SuggestionChip`). */
-@Composable internal fun MentionChips(members: List<Bot>, bots: List<Bot>, selected: Int, mention: (Bot) -> Unit) {
-    Column(Modifier.fillMaxWidth().heightIn(max = 240.dp).verticalScroll(rememberScrollState()).padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        for ((index, member) in members.withIndex()) {
-        val bring = remember(member.id) { BringIntoViewRequester() }
-        LaunchedEffect(selected, member.id) { if (index == selected) bring.bringIntoView() }
-        Row(Modifier.bringIntoViewRequester(bring).clip(Capsule()).background(if (index == selected) Palette.surface else androidx.compose.ui.graphics.Color.Transparent).plainButton { mention(member) }
-            .padding(horizontal = 10.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            BotAvatar(member, bots, 18.dp)
-            Text("${member.name} · ${member.id.take(8)}", style = Type.subheadline, color = Palette.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        }
-        }
-    }
-}
-
 /** The `@partial` being typed at the end of a group's draft, if any. */
 /** 只提取光标前的成员查询，保留中间插入之后的正文。 */
-internal fun mentionQuery(draft: String, cursor: Int = draft.length): String? {
+internal fun mentionQuery(draft: String, cursor: Int = draft.length, members: List<Bot> = emptyList()): String? {
     val at = draft.lastIndexOf('@', cursor - 1)
     if (at < 0 || at > 0 && !draft[at - 1].isWhitespace()) return null
     val query = draft.substring(at + 1, cursor)
-    return if (query.contains('\n') || query.length > 24) null else query
+    if (query.firstOrNull()?.isWhitespace() == true || query.contains('\n') || query.length > 24) return null
+    return query.takeUnless { members.any { query.equals("${it.name} ", ignoreCase = true) } }
 }
