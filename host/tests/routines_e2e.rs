@@ -6,6 +6,8 @@
 #[allow(dead_code)]
 mod common;
 
+#[path = "routines_e2e/recovery.rs"]
+mod recovery;
 #[path = "routines_e2e/timeout.rs"]
 mod timeout;
 
@@ -29,18 +31,21 @@ impl Drop for Host {
 }
 
 impl Host {
+    /// 启动测试 Host 并开启信息日志，以验证恢复尝试的消费记录。
     async fn start() -> Self {
         let home = std::env::temp_dir().join(format!("codync-routines-e2e-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&home).unwrap();
-        let (child, base) = common::serve(&home).await;
+        let (child, base) = common::serve_with(&home, &[("RUST_LOG", std::ffi::OsStr::new("codync_host=info"))]).await;
         let mut host = Self { child, home, base, token: String::new() };
         std::fs::read_to_string(host.home.join("token")).unwrap().trim().clone_into(&mut host.token);
         host
     }
 
+    /// 重启同一临时数据目录并保留可核对的恢复日志。
     async fn restart(&mut self) {
         common::stop(&mut self.child);
-        (self.child, self.base) = common::serve(&self.home).await;
+        (self.child, self.base) =
+            common::serve_with(&self.home, &[("RUST_LOG", std::ffi::OsStr::new("codync_host=info"))]).await;
     }
 
     async fn call(&self, method: &str, body: Value) -> Value {
@@ -390,28 +395,6 @@ async fn busy_bot_keeps_work_pending_and_honors_pause_delete_and_edit_across_res
         let text = e["text"].as_str().unwrap();
         text.contains("SHOULD_NOT_RUN") || text.contains("OLD_INSTRUCTION")
     }));
-}
-
-#[tokio::test]
-async fn unavailable_resume_never_replays_work_in_a_fresh_session() {
-    let mut host = Host::start().await;
-    let bot = host.stable_bot("no-resume").await;
-    let id = host.save(&bot, "unloadable", "BLOCK[original]", json!([{"type":"webhook"}]), 30).await;
-    host.call("runRoutine", json!({"botId":bot,"id":id})).await;
-    host.wait_event("no-resume", "started", "BLOCK[original]").await;
-    std::fs::write(host.home.join("no-resume/no-load"), "").unwrap();
-    host.restart().await;
-    host.wait_status(&bot, &id, "interrupted").await;
-    let next = host.save(&bot, "next", "AFTER_INTERRUPTION", json!([{"type":"webhook"}]), 30).await;
-    host.call("runRoutine", json!({"botId":bot,"id":next})).await;
-    host.wait_status(&bot, &next, "succeeded").await;
-    assert_eq!(
-        host.agent_events("no-resume")
-            .iter()
-            .filter(|e| e["text"].as_str().unwrap().contains("BLOCK[original]"))
-            .count(),
-        1
-    );
 }
 
 #[tokio::test]

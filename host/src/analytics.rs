@@ -68,6 +68,8 @@ pub enum Event {
     SectionRenamed,
     BotDeleted,
     MessageSent,
+    /// 原请求方按需读取委派回复，只记录结果类别。
+    BotReplyRead,
     /// The user had a queued message handled now (`agent::bot::steer`).
     MessageSteered,
     QueuedMessageRemoved,
@@ -160,6 +162,7 @@ impl Event {
             Self::SectionRenamed => "section_renamed",
             Self::BotDeleted => "bot_deleted",
             Self::MessageSent => "message_sent",
+            Self::BotReplyRead => "bot_reply_read",
             Self::MessageSteered => "message_steered",
             Self::QueuedMessageRemoved => "queued_message_removed",
             Self::TurnStopped => "turn_stopped",

@@ -33,7 +33,7 @@ mod steer;
 mod tool_entry;
 mod turn;
 mod updates;
-
+mod usage;
 pub use cmd::Cmd;
 use cmd::Queued;
 pub(crate) use launch::{launch_commands, select_model, start_agent, system_prompt};
@@ -117,6 +117,8 @@ pub fn spawn(hub: Arc<Hub>, base: BotConfig) -> BotHandle {
         held_done: None,
         active_request: None,
         reply_hops: None,
+        reply_requests: Vec::new(),
+        usage_attempt: None,
         active_prompt: false,
         prompt_call: None,
         seg: Seg::None,
@@ -298,6 +300,10 @@ struct Actor {
     active_request: Option<crate::chat::team::BotRequest>,
     /// During a turn that takes bot replies: the hops of their chain (see `chat::team::BotReply`).
     reply_hops: Option<u8>,
+    /// 主脑当前回合对应的全部回复请求，共享用量不能精确拆分。
+    reply_requests: Vec<String>,
+    /// 当前启动或执行尝试；记录完成即取走，避免重复计量。
+    usage_attempt: Option<usage::Attempt>,
     /// The running turn is one the host started, with no message of the user's (`Cmd::Prompt`).
     active_prompt: bool,
     /// The call the next host-started turn opens (`Cmd::Prompt`), whose replies are that call's.
@@ -348,7 +354,7 @@ struct RoutineCompletion {
 type Done = Result<Value>;
 
 impl Actor {
-    /// The running turn is over, with every steer answered (`turn_ended`): it finishes or goes on with the next agent.
+    /// 收齐回合更新并先记录本次实报用量，再决定完成或回退，避免漏记失败尝试。
     async fn on_turn_done(&mut self, done: Done, done_tx: &mpsc::UnboundedSender<Done>) {
         // Updates sent before the prompt response are already queued; apply them first.
         while let Some(inc) = self.conn.as_mut().and_then(|c| c.rx.try_recv().ok()) {
@@ -358,6 +364,7 @@ impl Actor {
                 inc => self.on_incoming(Some(inc)).await,
             }
         }
+        self.record_usage(&done);
         if let Err(error) = &done
             && self.fall_back(error, done_tx).await
         {
@@ -374,7 +381,7 @@ impl Actor {
         self.next_in_queue(done_tx).await;
     }
 
-    /// `interrupted`: the previous host process stopped a turn in the bot's chat; resume it first.
+    /// 运行 bot actor；只恢复既有允许恢复的回合，退出时保留取消尝试的未知用量。
     async fn run(mut self, mut rx: mpsc::UnboundedReceiver<Cmd>, interrupted: Option<Lane>) {
         let (done_tx, mut done_rx) = mpsc::unbounded_channel::<Done>();
         let mut flush_tick = tokio::time::interval(Duration::from_millis(300));
@@ -421,7 +428,9 @@ impl Actor {
         }
         self.files.cancel();
         self.hub.team.end_turn(&self.cfg.id);
-        self.complete_request(Err(anyhow!("recipient shut down")), true);
+        self.stop_requested = true;
+        self.record_usage(&Err(anyhow!("shutdown")));
+        self.complete_request(Err(anyhow!("recipient shut down")), true, None);
         self.complete_group(Err(anyhow!("bot shut down")));
         if let Some(c) = self.conn.take() {
             c.acp.kill().await;

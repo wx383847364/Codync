@@ -72,7 +72,7 @@ impl Actor {
         Ok(prompt)
     }
 
-    /// Starts a turn in `lane` for the given user entries (none for a hidden turn).
+    /// 为消息或委派启动一次回合尝试；启动失败与回退分别观测。
     pub(super) async fn start_turn(
         &mut self,
         lane: Lane,
@@ -139,6 +139,8 @@ impl Actor {
         } else {
             self.relay_turn(&lane, entry_ids, text).await;
         }
+        // relay_turn 已选定本次执行器；先固定身份，再进入可能失败的会话初始化。
+        self.begin_usage();
         // A bot request or room turn isn't resumed after a host restart (the room that waited is gone): a request's
         // persisted notices are marked interrupted instead of silently repeating work. Nor is a call's opening (the
         // call is over). A reply turn is resumed.
@@ -182,6 +184,8 @@ impl Actor {
             // A new session must never silently repeat an interrupted routine, and has nothing to compact.
             self.compacting = None;
             self.raw_prompt = false;
+            // 没有真正恢复会话的尝试也须记录未知消费，不能被下一回合覆盖。
+            self.record_usage(&Ok(json!({"stopReason": "session_unavailable"})));
             self.finish_routine(
                 crate::routines::Status::Interrupted,
                 Some("The agent could not reload this run's saved session".into()),
@@ -242,6 +246,7 @@ impl Actor {
         Ok(())
     }
 
+    /// 收束回合并保留委派最终文本的精确来源；执行结束不代表独立验收。
     pub(super) fn finish_turn(&mut self, done: &Done) {
         if self.turn.is_none() {
             return;
@@ -257,6 +262,7 @@ impl Actor {
         let stopped = self.stop_requested || matches!(&done, Ok(v) if v["stopReason"] == "cancelled");
         self.close_attempt(stopped || done.is_err());
         let mut final_text = None;
+        let mut reply_entry = None;
         let routine = self.active_routine.is_some();
         let grouped = self.active_group.is_some() || routine;
         let delegated = self.active_request.is_some();
@@ -280,6 +286,9 @@ impl Actor {
                 if !delegated {
                     e.data["final"] = true.into();
                     self.hub.set_entry(&id, &e.data);
+                }
+                if delegated {
+                    reply_entry = Some(e);
                 }
                 final_text = text;
             }
@@ -345,7 +354,7 @@ impl Actor {
             let text = (status == crate::routines::Status::Succeeded).then(|| final_text.clone()).flatten();
             self.finish_routine(status, detail, text);
         }
-        self.complete_request(reply, stopped);
+        self.complete_request(reply, stopped, reply_entry.as_ref());
         self.complete_group(if stopped || failed || stop_reason != "end_turn" {
             Err(anyhow!("turn did not complete ({stop_reason})"))
         } else {
@@ -353,6 +362,7 @@ impl Actor {
         });
         self.turn = None;
         self.reply_hops = None;
+        self.reply_requests.clear();
         // A call's opening is heard on the call: no alert.
         let opening = std::mem::take(&mut self.active_prompt);
         if self.routine_completion.is_none() {

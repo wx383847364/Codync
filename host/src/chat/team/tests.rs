@@ -7,7 +7,7 @@ use std::time::Duration;
 
 pub(super) struct Fixture {
     pub(super) hub: Arc<Hub>,
-    dir: PathBuf,
+    pub(super) dir: PathBuf,
 }
 
 impl Fixture {

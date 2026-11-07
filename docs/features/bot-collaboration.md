@@ -51,6 +51,47 @@ the Control scope. Clients merge these with the live chat (the higher `rev` wins
 and keep the result in the sheet; it is never added to the chat mirror, so main
 history paging is unaffected.
 
+## Retrieving a local reply
+
+`read_bot_reply {requestId, offset?, limit?}` is a read-only `team` tool for the bot that sent
+that request on this computer. Offsets count Unicode scalar values, not UTF-8 bytes or UTF-16
+code units. The default page is 2,000 characters, at most 4,000; `nextOffset` is null at the end.
+Unknown arguments, negative/fractional offsets and limits outside 1–4,000 are rejected.
+
+It returns `status`, `source`, `complete`, `text`, `offset`, `nextOffset` and
+`totalCharacters`. `source` is `trace`, `summary`, `pending` or `unavailable`.
+`complete` describes whether the source is the complete reply, not whether one page contains
+it all, nor whether the work passed independent acceptance. Missing requests and requests
+sent by another bot return the same unavailable error.
+
+New successful replies bind `botMessage.replySource` to the exact recipient trace entry,
+turn, revision and content digest in the same notice update as `completed`. The original
+text stays in that trace; there is no second reply store. Changed or deleted sources return
+unavailable. Historical notices without a binding expose only their saved summary, marked
+incomplete; the host never guesses from adjacent trace entries. The tool opens neither other
+conversations nor arbitrary paths. Cross-computer replies are not supported by this tool.
+
+Replies keep the existing delivery, capped at 32,000 UTF-8 bytes. Automatic long-reply
+previews were withdrawn after a controlled comparison increased end-to-end consumption
+and produced an acceptance failure. The retrieval tool remains available when delivered
+text is insufficient; no persistent preview or model-routing switch is added.
+The recipient is asked to put conclusions, key evidence and unverified items first; these
+remain bot claims. Reading a reply never runs or wakes a bot and must not be used for polling.
+
+## Local usage observations
+
+`turn usage` structured logs identify the bot, agent, configured model, session, turn and
+attempt, outcome and elapsed time. `request_execution` links one recipient attempt to its
+request; `shared_coordinator` retains the whole batch of reply request IDs, without splitting
+its cost. Other turns are labelled `other`. Start failures, fallback attempts and cancellation
+are recorded too. Identifiers stay local and are not sent to analytics.
+
+Input, output, cached read/write and thought tokens are recorded only when the harness returns
+nonnegative integer usage fields. Missing values are null, with source `unavailable` when none
+are reported. Context occupancy and account rate-limit windows are not task consumption or
+money. Later retrieval and rework must be included when comparing complete workflows;
+delivered byte counts alone do not establish token or cost savings. No automatic model routing is added.
+
 ## How a message runs
 
 - Each bot still owns an ACP process (its main session, plus one per routine run) and runs one turn at a time. A busy recipient queues the request. Different bots work concurrently, so a bot that messages several teammates has them work in parallel.
@@ -71,7 +112,9 @@ The team tools add no task scheduler or isolated worktrees. Give bots explicit f
 - Stopping or deleting the recipient cancels its queued requests and stops running work; started work may have left partial changes. A cancellation the user caused doesn't wake the sender; its notices show it.
 - Recipient startup failures, crashes, refusals and empty replies mark both notices failed and come back to the sender as a failed reply.
 - Pending request notices are persisted with IDs and statuses. After host restart they become interrupted errors; request turns are not automatically replayed. Check partial work before retrying. There is no automatic retry. Ordinary user turns and running reply turns retain their existing session-resume behavior.
-- A reply still queued for a busy sender lives only in memory: a host restart drops it, and the sender never relays it. Both notices are already completed and keep the reply (`botMessage.reply`), so it stays readable in the conversation sheet.
+- A reply still queued for a busy sender lives only in memory: a host restart drops it, and the sender never relays it. Both notices are already completed and keep the reply (`botMessage.reply`), so its summary stays readable in the conversation sheet. New completed local replies can also be
+  retrieved by the original sender with `read_bot_reply` after restart, while their bound trace
+  remains. There is no automatic wakeup or execution replay.
 
 ## Limits
 

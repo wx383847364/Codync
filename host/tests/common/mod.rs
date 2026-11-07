@@ -23,7 +23,7 @@ pub async fn serve(home: &Path) -> (Child, String) {
     serve_with(home, &[]).await
 }
 
-/// [`serve`] with `env` on top of the test host's own.
+/// 为测试 Host 叠加环境并保存 stdout；用于核对真实尝试的用量与失败日志。
 pub async fn serve_with(home: &Path, env: &[(&str, &std::ffi::OsStr)]) -> (Child, String) {
     let deadline = Instant::now() + Duration::from_secs(30);
     let _ = std::fs::create_dir_all(home);
@@ -43,7 +43,8 @@ pub async fn serve_with(home: &Path, env: &[(&str, &std::ffi::OsStr)]) -> (Child
             // And the computer's credential store: its key goes with `home`, so no test can leave one behind.
             .env("CODYNC_VAULT", "folder")
             .envs(env.iter().copied())
-            .stdout(Stdio::null())
+            // 日志只保存在本次临时数据目录；创建失败时沿用原来的丢弃输出行为。
+            .stdout(std::fs::File::create(home.join("host-stdout.log")).map_or_else(|_| Stdio::null(), Stdio::from))
             .stderr(std::fs::File::create(&log).map_or_else(|_| Stdio::null(), Stdio::from))
             .spawn()
             .expect("start the host");
@@ -195,4 +196,37 @@ pub fn routine_sessions(home: &Path) -> i64 {
 #[allow(dead_code, reason = "not every test binary looks bots up")]
 pub fn bot<'a>(sync: &'a serde_json::Value, id: &str) -> &'a serde_json::Value {
     sync["bots"].as_array().and_then(|bots| bots.iter().find(|b| b["id"] == id)).expect("the bot is in the snapshot")
+}
+
+/// 读取真实 Host 的回合日志并去除终端颜色，只解析无内容的结构化字段供回归断言。
+#[allow(dead_code)]
+pub fn turn_usage(home: &Path) -> Vec<std::collections::BTreeMap<String, String>> {
+    let log = std::fs::read_to_string(home.join("host-stdout.log")).unwrap_or_default();
+    let mut plain = String::new();
+    let mut escape = false;
+    for character in log.chars() {
+        if character == '\u{1b}' {
+            escape = true;
+        } else if escape {
+            if character == 'm' {
+                escape = false;
+            }
+        } else {
+            plain.push(character);
+        }
+    }
+    // usage JSON 与请求数组无空白；不能解析完整错误文本或模型内容。
+    plain
+        .lines()
+        .filter(|line| line.contains("turn usage"))
+        .map(|line| {
+            line.split_whitespace()
+                .filter_map(|field| field.split_once('='))
+                // tracing 的字符串字段可能带 JSON 引号，解析后按语义比较，不改变原始日志。
+                .map(|(key, value)| {
+                    (key.to_owned(), serde_json::from_str::<String>(value).unwrap_or_else(|_| value.to_owned()))
+                })
+                .collect()
+        })
+        .collect()
 }

@@ -246,6 +246,23 @@ impl Store {
         Ok(rows)
     }
 
+    /// 只读取原请求方自己的委派通知；按请求定位，避免扫描或开放接收方聊天。
+    pub fn bot_request(&self, bot_id: &str, request: &str) -> Result<Option<Entry>> {
+        let c = self.db.locked();
+        c.query_row(
+            &format!(
+                "SELECT {ENTRY_COLS} FROM entries WHERE bot_id = ?1 AND kind = 'notice'
+                AND json_extract(data, '$.delegationId') = ?2
+                AND json_extract(data, '$.botMessage.sourceBotId') = ?1
+                ORDER BY seq DESC LIMIT 1"
+            ),
+            params![bot_id, request],
+            row_entry,
+        )
+        .optional()
+        .map_err(Into::into)
+    }
+
     /// Messages in `bot_id`'s chat after `after_seq`, oldest first: the
     /// user's, final replies and voice calls' transcripts. Dreaming reads these.
     pub fn conversation_since(&self, bot_id: &str, after_seq: i64, limit: i64) -> Result<Vec<Entry>> {

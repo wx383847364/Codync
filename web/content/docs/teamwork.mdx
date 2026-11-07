@@ -32,6 +32,11 @@ Bots never wait on each other. When one bot messages another:
 3. **The answer goes back to the sender**, not to you. It shows in the conversation sheet and in the recipient's **Full conversation**, but not as a message in the recipient's chat.
 4. **The sender takes the answer as a new turn of its own** and replies to you in its chat, with the usual "done" notification. Answers that arrive while the sender is busy are taken together in one turn. A request that failed comes back the same way, so the sender can tell you.
 
+Replies keep their existing delivery limit. Between bots on this computer, the sender can read
+the complete answer in smaller parts when it needs more evidence. Older exchanges may retain only
+a summary. A completed exchange means the recipient finished answering; it does not mean its
+work passed independent checks.
+
 Because nobody waits, there's no time limit: the recipient takes as long as the work needs.
 
 ## How the recipient works

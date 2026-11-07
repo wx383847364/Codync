@@ -80,6 +80,7 @@ host answers and sends it once the host is up.
 | `section_renamed` | host | `renameSection` | `removed`: whether it removed the section (`to` empty or `null`); never the names |
 | `bot_deleted` | host | `deleteBot` | — |
 | `message_sent` | host | `send` (a resend counts once) | `kind`, `agent`, `reply` (whether it quotes a message), `attachments` (count) |
+| `bot_reply_read` | host (`team`) | A bot uses the read-only local reply tool | `outcome` (`trace`/`summary`/`pending`/`unavailable`/`error`), `error` (`invalid_or_unavailable` or null); no request IDs or content |
 | `message_steered` | host | *Send now* on a queued message (`steer`), once its outcome is known | `agent`, `how` (`joined` the running turn / `next` turn, the turn ended first / `interrupted` the user's turn / `moved_up` behind other work / `failed`, it waits) |
 | `queued_message_removed` | host | *Remove* on a queued message (`unqueue`) | — |
 | `turn_stopped` | host | `stop` | — |

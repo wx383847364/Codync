@@ -25,6 +25,7 @@ def update(value):
 
 
 def mcp_call(server_name, tool, arguments):
+    """通过真实 MCP 进程调用工具；读取回复不需要接收者身份参数。"""
     server = next(s for s in servers if s["name"] == server_name)
     with subprocess.Popen([server["command"], *server["args"]], stdin=subprocess.PIPE,
                           stdout=subprocess.PIPE, text=True) as mcp:
@@ -38,9 +39,10 @@ def mcp_call(server_name, tool, arguments):
         tools = rpc(2, "tools/list", {})
         assert any(t["name"] == tool for t in tools["result"]["tools"])
         if server_name == "team":
-            assert {t["name"] for t in tools["result"]["tools"]} == {"list_bots", "message_bot"}
-            roster = rpc(3, "tools/call", {"name": "list_bots", "arguments": {}})
-            assert any(b["id"] == arguments["botId"] for b in json.loads(roster["result"]["content"][0]["text"])["bots"])
+            assert {t["name"] for t in tools["result"]["tools"]} == {"list_bots", "message_bot", "read_bot_reply"}
+            if tool == "message_bot":
+                roster = rpc(3, "tools/call", {"name": "list_bots", "arguments": {}})
+                assert any(b["id"] == arguments["botId"] for b in json.loads(roster["result"]["content"][0]["text"])["bots"])
         response = rpc(4, "tools/call", {"name": tool, "arguments": arguments})
         mcp.stdin.close()
         return response["result"]
@@ -60,6 +62,7 @@ REPLIES_END = "\n\n[Codync: these are bot replies"
 
 
 def prompt(request):
+    """执行委派、分页读取与取消测试场景，不访问真实模型或账户。"""
     text = request["params"]["prompt"][0]["text"]
     with open("prompts.jsonl", "a") as log:
         log.write(json.dumps(text) + "\n")
@@ -88,6 +91,19 @@ def prompt(request):
         update({"sessionUpdate": "tool_call_update", "toolCallId": "delegate", "status": "completed"})
         update({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "Message queued"}})
         send({"id": request["id"], "result": {"stopReason": "end_turn"}})
+        return
+    if text.startswith("READ_REPLY "):
+        # 从模型实际可见的 MCP 文本读取，不能只验证 HTTP JSON 存在。
+        arguments = json.loads(text.split("\n", 1)[0].removeprefix("READ_REPLY "))
+        result = mcp_call("team", "read_bot_reply", arguments)
+        reply = json.dumps(result) if result.get("isError") else result["content"][0]["text"]
+        update({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": reply}})
+        send({"id": request["id"], "result": {"stopReason": "end_turn"}})
+        return
+    if text.split("\n\n")[-1] == "LONG_REPLY":
+        reply = "结论：已完成\n" + "甲🙂" * 2200 + "中间证据" + "乙" * 2200 + "\n未验证：真实提供方费用"
+        update({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": reply}})
+        send({"id": request["id"], "result": {"stopReason": "end_turn", "usage": {"inputTokens": 123, "outputTokens": 456, "cachedReadTokens": 0}}})
         return
     if text.startswith("TRY "):
         # TRY <target> <message>: a message that may be refused; the reply says which.
@@ -203,7 +219,12 @@ for line in sys.stdin:
         with open("sessions.jsonl", "a") as log:
             log.write(json.dumps(request) + "\n")
         pathlib.Path("servers.json").write_text(json.dumps(request["params"]["mcpServers"]))
-        send({"id": request["id"], "result": {"sessionId": "session"}})
+        send({"id": request["id"], "result": {"sessionId": "session", "models": {
+            "currentModelId": "old", "availableModels": [{"modelId": "old", "name": "Old"}, {"modelId": "new", "name": "New"}],
+        }}})
+    elif method == "session/set_model":
+        # 用于执行中更改配置的回归；当前回合仍按旧模型身份完成。
+        send({"id": request["id"], "result": {}})
     elif method == "session/prompt":
         cancel = threading.Event()
         permission = threading.Event()

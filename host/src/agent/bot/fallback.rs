@@ -251,8 +251,7 @@ impl Actor {
         carry::so_far(&tools, &self.sent, narration.as_ref().and_then(|e| e.data["text"].as_str()))
     }
 
-    /// The turn failed with `error`: when it may move on and another agent can take it, starts it again there.
-    /// Whether the turn is handled (running again, or its failure reported).
+    /// 尝试切换可用执行器；每次启动失败单独记录未知用量，不能漏记后再伪装成功。
     pub(super) async fn fall_back(&mut self, error: &anyhow::Error, done_tx: &mpsc::UnboundedSender<Done>) -> bool {
         if self.stop_requested || self.routine_timed_out || self.compacting.is_some() || self.turn.is_none() {
             return false;
@@ -305,6 +304,7 @@ impl Actor {
             match self.start_turn(attempt.lane.clone(), &attempt.entries, &attempt.text, false, done_tx).await {
                 Ok(()) => return true,
                 Err(e) => {
+                    self.record_usage(&Err(anyhow::anyhow!("start_failed")));
                     let Some(r) = fallback::reason::of(&e) else {
                         self.start_failed(&e);
                         return true;
@@ -379,8 +379,9 @@ impl Actor {
         format!("No agent in this bot's list could answer: {}.", parts.join("; "))
     }
 
-    /// A turn that couldn't start: on the next agent if one can take it, otherwise the failure as usual.
+    /// 启动失败先结算本次未知观测，再决定回退或按既有规则结束。
     pub(super) async fn start_error(&mut self, error: anyhow::Error, done_tx: &mpsc::UnboundedSender<Done>) {
+        self.record_usage(&Err(anyhow::anyhow!("start_failed")));
         if !self.fall_back(&error, done_tx).await {
             self.start_failed(&error);
         }

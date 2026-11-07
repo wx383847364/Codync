@@ -143,24 +143,9 @@ impl Actor {
         }
     }
 
-    /// After a turn in the main chat: record it, learn the cache's life from it, and compact or prepare a rollover
-    /// when that's due.
+    /// 主聊天回合结束后学习缓存寿命并决定压缩或交接；消费观测由 usage 模块统一处理。
     pub(super) fn after_turn(&mut self, done: &Done) {
         let compacting = self.compacting.take();
-        if let Ok(answer) = done
-            && answer["usage"].is_object()
-        {
-            // How well the prompt cache held: the first thing to look at when a turn costs more than it should.
-            let usage = &answer["usage"];
-            tracing::info!(
-                bot = %self.cfg.id,
-                session = self.turn_session.as_deref().unwrap_or_default(),
-                cached_read = usage["cachedReadTokens"].as_u64().unwrap_or(0),
-                cached_write = usage["cachedWriteTokens"].as_u64().unwrap_or(0),
-                input = usage["inputTokens"].as_u64().unwrap_or(0),
-                "turn usage"
-            );
-        }
         if !self.in_main_chat() {
             return;
         }

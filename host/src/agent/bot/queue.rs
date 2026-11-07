@@ -237,6 +237,8 @@ impl Actor {
                         }
                     }
                     self.reply_hops = replies.iter().map(crate::chat::team::BotReply::hops).max();
+                    // 同一主脑回合合并多条回复，其开销保留为共享批次。
+                    self.reply_requests = replies.iter().map(|reply| reply.request_id().to_owned()).collect();
                     let prompt = crate::chat::team::reply_prompt(&replies);
                     if let Err(e) = self.start_turn(main.clone(), &[], &prompt, false, done_tx).await {
                         self.start_error(e, done_tx).await;
@@ -311,12 +313,14 @@ impl Actor {
         }
     }
 
+    /// 启动失败也留下未知用量，且不重放有副作用的委派执行。
     pub(super) fn start_failed(&mut self, e: &anyhow::Error) {
+        self.record_usage(&Err(anyhow!("start_failed")));
         if self.turn.is_some() {
             self.report_turn(false, Some(e), "start_failed");
         }
         self.finish_routine(crate::routines::Status::Failed, Some(format!("Could not start routine: {e:#}")), None);
-        self.complete_request(Err(anyhow!("couldn't start recipient: {e:#}")), false);
+        self.complete_request(Err(anyhow!("couldn't start recipient: {e:#}")), false, None);
         self.complete_group(Err(anyhow!("couldn't start: {e:#}")));
         if !self.invite_sign_in(e) {
             // `{:#}` keeps the reason ("starting `npx …`: EACCES"), not just "agent process exited".
@@ -326,6 +330,7 @@ impl Actor {
         self.relay.carried = None;
         self.turn = None;
         self.reply_hops = None;
+        self.reply_requests.clear();
         self.active_prompt = false;
         memory::turns::drop_turn(&self.cfg.id);
         if self.routine_completion.is_none() {
@@ -385,9 +390,15 @@ impl Actor {
             .is_ok()
     }
 
-    pub(super) fn complete_request(&mut self, result: Result<String>, cancelled: bool) {
+    /// 将已结束请求交回原请求方，只有明确来源的最终文本可供后续分页取回。
+    pub(super) fn complete_request(
+        &mut self,
+        result: Result<String>,
+        cancelled: bool,
+        entry: Option<&crate::store::Entry>,
+    ) {
         if let Some(request) = self.active_request.take() {
-            request.complete(result, cancelled);
+            request.complete(result, cancelled, entry);
         }
     }
 

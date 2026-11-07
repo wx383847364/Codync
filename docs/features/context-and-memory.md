@@ -159,7 +159,10 @@ Claude Code's own memory; the rules live in the `codync-mem` crate, and `chat/me
 - **What the host records**, per session in `kv` (`compaction.<bot>.<session>`): context use and window size
   from `usage_update`, compactions, and when turns end. How long the provider keeps prompts cached is learned
   from turns that came after a pause (`cache.life.<bot>`); until then it is an hour for Claude on a subscription
-  and five minutes otherwise. Each turn's cached read and write tokens are logged (`turn usage`).
+  and five minutes otherwise. Each attempt's available input, output and cached read/write tokens are logged (`turn usage`),
+  with missing fields kept unknown. Request execution and shared coordinator turns retain their
+  delegation associations; these observations do not turn context occupancy into billed tokens.
+  See [bot collaboration](bot-collaboration.md#local-usage-observations).
 - **Compacting ahead of time**, in the bot's own chat only (never rooms, routines or bot requests):
   - at the end of a turn past three quarters of the window or 200k tokens, whichever is less;
   - while idle, with a one-hour cache and over 100k in use, five minutes before the cache expires.
