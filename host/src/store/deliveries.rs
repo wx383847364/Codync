@@ -324,7 +324,6 @@ impl Store {
                 "来源投递已结束"
             );
         }
-        ensure!(request.chain_depth <= 8, "群派工链深上限 (8)");
         let (global, sender): (i64,i64) = tx.query_row("SELECT COUNT(*),COALESCE(SUM(source_bot_id=?1),0) FROM deliveries WHERE kind='task' AND status IN ('queued','claimed','started')",
             [&request.source_bot_id], |r| Ok((r.get(0)?,r.get(1)?)))?;
         ensure!(global < 64 && sender < 16, "群派工容量已满 (全局 64，每成员 16)");
@@ -334,7 +333,7 @@ impl Store {
         Ok((delivery, card))
     }
 
-    /// 仅领取指定行；预算预占和状态改变在同一条条件更新里完成。
+    /// 仅条件领取 runner 指定的投递；累计发言数不改变已接受任务的生死。
     pub fn claim_delivery(&self, id: &str, bot: &str) -> Result<(Option<Delivery>, Vec<Entry>)> {
         let mut c = self.db.locked();
         let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -348,14 +347,12 @@ impl Store {
             tx.commit()?;
             return Ok((None, vec![card]));
         }
-        let changed = tx.execute("UPDATE deliveries SET status='claimed',claimed_at=?3 WHERE id=?1 AND target_bot_id=?2 AND status='queued'
-            AND (kind<>'speak' OR (SELECT COUNT(*) FROM deliveries d WHERE d.batch_root_id=deliveries.batch_root_id AND d.kind='speak' AND d.status IN ('claimed','started','completed'))<10)", params![id,bot,now_ms()])?;
-        let cards = if changed == 0 {
-            tx.execute("UPDATE deliveries SET status='cancelled',finished_at=?2,last_error='房间发言上限' WHERE batch_root_id=?1 AND kind='speak' AND status='queued'", params![delivery.batch_root_id,now_ms()])?;
-            completion::cards_for_batch(&tx, delivery.batch_root_id.as_deref())?
-        } else {
-            vec![completion::card(&tx, &delivery)?]
-        };
+        // 同一 ID 只能从 queued 领取一次；成员资格和状态都在本事务内核验。
+        let changed = tx.execute(
+            "UPDATE deliveries SET status='claimed',claimed_at=?3 WHERE id=?1 AND target_bot_id=?2 AND status='queued'",
+            params![id, bot, now_ms()],
+        )?;
+        let cards = if changed == 1 { vec![completion::card(&tx, &delivery)?] } else { vec![] };
         let result = if changed == 1 { get(&tx, id)? } else { None };
         tx.commit()?;
         Ok((result, cards))

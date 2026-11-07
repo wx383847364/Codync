@@ -59,6 +59,7 @@ def chain():
 REPLIES_END = "\n\n[Codync: these are bot replies"
 
 
+# 真实 ACP 回合夹具：读取有限派工步骤并通过真实 MCP 服务发出任务。
 def prompt(request):
     text = request["params"]["prompt"][0]["text"]
     with open("prompts.jsonl", "a") as log:
@@ -165,6 +166,12 @@ def prompt(request):
         scripted = pathlib.Path("group-script.json")
         if scripted.exists():
             script = json.loads(scripted.read_text())
+            # 有限步骤用于验证长链最终交付，避免固定互相 @ 的夹具无限接力。
+            if "steps" in script:
+                cursor = pathlib.Path("group-script-step")
+                index = int(cursor.read_text()) if cursor.exists() else 0
+                cursor.write_text(str(index + 1))
+                script = script["steps"][min(index, len(script["steps"]) - 1)]
             for task in script.get("tasks", []):
                 response = mcp_call("team", "message_bot", task)
                 assert not response.get("isError"), response

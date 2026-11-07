@@ -49,7 +49,7 @@ impl Hub {
         Ok(d)
     }
 
-    /// 只条件领取 runner 指定行，并发布 claimed 或预算取消的状态。
+    /// 只条件领取 runner 指定行，并发布真实持久状态；累计次数不取消投递。
     pub fn claim_delivery(&self, id: &str, bot: &str) -> Result<Option<Delivery>> {
         let _guard = self.emit_lock.locked();
         let (d, cards) = self.store.claim_delivery(id, bot)?;

@@ -67,11 +67,15 @@ state. Late completion uses a conditional update and cannot revive cancelled wor
 The source entry's complete text, attachments and quote (or the exact tool body) are the
 request; the newest 24 room messages provide supplemental context only.
 
-Each user entry starts a batch: at most 10 `speak` rows in `claimed`, `started` or
-`completed`; claim atomically reserves that budget. Three conversation rounds and a
-separate eight-hop chain limit remain independent; tools inherit the round and increment
-chain depth. Pending `task` rows (`queued`, `claimed`, `started`) count toward global 64
-and per-sender 16 capacity, with checks and insertion in one IMMEDIATE transaction.
+Each user entry starts a batch. Round and chain depth are retained for tracing, without
+fixed round, reply-count or handoff-depth cutoffs. Members continue authorized work and
+explicitly assign the next action until they deliver the requested result or need the
+user's decision, information or approval. They then report the result or question and
+wait, without acknowledgement loops. An empty queue is idle, not proof the whole task
+was completed. Busy members and timed-out executions keep their accepted assignments.
+Pending `task` rows (`queued`, `claimed`, `started`) still count toward global 64 and
+per-sender 16 capacity, with checks and insertion in one IMMEDIATE transaction. Completed
+work releases capacity; it does not consume a lifetime reply budget.
 
 The state machine is `queued → claimed → started → completed / noReply / failed /
 interrupted / cancelled`. `started` must commit before prompt transmission. Restart
@@ -83,7 +87,7 @@ Final reply, conditional terminal state and derived mentions commit atomically. 
 aggregate a source event and attempt, with one row per target; retries create a new
 delivery and attempt linked to the original. Each card starts as one Chinese status line;
 expand it for target status, delivery attempt and retry actions. Neither the collapsed
-nor expanded card repeats the source message. All-cancelled relay limits show their reason;
+nor expanded card repeats the source message. Historical all-cancelled relay limits still show their original reason;
 mixed outcomes keep counts so active work is not mistaken for stopped work. The terminal
 uses its existing selected-message `o` key to expand or collapse these details.
 A `speak` pass is silent; a `task` pass says

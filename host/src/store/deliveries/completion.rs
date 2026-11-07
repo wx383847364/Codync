@@ -71,15 +71,6 @@ pub(super) fn card(c: &Connection, d: &Delivery) -> Result<Entry> {
     )
 }
 
-/// 批次预算耗尽时刷新每个来源事件的卡片，避免仅改变数据库而静默丢弃。
-pub(super) fn cards_for_batch(c: &Connection, batch: Option<&str>) -> Result<Vec<Entry>> {
-    let rows = c
-        .prepare(&format!("SELECT {COLS} FROM deliveries WHERE batch_root_id=?"))?
-        .query_map([batch], row)?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
-    cards(c, rows)
-}
-
 impl Store {
     /// 结果、带条件终态和后续 @ 同事务保存；迟到结果只留记录，不复活已取消执行。
     pub fn complete_delivery(
@@ -149,26 +140,16 @@ impl Store {
                     let targets = crate::chat::mentions::targets(text, &[], &members, None, false);
                     match targets {
                         Ok(targets) => {
-                            let count: i64 = tx.query_row("SELECT COUNT(*) FROM deliveries WHERE batch_root_id=? AND kind='speak' AND status IN ('claimed','started','completed')",[&d.batch_root_id],|r|r.get(0))?;
                             for target in targets.into_iter().filter(|t| t != &d.target_bot_id && !tasked.contains(t)) {
                                 let mut next = Delivery::speak(&d.room_id, &result_id, &target);
                                 next.source_kind = "reply".into();
                                 next.source_bot_id = Some(d.target_bot_id.clone());
                                 next.source_execution_id = Some(d.id.clone());
                                 next.batch_root_id.clone_from(&d.batch_root_id);
-                                next.round = d.round + 1;
-                                next.chain_depth = d.chain_depth + 1;
+                                // 轮次和链深仅用于追踪，不能把仍需回复的任务截断。
+                                next.round = d.round.saturating_add(1);
+                                next.chain_depth = d.chain_depth.saturating_add(1);
                                 let next = insert(&tx, &next)?;
-                                if next.round > 3 || next.chain_depth > 8 || count >= 10 {
-                                    let reason = if next.round > 3 {
-                                        "对话轮次上限"
-                                    } else if next.chain_depth > 8 {
-                                        "群派工链深上限"
-                                    } else {
-                                        "房间发言上限"
-                                    };
-                                    tx.execute("UPDATE deliveries SET status='cancelled',finished_at=?2,last_error=?3 WHERE id=?1",params![next.id,now_ms(),reason])?;
-                                }
                                 entries.push(card(&tx, &next)?);
                             }
                         }

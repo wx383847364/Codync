@@ -1,6 +1,6 @@
 //! 群聊的唯一房间调度器。投递表决定谁执行，忙成员保持 queued。
 //! speak/task 共用十分钟等待位；等待超时不终止执行，已接受请求不被新消息覆盖。
-//! 对话轮次最多三轮、发言预算十条、链深八跳，计数均来自持久投递。
+//! 持续执行有效派工，交付或需要用户输入时自然等待；累计轮次与链深不终止协作。
 
 use crate::LockExt;
 use crate::agent::bot::Cmd;
@@ -310,6 +310,8 @@ fn member_prompt(
          never to a question or a request, `to` naming whose newest message (\"user\" or a participant). With \
          nothing to add, a reaction and \"{PASS}\" agrees without a message."
     ));
+    // 一次成员 turn 的结束不代表用户任务已完成；后续工作必须形成明确投递。
+    out.push("Continue the user's task until you have delivered the requested result or genuinely need the user's decision, missing information, or approval. There is no fixed group round, reply-count, or handoff-depth limit. A member turn ending is not the whole task finishing. If another member must act or answer next, explicitly @-mention them or call message_bot with the concrete next action; never merely say you are waiting without assigning it. Do not stop just to ask the user whether to continue already-authorized work. When delivering the result to the user, state the outcome and any remaining limitations; when blocked on the user, ask the specific question. In either case do not @-mention members just to thank, acknowledge, or repeat the result. End that turn and wait for the user's reply; do not invent a reply or new authorization. Existing accepted assignments still keep their own execution and cancellation state.".into());
     out.push(String::new());
 
     let seen = hub.store.last_spoke(lane, &me.id);

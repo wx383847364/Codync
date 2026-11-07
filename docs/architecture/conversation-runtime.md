@@ -20,4 +20,6 @@ kinds wait; timeout does not cancel or terminate them. Finalization saves reply,
 and derived deliveries in one transaction under the Hub's publication lock. Storage
 errors retain output per actor, are DB-independent runtime events on every reconnect,
 and block claims until bounded automatic retries or manual save succeeds. `sweep` and
-`resume` have no dispatch role. See [groups and replies](../features/groups-and-replies.md).
+`resume` have no dispatch role. Group rounds, reply totals and handoff depth are tracing
+metadata, never completion conditions. Members explicitly hand the result or a blocking
+question to the user; host idle means no runnable work, not a semantic completion verdict. See [groups and replies](../features/groups-and-replies.md).

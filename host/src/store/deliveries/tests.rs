@@ -77,9 +77,9 @@ fn claim_and_late_completion_are_conditional() {
     assert!(entries.iter().filter(|e| e.kind == "agent").all(|e| e.data["final"] == false));
 }
 
-/// 九个预占后并发领取两项，只能成功一次；剩余queued被显式取消。
+/// 同一批次超过十次仍可继续领取；两个不同 ID 的并发领取均保留。
 #[test]
-fn concurrent_claim_reserves_the_tenth_budget_atomically() {
+fn concurrent_claims_continue_past_ten_without_cancelling_accepted_work() {
     let s = std::sync::Arc::new(store());
     let mut ids = Vec::new();
     for i in 0..12 {
@@ -102,11 +102,12 @@ fn concurrent_claim_reserves_the_tenth_budget_atomically() {
             })
         })
         .collect::<Vec<_>>();
-    assert_eq!(threads.into_iter().map(|t| usize::from(t.join().unwrap())).sum::<usize>(), 1);
+    assert_eq!(threads.into_iter().map(|t| usize::from(t.join().unwrap())).sum::<usize>(), 2);
     let count: i64 =
         s.db.locked().query_row("SELECT COUNT(*) FROM deliveries WHERE status='claimed'", [], |r| r.get(0)).unwrap();
-    assert_eq!(count, 10);
-    assert!(s.queued_deliveries("g").unwrap().is_empty());
+    assert_eq!(count, 11);
+    assert_eq!(s.queued_deliveries("g").unwrap().len(), 1);
+    assert!(s.claim_delivery(&ids[11], "a").unwrap().0.is_some());
 }
 
 /// 多发送者同时入队时全局不超过64，同一发送者不超过16。
@@ -337,4 +338,79 @@ fn concurrent_keyed_retransmits_share_one_stable_delivery_and_reject_conflicts()
     let queued = s.queued_deliveries("g").unwrap();
     assert_eq!(queued.len(), 1);
     assert_eq!(queued[0].body.as_deref(), Some("exact original"));
+}
+
+/// 文字与工具混合超过旧的轮次、发言和深度上限，直至明确交付给用户才自然空闲。
+#[test]
+fn mixed_group_handoffs_continue_until_the_result_is_handed_to_the_user() {
+    let s = store();
+    s.post_group("g", &json!({"text":"完成实现与复核后交付"}), &["a".into()]).unwrap();
+    let mut current = s.queued_deliveries("g").unwrap().remove(0);
+    let root = current.batch_root_id.clone();
+    for step in 0..25 {
+        assert!(s.claim_delivery(&current.id, &current.target_bot_id).unwrap().0.is_some());
+        assert!(s.start_delivery(&current.id, &current.target_bot_id).unwrap().0);
+        let target = if current.target_bot_id == "a" { "b" } else { "a" };
+        if step == 24 {
+            s.complete_delivery(
+                &current.id,
+                Status::Completed,
+                Some("交付：实现与复核完成，请用户确认结果。"),
+                None,
+                1,
+            )
+            .unwrap();
+            break;
+        }
+        if step % 2 == 1 {
+            let mut task = Delivery::speak("g", "unused", target);
+            task.kind = Kind::Task;
+            task.source_kind = "tool".into();
+            task.source_entry_id = None;
+            task.source_execution_id = Some(current.id.clone());
+            task.source_bot_id = Some(current.target_bot_id.clone());
+            task.batch_root_id.clone_from(&root);
+            task.round = current.round;
+            task.chain_depth = current.chain_depth + 1;
+            task.body = Some("继续修改并复核".into());
+            s.enqueue_task(&task).unwrap();
+        }
+        s.complete_delivery(&current.id, Status::Completed, Some(&format!("@{target} 继续修改并复核")), None, 1)
+            .unwrap();
+        let queued = s.queued_deliveries("g").unwrap();
+        assert_eq!(queued.len(), 1, "每次只产生一份后续派工");
+        current = queued.into_iter().next().unwrap();
+    }
+    assert!(current.round > 3 && current.chain_depth > 8);
+    assert!(s.queued_deliveries("g").unwrap().is_empty());
+    let (total, speaks): (i64, i64) =
+        s.db.locked()
+            .query_row(
+                "SELECT COUNT(*),SUM(kind='speak') FROM deliveries WHERE batch_root_id=? AND status='completed'",
+                [root],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+    assert_eq!(total, 25);
+    assert!(speaks > 10);
+    // 用户的新回复开始新请求，历史完成记录不会被改回 queued。
+    s.post_group("g", &json!({"text":"用户确认，请继续下一项"}), &["b".into()]).unwrap();
+    assert_eq!(s.queued_deliveries("g").unwrap().len(), 1);
+    assert_eq!(s.delivery(&current.id).unwrap().unwrap().status, Status::Completed);
+}
+
+/// 升级不重放旧阈值取消的投递；新的用户请求拥有独立身份。
+#[test]
+fn historical_limit_cancellation_is_not_replayed_by_recovery_or_new_input() {
+    let s = store();
+    s.post_group("g", &json!({"text":"旧任务"}), &["a".into()]).unwrap();
+    let old = s.queued_deliveries("g").unwrap().remove(0);
+    s.cancel_deliveries("g", None, "对话轮次上限").unwrap();
+    s.recover_deliveries().unwrap();
+    assert!(s.claim_delivery(&old.id, "a").unwrap().0.is_none());
+    s.post_group("g", &json!({"text":"用户明确继续旧任务"}), &["a".into()]).unwrap();
+    let next = s.queued_deliveries("g").unwrap().remove(0);
+    assert_ne!(next.id, old.id);
+    assert_eq!(s.delivery(&old.id).unwrap().unwrap().status, Status::Cancelled);
+    assert_eq!(s.delivery(&old.id).unwrap().unwrap().last_error.as_deref(), Some("对话轮次上限"));
 }

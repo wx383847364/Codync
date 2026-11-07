@@ -1,14 +1,14 @@
 import { test, expect } from '@playwright/test'
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { DatabaseSync } from 'node:sqlite'
 import { join } from 'node:path'
 import { homedir, tmpdir } from 'node:os'
 import { api, attach, sandbox, steerBot } from './sandbox.ts'
 
-type History = { entries: { kind: string; data: { text?: string; mentions?: { botId: string; start: number; end: number }[] } }[] }
+type History = { entries: { kind: string; data: { final?: boolean; text?: string; mentions?: { botId: string; start: number; end: number }[] } }[] }
 
-/** 真实三轮接力生成保护停止卡，默认一行、展开不重复原文，并保留准确停止原因。 */
-test('relay delivery cards show one Chinese status and fold metadata without repeating the reply', async () => {
+/** 超过旧轮次、发言与深度上限后交付给用户，状态仍折叠且不重复来源正文。 */
+test('relay continues past fixed limits to user handoff with folded metadata and no repeated reply', async () => {
   const { browser, page } = await attach()
   const suffix = Date.now()
   const workspace = join(tmpdir(), `codync-compact-relay-${suffix}`)
@@ -21,16 +21,33 @@ test('relay delivery cards show one Chinese status and fold metadata without rep
       const cwd = join(workspace, `${i}`)
       mkdirSync(cwd, { recursive: true })
       // 夹具只产生确定的回复；实际路由、轮次、取消和卡片仍由 host 完成。
-      writeFileSync(join(cwd, 'group-script.json'), JSON.stringify({ reply: `@${names[1 - i]} ${marker} **结论**\n${'仅在来源消息显示此长段说明。'.repeat(30)}` }))
       ids.push((await api<{ bot: { id: string } }>(page, 'createBot', { name: names[i], backend: 'custom', cwd, command: `python3 -u '${join(__dirname, '../../../host/tests/fixtures/team_agent.py')}'`, connectors: [], skills: [], notify: false })).bot.id)
+    }
+    for (let i = 0; i < 2; i++) {
+      // 二十五次真实 ACP turn 混合文字与 MCP 工具派工，最终交付用户。
+      const steps = Array.from({ length: i === 0 ? 13 : 12 }, (_, step) => ({
+        reply: i === 0 && step === 12
+          ? `USER_HANDOFF_${suffix} 已交付实现与审核结果，请用户确认。`
+          : `@${names[1 - i]} ${marker} **结论**\n${'仅在来源消息显示此长段说明。'.repeat(30)}`,
+        tasks: step % 2 === 1 ? [{ botId: ids[1 - i], message: `继续第 ${step} 项修改和复核`, idempotencyKey: `${suffix}-${i}-${step}` }] : [],
+      }))
+      writeFileSync(join(workspace, `${i}`, 'group-script.json'), JSON.stringify({ steps }))
     }
     const name = `Compact delivery room ${suffix}`
     group = (await api<{ bot: { id: string } }>(page, 'createBot', { name, kind: 'group', members: ids })).bot.id
     await page.locator('.roster-row', { hasText: name }).click()
     await api(page, 'send', { botId: group, text: `@${names[0]} start relay` })
-    const toggle = page.getByRole('button', { name: '自动接力已达 3 轮，已停止继续派工', exact: true })
-    await expect(toggle).toBeVisible({ timeout: 20_000 })
-    const card = page.locator('.delivery-notice').filter({ has: toggle })
+    await expect.poll(async () => (await api<History>(page, 'history', { botId: group })).entries.filter((e) => e.kind === 'agent' && e.data.final === true).length, { timeout: 25_000 }).toBe(25)
+    const db = new DatabaseSync(join(homedir(), `.codync-dev-${sandbox().name}`, 'codync.db'), { readOnly: true })
+    try {
+      const rows = db.prepare('SELECT round,chain_depth,status FROM deliveries WHERE room_id=? ORDER BY room_seq').all(group)
+      expect(rows).toHaveLength(25)
+      expect(rows.every((row) => row.status === 'completed')).toBe(true)
+      expect(rows.at(-1)).toMatchObject({ round: 13, chain_depth: 25 })
+    } finally { db.close() }
+    const card = page.locator('.delivery-notice').last()
+    const toggle = card.getByRole('button', { name: '群内派工已完成', exact: true })
+    await expect(toggle).toBeVisible()
     await expect(toggle).toHaveAttribute('aria-expanded', 'false')
     await expect(card.locator('.delivery-details')).toHaveCount(0)
     expect(await card.innerText()).not.toMatch(/Attempt|cancelled|SOURCE_REPLY_/)
@@ -40,8 +57,9 @@ test('relay delivery cards show one Chinese status and fold metadata without rep
     await toggle.click()
     await expect(toggle).toHaveAttribute('aria-expanded', 'true')
     await expect(card.locator('.delivery-details')).toContainText('第 1 次投递')
-    await expect(card.locator('.delivery-details')).toContainText(`${names[1]}：已停止`)
-    await expect(card.locator('.delivery-details')).toContainText('对话轮次上限')
+    await expect(card.locator('.delivery-details')).toContainText(`${names[0]}：已完成`)
+    await expect(page.getByText(`USER_HANDOFF_${suffix} 已交付实现与审核结果，请用户确认。`, { exact: true })).toBeVisible()
+    await expect(page.locator('.composer').getByRole('button', { name: 'Stop', exact: true })).toHaveCount(0)
     expect(await card.innerText()).not.toMatch(/Attempt|cancelled|SOURCE_REPLY_/)
     await page.screenshot({ path: join(evidence, 'delivery-expanded.png') })
     await toggle.focus()
@@ -52,6 +70,13 @@ test('relay delivery cards show one Chinese status and fold metadata without rep
     await page.locator('.roster-row', { hasText: name }).click()
     await expect(toggle).toHaveAttribute('aria-expanded', 'false')
     await expect(page.locator('.delivery-details')).toHaveCount(0)
+    const prompts = readFileSync(join(workspace, '0', 'prompts.jsonl'), 'utf8')
+    expect(prompts).toContain('There is no fixed group round, reply-count, or handoff-depth limit')
+    expect(prompts).toContain('genuinely need the user')
+    // 交付后由用户的新消息开启下一项，不自动重放前一批已完成记录。
+    await api(page, 'send', { botId: group, text: `@${names[0]} 用户确认，请继续下一项` })
+    await expect.poll(async () => (await api<History>(page, 'history', { botId: group })).entries.filter((e) => e.kind === 'agent' && e.data.final === true).length).toBe(26)
+    await expect(page.locator('.composer').getByRole('button', { name: 'Stop', exact: true })).toHaveCount(0)
   } finally {
     // 仅清理此用例新建的沙盒群、成员和工作目录。
     if (group) await api(page, 'deleteBot', { botId: group }).catch(() => {})

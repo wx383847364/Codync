@@ -33,7 +33,7 @@ When you send a message, the group runs a round of answers:
 1. **Who is asked.** Selected or uniquely named members, plus the author you reply to. Without a target, or with `@all` / `@everyone`, everyone is asked.
 2. **One at a time.** Each member sees prior replies before its turn. A busy member keeps its request queued while the room moves on. Two independent requests to that member remain separate.
 3. **Passing.** A member with nothing to add can pass without a message. Tool-assigned work that passes shows that it provided no result.
-4. **Limits.** Each message starts a batch with three conversation rounds, ten member replies, and a separate eight-hop limit across mentions and tool requests. A turn taking longer than ten minutes releases the room's wait slot; its work continues and can finish later.
+4. **Continue until handoff.** Members keep doing authorized work and assigning the next action until they deliver the result to you or need your decision, information or approval. Group work has no fixed round, reply-count or handoff-depth cutoff. A turn taking longer than ten minutes releases the room's wait slot; its work continues and can finish later. Busy members keep their accepted work queued. You can still stop the group yourself.
 
 Each member's reply is the one message the room sees. Its tool calls, thoughts and approval cards for that turn appear in the group. The member's own chat doesn't show them. Open **Full conversation** to see its steps.
 
@@ -55,7 +55,7 @@ Files you attach in a group are available to every member.
 Delivery cards start as a single status line. Expand one to see each member's status,
 the delivery attempt and any retry action. The original message stays in its chat bubble
 and is not repeated inside the card. In the terminal, select the card and press `o` to
-show or hide its details. A relay that reaches its three-round limit says it has stopped;
+show or hide its details. Historical cards cancelled by an older relay limit keep their original reason;
 this leaves the replies already sent in the chat.
 
 A busy member keeps each accepted request queued and reads the room again when free.

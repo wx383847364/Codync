@@ -22,7 +22,7 @@ body is a conflict. No key promises no cross-connection deduplication. Capacity 
 and insertion are atomic (64 pending globally, 16 per sender). Two tool calls without a
 key remain two tasks, even to the same target. A final textual @ to a target already
 assigned by this execution is display-only. Round and chain depth propagate across
-text/tool transitions. The following private-chat exchange behavior remains separate.
+text/tool transitions for tracing, without a group handoff cutoff. Group work continues until a result is delivered to the user or their input is needed. The eight-hop cutoff described for private-chat request chains is separate and unchanged.
 
 ## Bots on other computers
 
