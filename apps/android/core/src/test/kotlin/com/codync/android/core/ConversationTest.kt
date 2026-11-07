@@ -5,6 +5,17 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class ConversationTest {
+    /** 中文聚合同时覆盖保护停止、混合状态、未知状态与旧卡片空列表。 */
+    @Test fun `delivery summaries keep current outcomes without the original body`() {
+        val stopped = DeliveryRow("d", "b", "cancelled", "对话轮次上限")
+        assertEquals("自动接力已达 3 轮，已停止继续派工", DeliveryRow.summary(listOf(stopped)))
+        assertEquals("群内派工：1 项已停止，1 项执行中", DeliveryRow.summary(listOf(stopped, stopped.copy(status = "started"))))
+        assertEquals("群内派工已完成", DeliveryRow.summary(listOf(stopped.copy(status = "completed"))))
+        assertEquals("群内派工状态待更新", DeliveryRow.summary(emptyList()))
+        assertEquals("状态待更新", stopped.copy(status = "future").statusText)
+        assertEquals(listOf("等待执行", "准备执行", "执行中", "已完成", "失败", "已中断", "未回复", "已停止"),
+            listOf("queued", "claimed", "started", "completed", "failed", "interrupted", "noReply", "cancelled").map { stopped.copy(status = it).statusText })
+    }
     /** 超过旧限制的附件能进入同步历史，负数仍由统一校验拒绝。 */
     @Test fun `conversation updates accept large attachment metadata`() {
         val value = buildJsonObject {

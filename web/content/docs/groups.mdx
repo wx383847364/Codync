@@ -52,9 +52,15 @@ Files you attach in a group are available to every member.
 
 ## Queued work and recovery
 
+Delivery cards start as a single status line. Expand one to see each member's status,
+the delivery attempt and any retry action. The original message stays in its chat bubble
+and is not repeated inside the card. In the terminal, select the card and press `o` to
+show or hide its details. A relay that reaches its three-round limit says it has stopped;
+this leaves the replies already sent in the chat.
+
 A busy member keeps each accepted request queued and reads the room again when free.
 New messages never replace accepted work. Cards show each target's state and retry attempt;
-failed or interrupted work offers **Try again**, which preserves the old record.
+failed or interrupted work offers a retry action in its details, which preserves the old record.
 
 Group **Stop**, removing a member or deleting the group cancels its unfinished work.
 Stopping a private chat preserves requests queued by other groups. After a restart, work

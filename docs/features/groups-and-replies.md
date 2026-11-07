@@ -81,7 +81,12 @@ post-commit notification and a roughly three-second scan wake room scheduling.
 
 Final reply, conditional terminal state and derived mentions commit atomically. Cards
 aggregate a source event and attempt, with one row per target; retries create a new
-delivery and attempt linked to the original. A `speak` pass is silent; a `task` pass says
+delivery and attempt linked to the original. Each card starts as one Chinese status line;
+expand it for target status, delivery attempt and retry actions. Neither the collapsed
+nor expanded card repeats the source message. All-cancelled relay limits show their reason;
+mixed outcomes keep counts so active work is not mistaken for stopped work. The terminal
+uses its existing selected-message `o` key to expand or collapse these details.
+A `speak` pass is silent; a `task` pass says
 it provided no result. Group work uses the group lane and never records task text as
 user memory or sends its result into the sender's private chat. File/artifact sharing
 from a delivery is unavailable; use the final reply, and user attachments remain usable.

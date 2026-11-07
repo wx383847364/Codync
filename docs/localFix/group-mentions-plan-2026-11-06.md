@@ -452,7 +452,7 @@ RETURNING id, kind, source_kind, source_entry_id, source_bot_id,
 
 - 按**来源事件 + attempt** 聚合一张卡，目标是卡内的一行：`{ deliveryId, targetBotId, status, detail }`。
 - 同一 attempt 原地更新（`set_entry`，rev 递增）；重试创建 `attempt+1` 的新卡，关联原卡，不覆盖旧结果。
-- 卡片正文保留原文里的名字，目标行显示当前名字。
+- 卡片默认仅一行中文状态，详情折叠；展开仅显示目标当前名字、中文状态、原因、投递次数与重试入口，不重复来源消息正文。三轮保护停止使用明确说明；混合状态保留各状态数量，不能误报全部停止。终端复用选中通知后的 `o` 键展开/收起。
 - 失败与中断提供手动重试；重试生成新投递（`parent_id` 指向原投递），旧记录保留。
 
 ---

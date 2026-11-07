@@ -219,4 +219,40 @@ public struct DeliveryRow: Codable, Hashable, Sendable {
     public var targetBotId: String
     public var status: String
     public var detail: String
+
+    /// 内部状态统一显示为中文；未知状态不暴露协议字段。
+    public var statusText: String {
+        switch status {
+        case "queued": "等待执行"
+        case "claimed": "准备执行"
+        case "started": "执行中"
+        case "completed": "已完成"
+        case "failed": "失败"
+        case "interrupted": "已中断"
+        case "noReply": "未回复"
+        case "cancelled": "已停止"
+        default: "状态待更新"
+        }
+    }
+
+    /// 默认一行只聚合状态；仅全部因同一保护规则停止时，展示该停止原因。
+    public static func summary(_ rows: [DeliveryRow]) -> String {
+        guard let first = rows.first else { return "群内派工状态待更新" }
+        if rows.allSatisfy({ $0.status == "cancelled" && $0.detail == first.detail }) {
+            switch first.detail {
+            case "对话轮次上限": return "自动接力已达 3 轮，已停止继续派工"
+            case "群派工链深上限": return "自动接力已达链深上限，已停止继续派工"
+            case "房间发言上限": return "本轮发言已达上限，已停止继续派工"
+            default: break
+            }
+        }
+        var counts: [String: Int] = [:]
+        var order: [String] = []
+        for row in rows {
+            if counts[row.statusText] == nil { order.append(row.statusText) }
+            counts[row.statusText, default: 0] += 1
+        }
+        if order.count == 1 { return "群内派工\(first.statusText)" }
+        return "群内派工：" + order.map { "\(counts[$0, default: 0]) 项\($0)" }.joined(separator: "，")
+    }
 }

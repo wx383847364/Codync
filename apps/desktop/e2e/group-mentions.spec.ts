@@ -1,11 +1,104 @@
 import { test, expect } from '@playwright/test'
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { DatabaseSync } from 'node:sqlite'
 import { join } from 'node:path'
 import { homedir, tmpdir } from 'node:os'
 import { api, attach, sandbox, steerBot } from './sandbox.ts'
 
 type History = { entries: { kind: string; data: { text?: string; mentions?: { botId: string; start: number; end: number }[] } }[] }
+
+/** 真实三轮接力生成保护停止卡，默认一行、展开不重复原文，并保留准确停止原因。 */
+test('relay delivery cards show one Chinese status and fold metadata without repeating the reply', async () => {
+  const { browser, page } = await attach()
+  const suffix = Date.now()
+  const workspace = join(tmpdir(), `codync-compact-relay-${suffix}`)
+  const marker = `SOURCE_REPLY_${suffix}`
+  const names = [`StatusA${suffix}`, `StatusB${suffix}`]
+  const ids: string[] = []
+  let group: string | undefined
+  try {
+    for (let i = 0; i < 2; i++) {
+      const cwd = join(workspace, `${i}`)
+      mkdirSync(cwd, { recursive: true })
+      // 夹具只产生确定的回复；实际路由、轮次、取消和卡片仍由 host 完成。
+      writeFileSync(join(cwd, 'group-script.json'), JSON.stringify({ reply: `@${names[1 - i]} ${marker} **结论**\n${'仅在来源消息显示此长段说明。'.repeat(30)}` }))
+      ids.push((await api<{ bot: { id: string } }>(page, 'createBot', { name: names[i], backend: 'custom', cwd, command: `python3 -u '${join(__dirname, '../../../host/tests/fixtures/team_agent.py')}'`, connectors: [], skills: [], notify: false })).bot.id)
+    }
+    const name = `Compact delivery room ${suffix}`
+    group = (await api<{ bot: { id: string } }>(page, 'createBot', { name, kind: 'group', members: ids })).bot.id
+    await page.locator('.roster-row', { hasText: name }).click()
+    await api(page, 'send', { botId: group, text: `@${names[0]} start relay` })
+    const toggle = page.getByRole('button', { name: '自动接力已达 3 轮，已停止继续派工', exact: true })
+    await expect(toggle).toBeVisible({ timeout: 20_000 })
+    const card = page.locator('.delivery-notice').filter({ has: toggle })
+    await expect(toggle).toHaveAttribute('aria-expanded', 'false')
+    await expect(card.locator('.delivery-details')).toHaveCount(0)
+    expect(await card.innerText()).not.toMatch(/Attempt|cancelled|SOURCE_REPLY_/)
+    const evidence = join(tmpdir(), 'codync-compact-delivery-e2e')
+    mkdirSync(evidence, { recursive: true })
+    await page.screenshot({ path: join(evidence, 'delivery-collapsed.png') })
+    await toggle.click()
+    await expect(toggle).toHaveAttribute('aria-expanded', 'true')
+    await expect(card.locator('.delivery-details')).toContainText('第 1 次投递')
+    await expect(card.locator('.delivery-details')).toContainText(`${names[1]}：已停止`)
+    await expect(card.locator('.delivery-details')).toContainText('对话轮次上限')
+    expect(await card.innerText()).not.toMatch(/Attempt|cancelled|SOURCE_REPLY_/)
+    await page.screenshot({ path: join(evidence, 'delivery-expanded.png') })
+    await toggle.focus()
+    await page.keyboard.press('Space')
+    await expect(toggle).toHaveAttribute('aria-expanded', 'false')
+    // 重载后仍默认折叠，旧历史中的 deliveryBody 也不能重新铺满界面。
+    await page.reload()
+    await page.locator('.roster-row', { hasText: name }).click()
+    await expect(toggle).toHaveAttribute('aria-expanded', 'false')
+    await expect(page.locator('.delivery-details')).toHaveCount(0)
+  } finally {
+    // 仅清理此用例新建的沙盒群、成员和工作目录。
+    if (group) await api(page, 'deleteBot', { botId: group }).catch(() => {})
+    for (const id of ids) await api(page, 'deleteBot', { botId: id }).catch(() => {})
+    rmSync(workspace, { recursive: true, force: true })
+    await browser.close()
+  }
+})
+
+/** 未回复投递的重试入口位于详情中，点击后仍由 host 创建新投递和新 attempt。 */
+test('folded delivery details preserve explicit retry and a new collapsed attempt', async () => {
+  const { browser, page } = await attach()
+  const suffix = Date.now()
+  const cwd = join(tmpdir(), `codync-compact-retry-${suffix}`)
+  mkdirSync(cwd, { recursive: true })
+  const script = join(cwd, 'group-script.json')
+  writeFileSync(script, JSON.stringify({ reply: '(pass)' }))
+  let member: string | undefined
+  let group: string | undefined
+  try {
+    member = (await api<{ bot: { id: string } }>(page, 'createBot', { name: `Retry member ${suffix}`, backend: 'custom', cwd, command: `python3 -u '${join(__dirname, '../../../host/tests/fixtures/team_agent.py')}'`, connectors: [], skills: [], notify: false })).bot.id
+    const name = `Compact retry room ${suffix}`
+    group = (await api<{ bot: { id: string } }>(page, 'createBot', { name, kind: 'group', members: [member] })).bot.id
+    await page.locator('.roster-row', { hasText: name }).click()
+    await api(page, 'send', { botId: group, text: 'retry this accepted assignment' })
+    const original = page.locator('.delivery-notice').filter({ hasText: '群内派工未回复' })
+    await expect(original).toBeVisible({ timeout: 15_000 })
+    await expect(original.getByRole('button', { name: '重新尝试', exact: true })).toHaveCount(0)
+    await original.getByRole('button', { name: '群内派工未回复', exact: true }).click()
+    await expect(original.locator('.delivery-details')).toContainText('第 1 次投递')
+    writeFileSync(script, JSON.stringify({ reply: 'retry completed' }))
+    await original.getByRole('button', { name: '重新尝试', exact: true }).click()
+    const retried = page.locator('.delivery-notice').filter({ hasText: '群内派工已完成' })
+    await expect(retried).toBeVisible({ timeout: 15_000 })
+    await expect(retried.getByRole('button')).toHaveAttribute('aria-expanded', 'false')
+    await retried.getByRole('button').click()
+    await expect(retried.locator('.delivery-details')).toContainText('第 2 次投递 · 重试投递')
+    expect(await retried.innerText()).not.toContain('retry this accepted assignment')
+    // 原投递不被改成成功，保留其未回复结果供追溯。
+    await expect(original).toContainText('未回复')
+  } finally {
+    if (group) await api(page, 'deleteBot', { botId: group }).catch(() => {})
+    if (member) await api(page, 'deleteBot', { botId: member }).catch(() => {})
+    rmSync(cwd, { recursive: true, force: true })
+    await browser.close()
+  }
+})
 
 /** 长列表在首尾双向循环；连续按键、鼠标切换及单候选均不改变草稿或发送消息。 */
 test('member arrows wrap repeatedly through a long list without losing steps', async () => {

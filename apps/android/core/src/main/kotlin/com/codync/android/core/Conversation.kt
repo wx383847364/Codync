@@ -248,4 +248,35 @@ fun editMentions(before: String, after: String, mentions: List<Mention>, replace
 
 /** 聚合卡内的目标行，当前显示名从成员列表读取。 */
 @Serializable
-data class DeliveryRow(val deliveryId: String, val targetBotId: String, val status: String, val detail: String = "")
+data class DeliveryRow(val deliveryId: String, val targetBotId: String, val status: String, val detail: String = "") {
+    /** 状态使用中文展示，未知协议值保留稳定兜底。 */
+    val statusText: String get() = when (status) {
+        "queued" -> "等待执行"
+        "claimed" -> "准备执行"
+        "started" -> "执行中"
+        "completed" -> "已完成"
+        "failed" -> "失败"
+        "interrupted" -> "已中断"
+        "noReply" -> "未回复"
+        "cancelled" -> "已停止"
+        else -> "状态待更新"
+    }
+
+    companion object {
+        /** 一行聚合当前目标，仅全部停止时才宣称自动接力停止。 */
+        fun summary(rows: List<DeliveryRow>): String {
+            val first = rows.firstOrNull() ?: return "群内派工状态待更新"
+            if (rows.all { it.status == "cancelled" && it.detail == first.detail }) {
+                when (first.detail) {
+                    "对话轮次上限" -> return "自动接力已达 3 轮，已停止继续派工"
+                    "群派工链深上限" -> return "自动接力已达链深上限，已停止继续派工"
+                    "房间发言上限" -> return "本轮发言已达上限，已停止继续派工"
+                }
+            }
+            val counts = linkedMapOf<String, Int>()
+            for (row in rows) counts[row.statusText] = (counts[row.statusText] ?: 0) + 1
+            if (counts.size == 1) return "群内派工${first.statusText}"
+            return "群内派工：" + counts.entries.joinToString("，") { "${it.value} 项${it.key}" }
+        }
+    }
+}
