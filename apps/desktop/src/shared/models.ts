@@ -514,6 +514,8 @@ export function normalizeScreen(raw: Partial<ScreenState> | undefined | null): S
 }
 
 export interface Hello {
+  /** 主机能按附件身份校验原图尺寸，不包含正文路径读取能力。 */
+  fileImageInfo?: boolean
   iconsRevision?: number
   icons?: import('./custom-icons').CustomIcons
   hostId: string

@@ -125,7 +125,10 @@ class AttachmentFiles(private val context: Context, private val directory: File)
             require(usable.toByteArray(Charsets.UTF_8).size <= 200) { "The file name is too long." }
             return usable
         }
+        /** 解码前检查原图像素上限，预览失败仍允许下载原文件。 */
         fun thumbnail(file: File, maxPixels: Int): Bitmap = ImageDecoder.decodeBitmap(ImageDecoder.createSource(file)) { decoder, info, _ ->
+            if (maxPixels > 4096) require(file.length() <= 20L * 1024 * 1024 && info.size.width <= 32768 && info.size.height <= 32768 &&
+                info.size.width.toLong() * info.size.height <= 32_000_000L) { "Image exceeds the preview pixel limit." }
             decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
             val longest = maxOf(info.size.width, info.size.height)
             decoder.setTargetSampleSize(maxOf(1, (longest + maxPixels - 1) / maxPixels))

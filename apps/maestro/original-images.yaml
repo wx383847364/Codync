@@ -1,0 +1,50 @@
+# 已配对的任务沙箱运行；传入 HOST_PORT、HOST_TOKEN 和 FILE_AGENT。
+appId: com.pokai.Codync.ios.dev
+tags:
+  - attachments
+onFlowComplete:
+  - runScript:
+      file: original-images.js
+      env:
+        CLEANUP: "true"
+---
+- runScript: original-images.js
+- runFlow:
+    when:
+      platform: iOS
+    commands:
+      - launchApp:
+          appId: com.pokai.Codync.ios.dev
+          arguments:
+            "-reviewInvitationOff": true
+- runFlow:
+    when:
+      platform: Android
+    commands:
+      - launchApp:
+          appId: com.pokai.Codync.android.dev
+- tapOn: ${output.originalBot.name}
+- extendedWaitUntil:
+    visible: "original-6000.png"
+    timeout: 15000
+- tapOn: "original-6000.png"
+- extendedWaitUntil:
+    visible: "Image preview"
+    timeout: 15000
+- assertVisible: "100%"
+- assertVisible: "Fit to window"
+- assertNotVisible: "Image preview unavailable"
+- tapOn: "100%"
+- assertNotVisible: "Image preview unavailable"
+- takeScreenshot: original-image-pixels
+- swipe:
+    from:
+      text: "Image preview"
+    direction: LEFT
+- assertVisible: "Image preview"
+- takeScreenshot: original-image-panned
+- doubleTapOn: "Image preview"
+- assertVisible: "Image preview"
+- takeScreenshot: original-image-double-tap
+- tapOn: "Fit to window"
+- takeScreenshot: original-image-fit

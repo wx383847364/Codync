@@ -44,10 +44,9 @@ In its own chat, a bot calls the built-in chat MCP tool
 `send_file {path, name?}`. Paths may be absolute or relative to its working directory.
 The optional name is a display filename without folders. Any regular file type is
 accepted, including binary, hidden, extensionless and empty files, up to 100 MiB.
-Directories and special files are refused. Group, routine and delegated turns cannot
-publish files.
+Directories and special files are refused. Group deliveries may publish to their source group; routine and private delegated turns cannot publish files. Artifact cards remain restricted to the bot’s own chat.
 
-The host streams a snapshot into `~/.codync/bots/<bot>/files/<fileId>` and records
+The host streams a snapshot into `~/.codync/bots/<chat>/files/<fileId>` and records
 its byte size and SHA-256 before publishing a final agent entry with
 `files: [{id, name, size, sha256}]`. Copying runs outside the bot actor; Stop,
 reconfiguration, timeout and turn completion cancel unpublished copies. A success
@@ -62,7 +61,7 @@ the entry's filename/size text fallback. No version or compatibility floor chang
 
 The authenticated `readFile {entryId, fileId, offset}` API requires a nonnegative
 integer offset within the saved size and a file belonging to that final agent entry
-in an undeleted bot's own chat. Existing caller permissions apply: paired
+in an undeleted chat. A group file belongs to the group and stays readable after its author leaves or is deleted. Existing caller permissions apply: paired
 clients need Control access. It returns `{data: <base64>, size}` in chunks of at most
 384 KiB over loopback, SSH, direct encrypted and relay transports.
 
@@ -84,3 +83,15 @@ The terminal UI shows only the card.
 This feature adds no previews of other file types, folder packaging, background
 transfers, persistent resume or Watch UI. Existing bots do not publish workspace files
 automatically: they must call `send_file`.
+
+## Original image viewing and bounds
+
+The default viewer fits the image to the window. **100%** displays original pixels (one image pixel per CSS logical pixel / point / dp); phones support pinch, pan and double-tap. It uses original bytes, not a 4096-pixel thumbnail stretched to size. Local draft preview still does not upload or send.
+
+`hello.fileImageInfo` advertises `imageInfo {entryId, fileId}` or `{botId, uploadId}`. Only existing explicit files and uploads can be inspected, with Control access. It accepts no path. New desktop clients check the header before loading bytes; older hosts keep their existing preview path. Previews are bounded to 20 MiB, 32 megapixels and 32768 pixels per side; a rejected preview does not block downloading the original file.
+
+Desktop byte caches are limited to 64 MiB per computer and two concurrent downloads, with identical requests shared and retirement clearing the cache. Phones queue image reads and use bounded disk caches (512 MiB soft limit, preserving the current file). Failed previews can be retried explicitly.
+
+Group file copying freezes chat and delivery identity. Publication rechecks the started delivery, author and membership under the same lock as Stop and member removal; stale copies cannot publish in a later turn or private chat. Snapshot storage remains owned by the source chat.
+
+Text paths stay text: this change adds no automatic path scanning, `resolveImages`, cwd metadata or workspace-file publication. Bots continue to explicitly call `send_file`.

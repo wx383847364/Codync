@@ -7,15 +7,20 @@ from pathlib import Path
 
 sessions = {}
 
+
+# 将 fixture 的 ACP 回应写回真实执行器管道。
 def send(value):
     print(json.dumps(value), flush=True)
 
+
+# 通过真实 MCP 分享文件，纯路径文本模式不调用发布工具。
 def prompt(message):
     params = message['params']
     session = sessions[params['sessionId']]
     tool = next(server for server in session['mcpServers'] if server['name'] == 'chat')
     with subprocess.Popen([tool['command'], *tool['args']], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, env=os.environ.copy()) as mcp:
         sequence = 0
+        # MCP 请求保持顺序，调用结果用于断言真实权限边界。
         def request(method, arguments):
             nonlocal sequence
             sequence += 1
@@ -27,17 +32,19 @@ def prompt(message):
         assert any(tool['name'] == 'send_file' for tool in tools)
         text = params['prompt'][0]['text']
         results = []
-        if 'invalid-files' in text:
+        if 'path-text-only' in text:
+            pass
+        elif 'invalid-files' in text:
             for path in ['missing', '.', 'oversized']:
                 results.append(request('tools/call', {'name':'send_file', 'arguments':{'path':path}}))
         else:
-            paths = ['binary.dat', '.hidden', 'empty', 'report.pdf']
+            paths = [Path(session['cwd'], 'selected-file.txt').read_text()] if 'share-selected-file' in text else (['image.png'] if 'share-image' in text else ['binary.dat', '.hidden', 'empty', 'report.pdf'])
             for path in paths:
                 results.append(request('tools/call', {'name':'send_file', 'arguments':{'path':path}}))
         Path(session['cwd'], 'file-results.json').write_text(json.dumps(results))
         mcp.stdin.close()
     if 'files-only' not in text:
-        send({'jsonrpc':'2.0','method':'session/update','params':{'sessionId':params['sessionId'],'update':{'sessionUpdate':'agent_message_chunk','content':{'type':'text','text':'The files are ready.'}}}})
+        send({'jsonrpc':'2.0','method':'session/update','params':{'sessionId':params['sessionId'],'update':{'sessionUpdate':'agent_message_chunk','content':{'type':'text','text':('(pass)' if 'files-pass' in text else (' ' if 'files-blank' in text else 'The files are ready.'))}}}})
     return {'stopReason':'end_turn'}
 
 for line in sys.stdin:

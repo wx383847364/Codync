@@ -331,8 +331,11 @@ impl Actor {
         if let Some(text) = delivery_text.clone().filter(|_| !stopped) {
             final_text = Some(text);
         }
-        if final_text.is_none() {
-            final_text = self.files.summary.take();
+        let file_summary = self.files.summary.take();
+        let published_file = file_summary.is_some();
+        // 文件元数据只能用于表示交付成功；群聊文件名不能冒充正文参与 @ 路由。
+        if final_text.is_none() && self.active_delivery.is_none() {
+            final_text = file_summary;
         }
         let stop_reason = match &done {
             Ok(v) => v["stopReason"].as_str().unwrap_or("end_turn").to_owned(),
@@ -397,14 +400,21 @@ impl Actor {
             crate::store::deliveries::Status::Cancelled
         } else if failed || stop_reason != "end_turn" {
             crate::store::deliveries::Status::Failed
-        } else if final_text.as_deref().is_none_or(crate::chat::group::is_pass) {
+        } else if !published_file && final_text.as_deref().is_none_or(crate::chat::group::is_pass) {
             crate::store::deliveries::Status::NoReply
         } else {
             crate::store::deliveries::Status::Completed
         };
+        // 文件成功不把隐藏的 pass 提示提升为可见群正文；普通无文件回合保留原有 trace 语义。
+        let delivery_reply = final_text.clone().or(delivery_text);
+        let delivery_reply = if published_file {
+            delivery_reply.filter(|text| !crate::chat::group::is_pass(text))
+        } else {
+            delivery_reply
+        };
         self.finish_delivery(
             delivery_status,
-            final_text.clone().or(delivery_text),
+            delivery_reply,
             (stopped || failed).then(|| format!("turn ended: {stop_reason}")),
         );
         self.complete_request(reply, stopped, reply_entry.as_ref());

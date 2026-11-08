@@ -62,6 +62,10 @@ pub enum Event {
     StarPromptAnswered,
     LinkOpened,
     ScreenViewed,
+    /// 显式文件分享的结果，不包含文件或任务标识。
+    FileShared,
+    /// 原图查看操作与失败，不包含内容。
+    ImageViewed,
     /// 草稿图片预览使用或解码失败，不包含附件内容。
     AttachmentPreview,
     BotCreated,
@@ -146,6 +150,7 @@ pub enum Event {
 
 impl Event {
     /// 映射稳定事件名，群派工只记录使用与失败类别而不记录正文。
+    /// 返回固定事件目录名称，新增功能也不能通过自由文本命名事件。
     fn name(self) -> &'static str {
         match self {
             Self::AppOpened => "app_opened",
@@ -165,6 +170,8 @@ impl Event {
             Self::StarPromptAnswered => "star_prompt_answered",
             Self::LinkOpened => "link_opened",
             Self::ScreenViewed => "screen_viewed",
+            Self::FileShared => "file_shared",
+            Self::ImageViewed => "image_viewed",
             Self::AttachmentPreview => "attachment_preview",
             Self::BotCreated => "bot_created",
             Self::BotUpdated => "bot_updated",

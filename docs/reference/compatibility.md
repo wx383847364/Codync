@@ -179,3 +179,5 @@ failure note); restarting the scratch host unpatched then plays the update finis
 
 The simulator has no App Store app, so *Update Codync* ends in a Safari error there; on a
 device it opens the App Store.
+
+Explicit image header inspection is additive (`hello.fileImageInfo`, `imageInfo`). New desktop clients skip inspection on older hosts; file sharing, text and downloads keep their existing shapes. Group file entries retain `files`, `author` and filename/size fallback. Clients using the old own-chat-only read rule need the updated Host to read new group files. No compatibility floor is raised; no automatic text-path preview API is provided.

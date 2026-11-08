@@ -33,6 +33,9 @@ pub enum App {
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
 pub enum Reported {
+    ImageViewed {
+        outcome: ImageOutcome,
+    },
     AttachmentPreview {
         outcome: AttachmentPreviewOutcome,
     },
@@ -101,6 +104,18 @@ pub enum Reported {
     JoinOfferAnswered {
         outcome: JoinOutcome,
     },
+}
+
+/// 图片查看只接受固定结果类别，不接收自由文本。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ImageOutcome {
+    Opened,
+    Original,
+    Fit,
+    Failed,
+    #[serde(other)]
+    Other,
 }
 
 // Value lists. A value a newer client adds arrives as `other` instead of being refused.
@@ -310,6 +325,16 @@ mod tests {
     use serde_json::json;
 
     /// 图片预览只接受固定结果类别，额外传入的名称和内容不能进入上报属性。
+    /// 新查看事件不能夹带文件名、路径和消息身份。
+    #[test]
+    fn original_image_events_keep_only_typed_outcomes() {
+        let (event, properties) = read(&json!({"event":"image_viewed","outcome":"original",
+            "path":"private.png","entryId":"private","name":"private"}))
+        .unwrap();
+        assert_eq!(event, Event::ImageViewed);
+        assert_eq!(properties, json!({"app":"desktop","outcome":"original"}).as_object().unwrap().clone());
+    }
+
     #[test]
     fn attachment_preview_events_drop_file_content() {
         let event =

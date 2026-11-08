@@ -110,3 +110,16 @@ fn names_never_carry_path_or_drive_syntax() {
     }
     assert_eq!(name(".hidden").unwrap(), ".hidden");
 }
+
+/// 图片头部检查保留大于 4096 的原始尺寸，但拒绝高像素压缩炸弹和假图片。
+#[test]
+fn image_preview_dimensions_keep_original_detail_with_bounded_pixels() {
+    let temp = Temp::new();
+    let path = temp.0.join("image.png");
+    image::DynamicImage::new_rgba8(6000, 2).save(&path).unwrap();
+    assert_eq!(image_dimensions(&path).unwrap(), (6000, 2));
+    image::DynamicImage::new_luma8(8000, 5000).save(&path).unwrap();
+    assert!(image_dimensions(&path).is_err());
+    std::fs::write(&path, b"not an image").unwrap();
+    assert!(image_dimensions(&path).is_err());
+}

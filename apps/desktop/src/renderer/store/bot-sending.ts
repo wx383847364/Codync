@@ -1,3 +1,4 @@
+import { AttachmentCache } from './attachment-cache.ts'
 import type { Entry, ReplyQuote, SharedFile } from '@shared/models'
 import type { HostClient } from '../client/host-client'
 import { readSharedFile } from '../../shared/files.ts'
@@ -21,6 +22,11 @@ export interface SendOptions {
 
 /** 消息发送、失败重试和附件缓存在同一职责内，主Store只保留聊天操作。 */
 export class BotSending extends BotSync {
+  private attachmentCache = new AttachmentCache()
+
+  /** 电脑退场时释放附件缓存，防止其他账号继续使用已排队的读取。 */
+  override retire() { this.attachmentCache.retire(); super.retire() }
+
   private outgoingFiles = new Map<string, OutgoingFile[]>()
 
   /** The message sent from here last: its row in the queue scrolls into view (`QueuedMessages`). */
@@ -46,6 +52,7 @@ export class BotSending extends BotSync {
     return (async () => {
       try {
         // Safe to repeat: the computer skips a nonce it already has.
+        // 发送回调保持重试身份；上传完成的字节只进入有界缓存。
         const e = await this.withLink(async (client) => {
           let ids: string[] | null = null
           const pending = this.outgoingFiles.get(nonce)
@@ -54,7 +61,7 @@ export class BotSending extends BotSync {
             for (const file of pending) {
               const id = crypto.randomUUID()
               await client.upload(botId, id, file.name, file.data)
-              cacheAttachment(id, file.data)
+              this.attachmentCache.put(id, file.data)
               ids.push(id)
             }
           }
@@ -116,33 +123,27 @@ export class BotSending extends BotSync {
     this.scheduleSave()
   }
 
-  /** A sent file's bytes: cached after the first fetch (sent files never change). */
+  /** 获取已发送附件的有界缓存，旧主机不调用新图片检查接口。 */
   attachmentData(fileId: string, botId: string): Promise<Uint8Array | null> {
-    return this.cachedFile(fileId, (client) => client.readUpload(botId, fileId))
+    return this.cachedFile(fileId, /* 读取已上传附件，不访问本机路径。 */ (client) => client.readUpload(botId, fileId), { botId, uploadId: fileId })
   }
 
-  /** A file a bot shared, read whole and checked: cached after the first fetch (shared files never change). */
+  /** 获取显式分享的图片，先核验归属和尺寸，再验证完整字节摘要。 */
   sharedFileData(file: SharedFile, entryId: string): Promise<Uint8Array | null> {
-    return this.cachedFile(file.id, (client) => readSharedFile(file, (offset) => client.readFile(entryId, file.id, offset)))
+    return this.cachedFile(file.id, /* 按消息分页读取并验证摘要。 */ (client) => readSharedFile(file, (offset) => client.readFile(entryId, file.id, offset)), { entryId, fileId: file.id })
   }
 
-  private async cachedFile(id: string, fetch: (client: HostClient) => Promise<Uint8Array>): Promise<Uint8Array | null> {
-    const cached = attachmentCache.get(id)
-    if (cached) return cached
-    const client = this.live
-    if (!client) return null
+  /** 先使用本电脑已有缓存以保留离线预览；首次下载才检查附件归属与尺寸。 */
+  private async cachedFile(id: string, fetch: (client: HostClient) => Promise<Uint8Array>, source: object): Promise<Uint8Array | null> {
     try {
-      const data = await fetch(client)
-      cacheAttachment(id, data)
-      return data
-    } catch {
-      return null
-    }
+      return await this.attachmentCache.read(id, async () => {
+        // 等到下载槽位可用时再取连接；缓存命中不依赖主机在线。
+        const client = this.live
+        if (!client || this.retired) return null
+        if (this.hello?.fileImageInfo) await client.call('imageInfo', source)
+        if (this.retired || this.live !== client) return null
+        return fetch(client)
+      })
+    } catch { return null }
   }
-}
-
-// ponytail: in-memory attachment cache; a disk cache (main process) if relaunches refetching hurts.
-const attachmentCache = new Map<string, Uint8Array>()
-function cacheAttachment(id: string, data: Uint8Array) {
-  attachmentCache.set(id, data)
 }

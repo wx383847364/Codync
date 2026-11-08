@@ -6,7 +6,7 @@ use crate::store::{
     Entry,
     deliveries::{Delivery, Status},
 };
-use anyhow::Result;
+use anyhow::{Result, ensure};
 use serde_json::{Value, json};
 
 impl Hub {
@@ -17,6 +17,41 @@ impl Hub {
         for entry in ordered {
             let _ = self.events.send(json!({"type":"entry","rev":entry.rev,"entry":entry}));
         }
+    }
+
+    /// 文件发布与 Stop、退群共用事件锁，只有仍在执行且身份匹配的投递能在来源群保存文件。
+    pub fn publish_delivery_file(
+        &self,
+        id: &str,
+        bot: &str,
+        lane: &crate::store::Lane,
+        turn: i64,
+        data: &Value,
+    ) -> Result<Entry> {
+        let _guard = self.emit_lock.locked();
+        ensure!(data["author"].as_str() == Some(bot), "invalid file author");
+        let delivery = self.store.delivery(id)?.ok_or_else(|| anyhow::anyhow!("unknown delivery"))?;
+        ensure!(
+            delivery.status == Status::Started && delivery.target_bot_id == bot && delivery.room_id == lane.chat,
+            "group delivery ended"
+        );
+        let room =
+            self.store.bot(&lane.chat)?.filter(|room| !room.deleted).ok_or_else(|| anyhow::anyhow!("unknown group"))?;
+        ensure!(
+            room.config.is_group() && room.config.members.iter().any(|member| member == bot),
+            "bot is no longer in this group"
+        );
+        // 派工发起者退群同样取消来源关系，不能利用配置保存与取消通知之间的空档发布。
+        if let Some(sender) = &delivery.source_bot_id {
+            ensure!(
+                room.config.members.contains(sender) && self.store.bot(sender)?.is_some_and(|row| !row.deleted),
+                "task sender left this group"
+            );
+        }
+        ensure!(self.store.bot(bot)?.is_some_and(|author| !author.deleted), "bot was deleted");
+        let entry = self.store.insert_entry(lane, crate::store::EntryKind::Agent, turn, data)?;
+        self.delivery_entries(std::slice::from_ref(&entry));
+        Ok(entry)
     }
 
     /// 用户消息与投递原子入库后一起发布。

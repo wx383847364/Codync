@@ -229,6 +229,7 @@
     "hello.cloud": "null",
     "hello.computerId": "string",
     "hello.device": "string",
+    "hello.fileImageInfo": "bool",
     "hello.home": "string",
     "hello.hostId": "string",
     "hello.icons": "object",

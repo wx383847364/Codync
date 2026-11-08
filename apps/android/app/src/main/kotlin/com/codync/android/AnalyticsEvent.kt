@@ -93,6 +93,12 @@ internal sealed class AnalyticsEvent(val name: String) {
     data class ScreenViewed(val screen: AnalyticsScreen) : AnalyticsEvent("screen_viewed") {
         override val properties get() = mapOf("screen" to screen.json)
     }
+    /** 原图查看只上报固定操作类别，不包含文件或消息标识。 */
+    data class ImageViewed(val outcome: ImageOutcome) : AnalyticsEvent("image_viewed") {
+        /** 固定枚举序列化，不接收用户提供的字符串。 */
+        override val properties get() = mapOf("outcome" to JsonPrimitive(outcome.name.lowercase()))
+    }
+    enum class ImageOutcome { Opened, Original, Fit, Failed }
     /** 草稿图片预览结果，只有固定类别，不包含文件名或图片。 */
     data class AttachmentPreview(val decoded: Boolean) : AnalyticsEvent("attachment_preview") {
         override val properties get() = mapOf("outcome" to JsonPrimitive(if (decoded) "opened" else "decode_failed"))

@@ -169,5 +169,27 @@ pub(crate) fn read_chunk(path: &Path, size: u64, offset: u64, damaged: &str) -> 
     Ok(data)
 }
 
+/// 只检查已上传或显式分享的图片，读取头部并限制预览资源；超限仍允许下载原文件。
+pub fn image_dimensions(path: &Path) -> Result<(u32, u32)> {
+    let file = open_regular(path)?;
+    ensure!(file.metadata()?.len() <= 20 * 1024 * 1024, "image exceeds 20 MiB");
+    let mut reader = image::ImageReader::new(std::io::BufReader::new(file)).with_guessed_format()?;
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(32_768);
+    limits.max_image_height = Some(32_768);
+    limits.max_alloc = Some(192 * 1024 * 1024);
+    reader.limits(limits);
+    let (width, height) = reader.into_dimensions()?;
+    ensure!(
+        width > 0
+            && height > 0
+            && width <= 32_768
+            && height <= 32_768
+            && u64::from(width) * u64::from(height) <= 32_000_000,
+        "image exceeds preview dimensions"
+    );
+    Ok((width, height))
+}
+
 #[cfg(test)]
 mod tests;

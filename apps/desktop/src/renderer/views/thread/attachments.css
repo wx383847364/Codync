@@ -67,3 +67,8 @@
 .file-card-detail {
   overflow-wrap: anywhere;
 }
+
+/* 原始像素查看允许滚动，适应窗口继续使用已有网格布局。 */
+.attachment-viewer.original { display: block; overflow: auto; }
+.attachment-image.original { max-width: none; max-height: none; width: auto; height: auto; }
+.attachment-viewer-controls { padding: 8px 12px; }

@@ -204,3 +204,10 @@ tokens, background budget, nullable reported context used/size) and
 `group_context_compacted` (`outcome`: confirmed/unconfirmed/failed/cancelled/timeout,
 context before, nullable fresh context after/size). They contain no prompt, original
 text, excerpts, plan steps, summary, file paths or task/room IDs. Estimates are not billing.
+
+### Explicit image viewing and group files
+
+- `image_viewed` (desktop/iPhone/Android): `outcome` = `opened`, `original`, `fit`, `failed` (unknown values normalize to `other` on Host).
+- `file_shared` (Host): `chat` = `direct` / `group`, `outcome` = `published` / `failed`, `failure` = `none` / `state` / `capacity` / `publication`.
+
+Neither event includes content, file paths, names, chat IDs or delivery IDs.

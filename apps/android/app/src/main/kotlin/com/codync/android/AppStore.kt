@@ -37,6 +37,7 @@ class AppStore internal constructor(
     internal val computerChanges = Mutex()
     internal val screenTakeovers = Mutex()
     internal val attachments = AttachmentFiles(application, local.directory)
+    internal val attachmentReads = kotlinx.coroutines.sync.Semaphore(2)
     internal val downloadLocks = ConcurrentHashMap<String, Mutex>()
     internal val mutableState = MutableStateFlow(AppState(computer, contextId = contextId, generation = generation))
     val state = mutableState.asStateFlow()

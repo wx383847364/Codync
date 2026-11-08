@@ -80,6 +80,7 @@ pub async fn dispatch(hub: &Arc<Hub>, caller: &Caller, method: &str, b: Value) -
     result
 }
 
+/// 路由已授权请求，图片头部检查沿用 Control 权限和现有文件身份。
 async fn route(hub: &Arc<Hub>, caller: &Caller, method: &str, b: Value) -> Result<Value> {
     if method == "setIcon" {
         return crate::icons::set(hub, &b).await;
@@ -98,6 +99,9 @@ async fn route(hub: &Arc<Hub>, caller: &Caller, method: &str, b: Value) -> Resul
         || matches!(method, "agentAuth" | "agentAuthenticate" | "setAgentEnv")
     {
         market::vault::unlock(hub.clone()).await?;
+    }
+    if method == "imageInfo" {
+        return files::info(hub, &b).await;
     }
     if method == "readFile" {
         return files::read(hub, &b).await;

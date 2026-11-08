@@ -113,6 +113,9 @@ public final class BotStore {
     let makeTransport: @MainActor (Computer) async throws -> any HostTransport
     var transport: (any HostTransport)?
     var retired = false
+    /// 图片读取串行化并合并相同文件请求，避免多张原图同时驻留下载缓冲区。
+    @ObservationIgnored var attachmentReadTail: Task<Void, Never>?
+    @ObservationIgnored var attachmentReads: [String: Task<Data?, Never>] = [:]
     /// Files of messages not delivered yet (by client nonce), kept for a retry.
     @ObservationIgnored var outgoingFiles: [String: [OutgoingFile]] = [:]
     /// The message sent from here last: its row in the queue scrolls into view (`QueuedMessages`).

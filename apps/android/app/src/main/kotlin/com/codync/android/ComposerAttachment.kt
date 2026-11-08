@@ -5,6 +5,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -36,7 +37,6 @@ import com.codync.android.design.*
 import com.kyant.shapes.Capsule
 import com.kyant.shapes.RoundedRectangle
 import java.io.File
-import java.io.IOException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -51,10 +51,14 @@ private val THUMBNAIL = 112.dp
     var image by remember(file.path) { mutableStateOf<ImageBitmap?>(null) }
     var loaded by remember(file.path) { mutableStateOf(false) }
     var viewing by remember(file.path) { mutableStateOf(false) }
+    var previewLoaded by remember(file.path) { mutableStateOf(false) }
+    var previewRetry by remember(file.path) { mutableStateOf(0) }
     var preview by remember(file.path) { mutableStateOf<ImageBitmap?>(null) }
     // 仅在打开预览后解码大图，避免每个草稿缩略图都占用大图内存。
-    LaunchedEffect(file.path, viewing) {
-        preview = if (viewing) thumbnail(file, 4096) else null
+    LaunchedEffect(file.path, viewing, previewRetry) {
+        previewLoaded = false
+        preview = if (viewing) thumbnail(file, 32768) else null
+        previewLoaded = true
     }
     LaunchedEffect(file.path, pixels) {
         image = thumbnail(file, pixels)
@@ -81,7 +85,11 @@ private val THUMBNAIL = 112.dp
     // 复用已有大图容器，关闭后保留草稿文件。
     ImageSheet(file.takeIf { viewing }, { it.name }, { viewing = false }) { _, modifier ->
         val bitmap = preview
-        if (bitmap != null) Image(bitmap, file.name, modifier, contentScale = ContentScale.Fit)
+        if (bitmap != null) ZoomableImage(bitmap, modifier)
+        else if (previewLoaded) Column(modifier) {
+            Text("Image preview unavailable", color = Palette.secondary)
+            Text("Retry", Modifier.plainButton { /* 明确重试受限解码，不重新上传草稿。 */ previewRetry++ }, color = Palette.accent)
+        }
         else Box(modifier, contentAlignment = Alignment.Center) { Symbol("photo", size = 24.dp, tint = Palette.secondary) }
     }
 }
@@ -95,7 +103,8 @@ private val THUMBNAIL = 112.dp
 }
 
 /** The file as a downsampled picture, off the main thread; null when it isn't one Android can decode. */
+/** 本地草稿只读取选中的文件；超限和格式错误显示失败，取消仍向上传播。 */
 private suspend fun thumbnail(file: OutgoingFile, pixels: Int): ImageBitmap? = withContext(Dispatchers.IO) {
     // Not a picture (or one Android can't read): it shows as a file chip instead.
-    try { AttachmentFiles.thumbnail(File(file.path), pixels).asImageBitmap() } catch (_: IOException) { null }
+    try { AttachmentFiles.thumbnail(File(file.path), pixels).asImageBitmap() } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled } catch (_: Exception) { null }
 }

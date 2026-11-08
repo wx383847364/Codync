@@ -4,7 +4,11 @@ import Foundation
 extension BotStore {
     /// Permanently detach a store (account switch, computer removed). Late async
     /// callbacks still hold it, but it writes nothing and calls no hooks anymore.
+    /// 电脑退场时取消共享读取与排队任务，晚到响应不再返回已退出的视图。
     public func retire() {
+        for read in attachmentReads.values { read.cancel() }
+        attachmentReads.removeAll()
+        attachmentReadTail?.cancel(); attachmentReadTail = nil
         let calls = Array(voiceCalls.values)
         voiceCalls.removeAll()
         isActive = false

@@ -171,7 +171,7 @@ extension BotStore {
                         for file in files {
                             let id = UUID().uuidString
                             try await client.upload(botId: botId, id: id, name: file.name, data: file.data)
-                            Self.cacheAttachment(id, file.data)
+                            await Self.cacheAttachment(id, file.data)
                             ids?.append(id)
                         }
                     }
@@ -348,33 +348,85 @@ extension BotStore {
              files: files, pasted: entry.data.pasted ?? [], call: entry.data.call, mentions: entry.data.mentions ?? [])
     }
 
-    /// A sent file's bytes: on disk after the first fetch (sent files never change).
+    /// 已发送附件通过同一有界读取队列获取，缓存只保存原始字节。
     public func attachmentData(_ file: Attachment, bot botId: String) async -> Data? {
-        guard let url = Self.attachmentCache(file.id) else { return nil }
-        if let data = try? Data(contentsOf: url) { return data }
-        guard let client = live, let data = try? await client.readUpload(botId: botId, id: file.id) else { return nil }
-        Self.cacheAttachment(file.id, data)
-        return data
+        await cachedAttachment(file.id) { [weak self] in
+            guard let self, let client = live else { return nil }
+            return try? await client.readUpload(botId: botId, id: file.id)
+        }
     }
 
-    /// A file a bot shared, read whole and checked: on disk after the first fetch (shared files never change).
+    /// 显式分享的图片仍通过原消息身份读取并核对 SHA-256。
     public func sharedFileData(_ file: SharedFile, entryId: String) async -> Data? {
-        guard let url = Self.attachmentCache(file.id) else { return nil }
-        if let data = try? Data(contentsOf: url) { return data }
-        guard let client = live, let data = try? await FileDownload().data(client: client, entryId: entryId, file: file) else { return nil }
-        Self.cacheAttachment(file.id, data)
-        return data
+        await cachedAttachment(file.id) { [weak self] in
+            guard let self, let client = live else { return nil }
+            return try? await FileDownload().data(client: client, entryId: entryId, file: file)
+        }
     }
 
-    private static func attachmentCache(_ id: String) -> URL? {
+    /// 相同图片共用一次读取；队列只保留完成信号，避免持有上一张图的字节。
+    private func cachedAttachment(_ id: String, load: @escaping @MainActor () async -> Data?) async -> Data? {
+        guard !retired else { return nil }
+        if let prior = attachmentReads[id] {
+            let data = await prior.value
+            return Task.isCancelled ? nil : data
+        }
+        let previous = attachmentReadTail
+        // 共享任务属于电脑 Store，单个视图取消只忽略自己的等待结果。
+        let request = Task { [weak self] in
+            await previous?.value
+            guard let self, !retired, !Task.isCancelled else { return Optional<Data>.none }
+            // 磁盘读取明确离开 MainActor，不阻塞原图手势或聊天刷新。
+            let cached = await Task.detached(priority: .utility) {
+                guard let url = Self.attachmentCache(id) else { return Optional<Data>.none }
+                return try? Data(contentsOf: url)
+            }.value
+            guard !retired, !Task.isCancelled else { return nil }
+            if let cached { return cached }
+            guard let data = await load(), !retired, !Task.isCancelled else { return nil }
+            await Self.cacheAttachment(id, data)
+            return !retired && !Task.isCancelled ? data : nil
+        }
+        attachmentReads[id] = request
+        // 只保留完成信号；共享下载由 Store 拥有，不因一个视图离屏取消其他等待者。
+        attachmentReadTail = Task { _ = await request.value }
+        defer { attachmentReads[id] = nil }
+        let data = await request.value
+        return Task.isCancelled ? nil : data
+    }
+
+    /// 缓存只用已验证的 UUID，不能把远端名称当作本机路径。
+    nonisolated private static func attachmentCache(_ id: String) -> URL? {
         guard let uuid = UUID(uuidString: id) else { return nil }
         return URL.cachesDirectory.appending(path: "codync-attachments").appending(path: uuid.uuidString)
     }
 
-    private static func cacheAttachment(_ id: String, _ data: Data) {
+    /// 磁盘缓存最多约 512 MiB，保留当前文件以兼容既有大附件。
+    private static func cacheAttachment(_ id: String, _ data: Data) async {
+        // 写入与裁剪在后台执行；Store 退场取消时跳过后续操作，已进入的系统写入可能完成。
+        let worker = Task.detached(priority: .utility) { writeAttachmentCache(id, data) }
+        await withTaskCancellationHandler { /* 等待后台原子写入与裁剪完成。 */ await worker.value } onCancel: { /* Store 取消时停止后续磁盘操作。 */ worker.cancel() }
+    }
+
+    /// UUID 路径、原子写入和缓存淘汰均为纯文件操作，不能读取 Store 状态。
+    nonisolated private static func writeAttachmentCache(_ id: String, _ data: Data) {
         guard let url = attachmentCache(id) else { return }
         try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try? data.write(to: url)
+        guard !Task.isCancelled else { return }
+        try? data.write(to: url, options: .atomic)
+        let folder = url.deletingLastPathComponent()
+        let files = (try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: [.fileSizeKey, .contentModificationDateKey])) ?? []
+        let ordered = files.compactMap { file -> (URL, Int, Date)? in
+            // 仅淘汰本模块生成的 UUID 文件，忽略其他缓存条目。
+            guard UUID(uuidString: file.lastPathComponent) != nil,
+                  let values = try? file.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey]) else { return nil }
+            return (file, values.fileSize ?? 0, values.contentModificationDate ?? .distantPast)
+        }.sorted { /* 优先淘汰最旧的磁盘副本。 */ $0.2 < $1.2 }
+        var total = ordered.reduce(0) { /* 汇总缓存字节，用于软额度裁剪。 */ $0 + $1.1 }
+        for (file, size, _) in ordered where file != url && total > 512 * 1024 * 1024 {
+            if Task.isCancelled { break }
+            if (try? FileManager.default.removeItem(at: file)) != nil { total -= size }
+        }
     }
 
     public func discard(_ entry: Entry) {

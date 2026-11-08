@@ -32,6 +32,8 @@ public enum AnalyticsEvent: Equatable, Sendable {
     /// never), reconnects, the first phase stuck too long, why it failed.
     case voiceCallQuality(VoiceEngine, readyMs: Int?, reconnects: Int, stuck: VoiceStuck, failure: VoiceFailure)
     case screenViewed(Screen)
+    case imageViewed(ImageOutcome)
+    public enum ImageOutcome: String, Sendable { case opened, original, fit, failed }
     case attachmentPreview(PreviewOutcome)
     case reviewRequested(prompts: Int)
     case reviewLinkOpened
@@ -150,6 +152,7 @@ public enum AnalyticsEvent: Equatable, Sendable {
         case .voiceCallStarted: "voice_call_started"
         case .voiceCallQuality: "voice_call_quality"
         case .screenViewed: "screen_viewed"
+        case .imageViewed: "image_viewed"
         case .attachmentPreview: "attachment_preview"
         case .reviewRequested: "review_requested"
         case .reviewLinkOpened: "review_link_opened"
@@ -192,6 +195,7 @@ public enum AnalyticsEvent: Equatable, Sendable {
         case .reviewLinkOpened: return ["source": .string("settings")]
         case let .devServerAction(use): return ["action": .string(use.rawValue)]
         case let .screenViewed(screen): return ["screen": .string(screen.rawValue)]
+        case let .imageViewed(outcome): return ["outcome": .string(outcome.rawValue)]
         case let .attachmentPreview(outcome): return ["outcome": .string(outcome.rawValue)]
         }
     }

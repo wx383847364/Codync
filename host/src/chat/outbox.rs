@@ -41,7 +41,7 @@ pub fn tools() -> Value {
         "annotations": {"readOnlyHint": false, "idempotentHint": false},
     }, {
         "name": "send_file",
-        "description": "Share one regular file with the user in your own chat. Any file type, including empty files, up to 100 MiB. The host saves an immutable copy. Paths are absolute or relative to your working directory. A successful response means the file message was published; do not repeat it.",
+        "description": "Share one regular file with the user in your current chat, including a group. Any file type, including empty files, up to 100 MiB. The host saves an immutable copy. Paths are absolute or relative to your working directory. A successful response means the file message was published; do not repeat it.",
         "inputSchema": {"type": "object", "properties": {"path": {"type": "string"}, "name": {"type": "string", "description": "Optional display filename, without folders."}}, "required": ["path"]},
         "annotations": {"readOnlyHint": false, "idempotentHint": false},
     }])

@@ -7,9 +7,11 @@ released version's section; a version without one gets the PRs' "What's New: And
 else a generic "Bug fixes and improvements" line. Delete old sections.
 -->
 
-## 2.42.0
+## 2.43.0
 
 ### zh-Hant
+- 圖片可切換原始像素、縮放和平移，並限制快取與讀取資源。
+- Bot 可在目前群組明確分享檔案；文字路徑不會自動分享。
 - 群組協作持續至交付或需要你的回覆，不再受固定次數限制。
 - 群組減少重複背景，保留任務原文、要求與待辦；支援整理上下文，空間不足時保留排隊並提示處理。
 - @ 成員支援方向鍵循環選擇；草稿、離線及重送保留身分。
@@ -17,8 +19,9 @@ else a generic "Bug fixes and improvements" line. Delete old sections.
 - 不登入也能用 Wi-Fi 或 Tailscale；帳號可啟用中繼。重試保留附件，儲存故障可重試保存。
 
 ### en-US
-- Groups continue until delivery or your input, without fixed turn limits.
-- Less repeated group context; original tasks, requirements and open work stay intact. Supported agents compact context; insufficient space keeps work queued with guidance.
-- Cycle @ members with arrow keys; drafts and retries keep identities.
-- Large files, image previews and folded delivery details.
-- Wi-Fi/Tailscale without an account; relay with one. Attachments and unsaved results survive retries.
+- Original image pixels with zoom/pan and bounded caching.
+- Explicit group file sharing; text paths stay text.
+- Groups continue until delivery or your input. Tasks and open work survive context compaction.
+- Cycle @ members; drafts and retries keep identities.
+- Large attachments and folded delivery details.
+- Wi-Fi/Tailscale without sign-in; relay with an account. Retry attachments and unsaved results.

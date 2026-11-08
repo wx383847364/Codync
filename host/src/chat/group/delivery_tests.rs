@@ -190,3 +190,48 @@ async fn new_session_keeps_the_old_session_until_interruption_is_saved() {
     assert!(!room.hub.runtime("a").pending_new_session);
     room.shutdown().await;
 }
+
+/// 复制完成时重新检查持久状态和目标聊天，Stop 后不得把结果发布到群或私聊。
+#[tokio::test]
+async fn group_file_publication_checks_delivery_and_stop_before_writing() {
+    let room = Room::new();
+    let source = room.send("@a BLOCK file", None).await;
+    let id = delivery_in_state(&room, &source.id, "started").await;
+    let data = json!({"author":"a","text":"file","final":true,"files":[{"id":"test"}]});
+    assert!(room.hub.publish_delivery_file(&id, "b", &Lane::main(&room.group), 1, &data).is_err());
+    assert!(room.hub.publish_delivery_file(&id, "a", &Lane::main("a"), 1, &data).is_err());
+    let published = room.hub.publish_delivery_file(&id, "a", &Lane::main(&room.group), 1, &data).unwrap();
+    assert_eq!(published.bot_id, room.group);
+    room.hub.cancel_deliveries(&room.group, None, "test stop").unwrap();
+    assert!(room.hub.publish_delivery_file(&id, "a", &Lane::main(&room.group), 1, &data).is_err());
+    room.shutdown().await;
+}
+
+/// 发起成员已退群而取消通知尚未到达时，受托成员也不能继续发布文件。
+#[tokio::test]
+async fn group_files_recheck_the_task_sender_before_publication() {
+    let room = Room::new();
+    let mut task = crate::store::deliveries::Delivery::speak(&room.group, "", "a");
+    task.kind = crate::store::deliveries::Kind::Task;
+    task.source_kind = "tool".into();
+    task.source_bot_id = Some("b".into());
+    task.body = Some("share a report".into());
+    let task = room.hub.enqueue_delivery(&task).unwrap();
+    room.hub.claim_delivery(&task.id, "a").unwrap().unwrap();
+    assert!(room.hub.start_delivery(&task.id, "a").unwrap());
+    let mut config = room.hub.store.bot(&room.group).unwrap().unwrap().config;
+    config.members.retain(|id| id != "b");
+    room.hub.store.save_bot(&config).unwrap();
+    assert!(
+        room.hub
+            .publish_delivery_file(
+                &task.id,
+                "a",
+                &Lane::main(&room.group),
+                1,
+                &json!({"author":"a","final":true,"files":[]})
+            )
+            .is_err()
+    );
+    room.shutdown().await;
+}

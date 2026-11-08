@@ -6,6 +6,7 @@ import java.nio.ByteBuffer
 import java.nio.CharBuffer
 import java.nio.charset.CodingErrorAction
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.sync.withLock
 import com.codync.android.core.*
 import kotlinx.coroutines.*
@@ -141,13 +142,14 @@ suspend fun AppStore.sharedImage(entryId: String, file: SharedFile): File = cach
 
 /** 缓存来自电脑的文件；回收其他旧副本时保留当前文件，允许大附件突破缓存软额度。 */
 private suspend fun AppStore.cachedFile(id: String, size: Long, fetch: suspend (HostFiles, File) -> Unit): File {
-    val request = contextScope.async { downloadLocks.getOrPut(id) { Mutex() }.withLock {
+    // 同一文件合并请求，全电脑最多两项下载；账号退场取消所属 scope。
+    val request = contextScope.async { downloadLocks.getOrPut(id) { Mutex() }.withLock { attachmentReads.withPermit {
     val destination = withContext(Dispatchers.IO) { attachments.cached(id) }
     if (!destination.exists() || destination.length() != size) {
         fetch(HostFiles(ready()), destination)
         withContext(Dispatchers.IO) { AttachmentFiles.trim(destination) }
     }
     destination
-    } }
+    } } }
     try { return request.await() } finally { request.cancel() }
 }

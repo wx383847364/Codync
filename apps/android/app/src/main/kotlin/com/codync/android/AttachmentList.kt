@@ -47,14 +47,14 @@ import kotlinx.coroutines.withContext
     AttachmentImageSheet(viewing, botId, state, store) { viewing = null }
 }
 
-/** A sent image full size, in a sheet while `file` is set. */
+/** 查看已发送附件的原始像素，复用带尺寸限制的解码器。 */
 @Composable internal fun AttachmentImageSheet(file: Attachment?, botId: String, state: AppState, store: AppStore, dismiss: () -> Unit) {
-    ImageSheet(file, { it.name }, dismiss) { shown, modifier -> AttachmentImage(shown, botId, 4096, state, store, modifier) }
+    ImageSheet(file, { it.name }, dismiss) { shown, modifier -> AttachmentImage(shown, botId, 32768, state, store, modifier) }
 }
 
-/** An image a bot shared full size, in a sheet while `file` is set. */
+/** 群聊和私聊分享图片共用原图缩放面板。 */
 @Composable internal fun SharedImageSheet(file: SharedFile?, entryId: String, state: AppState, store: AppStore, dismiss: () -> Unit) {
-    ImageSheet(file, { it.name }, dismiss) { shown, modifier -> SharedImage(shown, entryId, 4096, state, store, modifier) }
+    ImageSheet(file, { it.name }, dismiss) { shown, modifier -> SharedImage(shown, entryId, 32768, state, store, modifier) }
 }
 
 /** 复用大图面板容纳已发送图片和本地草稿，内容读取由所属组件负责。 */
@@ -86,20 +86,28 @@ import kotlinx.coroutines.withContext
 @Composable internal fun SharedImage(file: SharedFile, entryId: String, maxPixels: Int, state: AppState, store: AppStore, modifier: Modifier) =
     RemoteImage(file.id, maxPixels, state, modifier, ContentScale.Fit) { store.sharedImage(entryId, file) }
 
-/** A picture `load` fetches from the computer into the cache (iOS `AttachmentImage`); a placeholder until then. */
+/** 下载并有界解码图片；原图支持手势，失败必须由用户重试或连接恢复。 */
 @Composable private fun RemoteImage(id: String, maxPixels: Int, state: AppState, modifier: Modifier, scale: ContentScale, load: suspend () -> java.io.File) {
+    var failure by remember(id, maxPixels) { mutableStateOf(false) }
+    var retry by remember(id, maxPixels) { mutableStateOf(0) }
     var image by remember(id, maxPixels) { mutableStateOf<ImageBitmap?>(null) }
     // Retried whenever the link changes: an image the computer couldn't send stays a placeholder, as on iOS.
-    LaunchedEffect(id, maxPixels, state.actualConnection) {
+    LaunchedEffect(id, maxPixels, state.actualConnection, retry) {
         if (image != null) return@LaunchedEffect
+        failure = false
         try {
             val source = load()
             image = withContext(Dispatchers.IO) { AttachmentFiles.thumbnail(source, maxPixels).asImageBitmap() }
         } catch (cancelled: CancellationException) { throw cancelled }
-        catch (_: Exception) { /* The placeholder stays; the next link change tries again. */ }
+        catch (_: Exception) { failure = true; Analytics.capture(AnalyticsEvent.ImageViewed(AnalyticsEvent.ImageOutcome.Failed)) }
     }
     val bitmap = image
-    if (bitmap != null) Image(bitmap, contentDescription = null, modifier = modifier, contentScale = scale)
+    if (failure) Column(modifier) {
+        Text("Image preview unavailable", style = Type.caption2, color = Palette.secondary)
+        Text("Retry", Modifier.plainButton { /* 只响应明确的重试操作。 */ retry++ }, style = Type.caption2, color = Palette.accent)
+    }
+    else if (bitmap != null && maxPixels > 4096) ZoomableImage(bitmap, modifier)
+    else if (bitmap != null) Image(bitmap, contentDescription = null, modifier = modifier, contentScale = scale)
     else Box(modifier.size(160.dp, 120.dp).clip(RoundedRectangle(16.dp)).background(Palette.bubbleUser), contentAlignment = Alignment.Center) {
         Symbol("photo", size = 20.dp, tint = Palette.tertiary)
     }

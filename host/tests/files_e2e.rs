@@ -167,6 +167,7 @@ async fn rejects_invalid_sources_without_a_file_entry() {
     assert!(results.as_array().unwrap().iter().all(|r| r["isError"] == true));
 }
 
+/// 定时和私聊委托继续拒绝文件发布，错误不能退化成普通文件读取失败。
 async fn rejected(path: &std::path::Path) {
     let waited = tokio::time::timeout(Duration::from_secs(20), async {
         loop {
@@ -176,10 +177,7 @@ async fn rejected(path: &std::path::Path) {
             {
                 assert!(
                     results.as_array().unwrap().iter().all(|result| result["isError"] == true
-                        && result["content"][0]["text"]
-                            .as_str()
-                            .unwrap()
-                            .contains("only available in the bot's own chat")),
+                        && result["content"][0]["text"].as_str().unwrap().contains("delegated or routine turns")),
                     "{results}"
                 );
                 break;
@@ -191,19 +189,14 @@ async fn rejected(path: &std::path::Path) {
     waited.unwrap();
 }
 
+/// 群聊现在有独立正向验收，既有定时和私聊委托的拒绝边界保持。
 #[tokio::test]
-async fn groups_routines_and_delegated_turns_cannot_publish_files() {
+async fn routines_and_delegated_turns_cannot_publish_files() {
     let host = Host::start().await;
     let agent = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/file_agent.py");
     let created = host.call("createBot", json!({"name":"Recipient", "backend":"custom", "cwd":host.home, "command":common::python_agent(&agent), "connectors":[], "notify":false})).await;
     let bot = created["bot"]["id"].as_str().unwrap();
     let results_path = host.home.join("file-results.json");
-    let group = host.call("createBot", json!({"name":"Group", "kind":"group", "members":[bot]})).await;
-    host.call("send", json!({"botId":group["bot"]["id"],"text":"share-files"})).await;
-    rejected(&results_path).await;
-    host.call("stop", json!({"botId":group["bot"]["id"]})).await;
-    tokio::time::sleep(Duration::from_millis(300)).await;
-    let _ = std::fs::remove_file(&results_path);
     let routine = host
         .call(
             "saveRoutine",
@@ -268,4 +261,142 @@ async fn files_only_turns_finish_without_duplicate_text_and_input_uploads_still_
     })
     .await;
     waited.unwrap();
+}
+
+/// 群聊文件归属群聊，作者删除后仍可读取，不能经作者单聊越权引用。
+#[tokio::test]
+async fn group_image_shares_belong_to_the_group_after_the_author_leaves() {
+    let host = Host::start().await;
+    image::DynamicImage::new_rgba8(32, 16).save(host.home.join("image.png")).unwrap();
+    let agent = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/file_agent.py");
+    let bot = host
+        .call(
+            "createBot",
+            json!({"name":"Image author", "backend":"custom", "cwd":host.home,
+        "command":common::python_agent(&agent), "connectors":[], "skills":[], "notify":false}),
+        )
+        .await["bot"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let group = host.call("createBot", json!({"name":"Images", "kind":"group", "members":[bot], "notify":false})).await
+        ["bot"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    host.call("send", json!({"botId":group,"text":"share-image"})).await;
+    let entries = ready(&host, &group, 1).await;
+    let file_entry = entries.iter().find(|e| e["data"]["files"][0]["name"] == "image.png").unwrap();
+    assert_eq!(file_entry["data"]["author"], bot);
+    assert_eq!(file_entry["botId"], group);
+    let read = json!({"entryId":file_entry["id"],"fileId":file_entry["data"]["files"][0]["id"],"offset":0});
+    host.call("readFile", read.clone()).await;
+    host.call("deleteBot", json!({"botId":bot})).await;
+    host.call("readFile", read).await;
+    let library = host.call("library", json!({"botId":group})).await;
+    assert_eq!(library["items"][0]["file"]["name"], "image.png");
+}
+
+/// 图片检查不能接受本机路径；纯正文路径不自动读取或发布，旧接口仍可下载超限原图。
+#[tokio::test]
+async fn image_info_accepts_only_known_files_and_paths_stay_text() {
+    let host = Host::start().await;
+    let image_path = host.home.join("image.png");
+    image::DynamicImage::new_rgba8(6000, 2).save(&image_path).unwrap();
+    let agent = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/file_agent.py");
+    let bot = host
+        .call(
+            "createBot",
+            json!({"name":"Only text", "backend":"custom", "cwd":host.home,
+        "command":common::python_agent(&agent), "connectors":[], "skills":[], "notify":false}),
+        )
+        .await["bot"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    host.call("send", json!({"botId":bot,"text":format!("path-text-only `{}`", image_path.display())})).await;
+    let entries = ready(&host, &bot, 0).await;
+    assert!(entries.iter().all(|entry| entry["data"]["images"].is_null() && entry["data"]["imageSources"].is_null()));
+    for (method, body) in
+        [("imageInfo", json!({"path":image_path})), ("resolveImages", json!({"entryIds":[entries[0]["id"]]}))]
+    {
+        let response = reqwest::Client::new()
+            .post(format!("{}/api/{method}", host.base))
+            .bearer_auth(&host.token)
+            .json(&body)
+            .send()
+            .await
+            .unwrap();
+        assert!(!response.status().is_success());
+    }
+    host.call("send", json!({"botId":bot,"text":"share-image"})).await;
+    let entries = ready(&host, &bot, 1).await;
+    let entry = entries.iter().find(|e| e["data"]["files"].is_array()).unwrap();
+    let info = host.call("imageInfo", json!({"entryId":entry["id"],"fileId":entry["data"]["files"][0]["id"]})).await;
+    assert_eq!(info, json!({"width":6000,"height":2}));
+}
+
+/// 文件名不是派工正文：只发文件也正常完成，@all、成员名和普通文件都不派生任务或重复摘要。
+#[tokio::test]
+async fn group_file_names_never_route_mentions_or_duplicate_final_messages() {
+    for (name, mode) in [
+        ("@all.txt", "files-only"),
+        ("@Observer.txt", "files-only"),
+        ("report.pdf", "files-only"),
+        ("sentinel.txt", "files-pass"),
+        ("blank.txt", "files-blank"),
+    ] {
+        let host = Host::start().await;
+        std::fs::write(host.home.join(name), b"file result").unwrap();
+        std::fs::write(host.home.join("selected-file.txt"), name).unwrap();
+        let agent = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/file_agent.py");
+        let mut members = Vec::new();
+        for title in ["Publisher", "Observer"] {
+            members.push(
+                host.call(
+                    "createBot",
+                    json!({"name":title,"backend":"custom","cwd":host.home,
+                "command":common::python_agent(&agent),"connectors":[],"skills":[],"notify":false}),
+                )
+                .await["bot"]["id"]
+                    .as_str()
+                    .unwrap()
+                    .to_owned(),
+            );
+        }
+        let group = host
+            .call("createBot", json!({"name":"Files only","kind":"group","members":members,"notify":false}))
+            .await["bot"]["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        host.call("send", json!({"botId":group,"text":format!("@Publisher {mode} share-selected-file")})).await;
+        let entries = tokio::time::timeout(Duration::from_secs(30), async {
+            loop {
+                let history = host.call("history", json!({"botId":group})).await;
+                let rows = history["entries"].as_array().unwrap();
+                if rows.iter().any(|entry| {
+                    entry["data"]["deliveryRows"].as_array().is_some_and(|rows| {
+                        rows.iter().any(|row| row["targetBotId"] == members[0] && row["status"] == "completed")
+                    })
+                }) {
+                    break rows.clone();
+                }
+                tokio::time::sleep(Duration::from_millis(30)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(
+            entries.iter().all(|entry| entry["data"]["deliveryRows"]
+                .as_array()
+                .is_none_or(|rows| rows.iter().all(|row| row["targetBotId"] == members[0]))),
+            "{name}: file metadata must not start another bot"
+        );
+        assert_eq!(
+            entries.iter().filter(|entry| entry["kind"] == "agent" && entry["data"]["final"] == true).count(),
+            1,
+            "{name}: no duplicate final text"
+        );
+    }
 }

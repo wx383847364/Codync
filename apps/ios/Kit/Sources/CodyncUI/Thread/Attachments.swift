@@ -158,10 +158,12 @@ struct AttachmentViewer: View {
         image = AttachmentImage(shared: file, entryId: entryId, maxPixels: 4096)
     }
 
+    /// 查看已发送附件、显式分享文件或本地草稿的原始像素。
     var body: some View {
         VStack(spacing: 0) {
             ModalHeader(name)
-            image
+            OriginalImageViewer(source: image)
+                .id(image.id)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .padding(12)
         }

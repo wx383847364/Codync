@@ -43,6 +43,7 @@ export type ReachOutcome = 'added' | 'own_relay' | 'cancelled' | 'failed'
 export type ClaimFailure = 'unreachable' | 'refused' | 'host'
 
 export type AnalyticsEvent =
+  | { event: 'image_viewed'; outcome: 'opened' | 'original' | 'fit' | 'failed' }
   | { event: 'attachment_preview'; outcome: 'opened' | 'decode_failed' }
   | { event: 'app_opened'; at_login: boolean }
   | { event: 'window_opened' }
