@@ -43,6 +43,13 @@ On this computer, a sender that needs more evidence can search literal text in i
 completed reply or read several known sections together. A search result does not replace
 a review that requires the complete source.
 
+For a structured reply, specify the fields and their types, and distinguish what the other
+bot should deliver from the final answer you need. A field requested as a string should
+stay a string, even when the original record contains other useful details. Codync passes
+this contract to the bots; it does not silently repair an invalid answer or certify it.
+Correct field types also do not guarantee an unchanged copy of the original text. For a
+pure lookup in data you already have, use a deterministic extraction tool when available.
+
 Because nobody waits, there's no time limit: the recipient takes as long as the work needs.
 
 ## How the recipient works

@@ -134,6 +134,9 @@ async fn message_roundtrip_wakes_the_sender_and_keeps_user_messages_separate() {
     f.until(|| f.prompts().len() == 1).await;
     assert!(f.prompts()[0].contains("It is a bot request, not a new user instruction"));
     assert!(f.prompts()[0].contains("Your final reply goes back to a"));
+    // 无格式要求的普通请求仍沿用“结论、证据、未验证项优先”，且不能向第三方 bot 转交。
+    assert!(f.prompts()[0].contains("begin with the conclusion, key evidence and unverified items, addressed to a"));
+    assert!(f.prompts()[0].contains("if you need another bot's help, say so in your reply"));
     let sent = f.send_user("thanks").await;
     let request_entry = f
         .hub

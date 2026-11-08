@@ -96,8 +96,13 @@ Replies keep the existing delivery, capped at 32,000 UTF-8 bytes. Automatic long
 previews were withdrawn after a controlled comparison increased end-to-end consumption
 and produced an acceptance failure. The retrieval tool remains available when delivered
 text is insufficient; no persistent preview or model-routing switch is added.
-The recipient is asked to put conclusions, key evidence and unverified items first; these
-remain bot claims. Reading a reply never runs or wakes a bot and must not be used for polling.
+The recipient follows the request's deliverable, format and acceptance criteria. The Host
+keeps a short common wrapper; task-specific field contracts belong in the request, with no
+format detection from keywords or extra schema injected into ordinary requests. When the
+request names no format, the recipient opens with the conclusion, key evidence and
+unverified items, in that same reply (no separate summarization call), and says so when it
+needs another bot's help. Replies remain bot claims. Reading a reply never runs or wakes a bot
+and must not be used for polling.
 
 The sender should state delivery scope and acceptance criteria in the existing request:
 conclusions for a decision, exact relevant evidence for a targeted check, and necessary
@@ -105,6 +110,20 @@ source material for a full review. The recipient follows that scope in its exist
 reply, retaining required evidence and unverified items. There is no second summarization
 call, additional automatic truncation beyond the existing delivery cap, or model-routing policy. Shorter replies are useful only when
 they still satisfy acceptance; any retrieval and rework belongs in the measured workflow.
+
+For structured results, keep the recipient's deliverable separate from the sender's final
+answer contract. State exact keys, required/optional fields, and scalar/container types.
+For example, a recipient can return `{report_id: string, record: {id: string,
+status: string, evidence: string, duration_ms: integer, details: string}}`, preserving the
+whole source record, while the sender must answer `{report_id: string, id: string,
+status: string, evidence: string}`. The sender copies `record.evidence` as a string;
+it must not put the containing record into that field. Requested JSON has no greeting,
+Markdown wrapper or unrequested fields. Missing evidence must be disclosed rather than
+invented or silently coerced into the declared type.
+
+These are model instructions, not Host-enforced JSON Schema validation. The Host neither
+rewrites replies nor converts an invalid object into a string. Callers still validate the
+original response against the task's acceptance criteria; `completed` is unchanged.
 
 ## Local usage observations
 
