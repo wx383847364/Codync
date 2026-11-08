@@ -77,6 +77,8 @@ public struct Bot: Codable, Identifiable, Hashable, Sendable {
     /// idle | working | needsInput | error
     public var status: String
     public var activity: String
+    public var storageError: String?
+    public var pendingNewSession: Bool?
     public var startedAt: Int64?
     /// Where the running turn talks: the bot's own chat, or a group.
     public var workingChat: String?
@@ -150,6 +152,8 @@ extension Bot {
         rev = try c.decodeIfPresent(Int64.self, forKey: .rev) ?? 0
         status = try c.decodeIfPresent(String.self, forKey: .status) ?? "idle"
         activity = try c.decodeIfPresent(String.self, forKey: .activity) ?? ""
+        storageError = try c.decodeIfPresent(String.self, forKey: .storageError)
+        pendingNewSession = try c.decodeIfPresent(Bool.self, forKey: .pendingNewSession)
         startedAt = try c.decodeIfPresent(Int64.self, forKey: .startedAt)
         workingChat = try c.decodeIfPresent(String.self, forKey: .workingChat)
         agentStep = try? c.decodeIfPresent(AgentStep.self, forKey: .agentStep)

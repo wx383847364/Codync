@@ -80,6 +80,8 @@ export interface Bot {
   rev: number
   status: BotStatus | string
   activity: string
+  storageError?: string | null
+  pendingNewSession?: boolean
   startedAt?: number | null
   workingChat?: string | null
   unread: number
@@ -286,7 +288,15 @@ export interface AgentSwitch {
   carried: string | null
 }
 
+export interface DeliveryRow { deliveryId: string; targetBotId: string; status: string; detail: string }
+
 export interface EntryData {
+  deliveryAttempt?: number
+  parentDeliveryId?: string | null
+  deliveryId?: string
+  deliveryBody?: string
+  deliveryRows?: DeliveryRow[]
+  mentions?: import('./mentions').Mention[]
   /** Structured conversation data added to the existing team-tool notice. */
   botMessage?: BotMessage
   /** notice: the agent summarized its context; kept out of the chat. */
@@ -309,6 +319,8 @@ export interface EntryData {
   /** notice: a failed routine run the user can run again (`retryRoutineRun`). */
   retry?: boolean
   text?: string
+  /** 原样保留粘贴片段，失败重试仍与用户输入区分。 */
+  pasted?: string[]
   final?: boolean
   /** user: queued | sent | cancelled | failed · tool: pending | in_progress | completed | failed · permission: pending | answered | cancelled | expired */
   status?: string

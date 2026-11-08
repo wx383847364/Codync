@@ -31,6 +31,8 @@ struct Composer: View {
     }
     /// Files going out with the next message.
     @State private var files: [OutgoingFile] = []
+    @State private var mentionIndex = 0
+    @State private var dismissedMention: String?
     @State private var pickingFiles = false
     @State private var pickingPhotos = false
     @State private var photoItems: [PhotosPickerItem] = []
@@ -61,10 +63,37 @@ struct Composer: View {
         return L10n.tr(key).replacingOccurrences(of: "{name}", with: name)
     }
 
-    /// The group's bots whose name holds the `@partial` at the end of the draft.
+    /// 按光标定位查询，正文中间选人不截断尾文。
+    private var mentionQuery: String? {
+        guard bot?.isGroup == true, let range = input.mentionRange else { return nil }
+        return String(draft[draft.index(after: range.lowerBound)..<range.upperBound])
+    }
+
+    /// 按光标查询过滤成员，同名成员保留独立身份候选。
     private var suggestions: [Bot] {
-        guard bot?.isGroup == true, let query = mentionQuery(draft, members: members) else { return [] }
-        return members.filter { query.isEmpty || $0.name.localizedCaseInsensitiveContains(query) }
+        guard let query = mentionQuery, dismissedMention != mentionKey else { return [] }
+        guard query.first?.isWhitespace != true, !members.contains(where: { query.lowercased() == "\($0.name.lowercased()) " }) else { return [] }
+        return members.filter {
+            query.isEmpty || $0.name.localizedCaseInsensitiveContains(query)
+        }
+    }
+
+    /// 文本与光标共同标识候选状态，Esc 后移动光标或编辑才重新打开。
+    private var mentionKey: String {
+        let end = input.mentionRange.map { draft.utf16.distance(from: draft.startIndex, to: $0.upperBound) } ?? -1
+        return "\(end):\(draft)"
+    }
+
+    /// 原生输入框仅在未组合文字时调用；默认第一项，选择不发送。
+    private func mentionKeyboard(_ key: String) {
+        guard !suggestions.isEmpty else { return }
+        switch key {
+        case UIKeyCommand.inputUpArrow: mentionIndex = (mentionIndex + suggestions.count - 1) % suggestions.count
+        case UIKeyCommand.inputDownArrow: mentionIndex = (mentionIndex + 1) % suggestions.count
+        case UIKeyCommand.inputEscape: dismissedMention = mentionKey
+        case "\r", "\t": mention(suggestions[min(mentionIndex, suggestions.count - 1)])
+        default: break
+        }
     }
 
     /// A group's bots, which its commands act on.
@@ -76,8 +105,23 @@ struct Composer: View {
         return SlashCommands.list(for: bot, members: members, query: query, skills: model.installedSkills)
     }
 
+    /// 群内按来源 lane 展示持有未保存结果的成员，恢复入口不依赖数据库卡片。
+    private var storageFailures: [Bot] {
+        let candidates = bot?.isGroup == true ? members.filter { $0.workingChat == botId } : bot.map { [$0] } ?? []
+        return candidates.filter { $0.storageError != nil }
+    }
+
+    /// 呈现候选、来源成员保存故障与编辑器，所有发送仍经 host。
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
+            ForEach(storageFailures) { member in
+                Text("\(member.name): \(member.storageError ?? "")").font(.footnote).foregroundStyle(Palette.danger)
+                Button("重试保存") {
+                    // 故障入口不依赖卡片，直接向 host 请求保存内存结果。
+                    model.retryDeliverySave(member.id)
+                }.buttonStyle(.secondary)
+            }
+            if bot?.pendingNewSession == true { Text("将在当前任务结束后新建会话；主会话与群共享。输入 /new-cancel 取消切换。").font(.footnote) }
             if !queued.isEmpty {
                 // Over the box, past the + button.
                 QueuedMessages(entries: queued)
@@ -91,12 +135,14 @@ struct Composer: View {
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
             if !suggestions.isEmpty {
-                MentionList(members: suggestions, pick: mention)
+                MentionList(members: suggestions, selected: mentionIndex, pick: mention)
                     .padding(.horizontal, 16)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                .transition(.move(edge: .bottom).combined(with: .opacity))
             }
             field
         }
+        // 查询变化后重置高亮与临时关闭，后续相同输入仍能重新选人。
+        .onChange(of: mentionKey) { mentionIndex = 0; dismissedMention = nil }
         .animation(Motion.layout, value: suggestions.map(\.id))
         .animation(Motion.layout, value: commands.map(\.id))
         .animation(Motion.reduced(Motion.layout, reduceMotion), value: queued.isEmpty)
@@ -246,15 +292,14 @@ struct Composer: View {
                       message: dictation.failure, cancel: "OK") { [] }
     }
 
+    /// 使用原生输入框保留组合文字和选区，正文变化同步身份。
     private var box: some View {
         HStack(alignment: .bottom, spacing: 8) {
-            TextField(placeholder, text: $input.text, selection: $input.selection, axis: .vertical)
-                .lineLimit(1...8)
-                .font(.body)
-                .textFieldStyle(.plain)
-                .focused($focused)
-                // A hardware keyboard's Return (⌘↩ too) submits the field and ends editing.
-                .onSubmit(newline)
+            MentionComposerField(input: $input, focused: $focused, placeholder: placeholder,
+                                 menuOpen: !suggestions.isEmpty, key: mentionKeyboard)
+                .overlay(alignment: .topLeading) {
+                    if draft.isEmpty { Text(placeholder).foregroundStyle(Palette.tertiary).allowsHitTesting(false) }
+                }
                 .padding(.vertical, fieldPadding)
             micButton
                 .padding(.bottom, max(0, (textLineHeight + 2 * fieldPadding - buttonSize) / 2))
@@ -269,12 +314,17 @@ struct Composer: View {
             dictation.stop()
             draft = model.composerDraft(for: draftKey)
         }
+        // host 拒发后恢复可编辑草稿，普通输入回声不改动选区或 IME。
+        .onChange(of: model.composerDraft(for: draftKey)) { _, value in
+            if input.text.isEmpty, !value.isEmpty { input.replace(with: value) }
+        }
         // Another chat in the same view never inherits the reply.
         .onChange(of: botId) { replyingTo = nil }
         .onChange(of: replyingTo?.id) { if replyingTo != nil { focused = true } }
         .onDisappear { dictation.stop() }
         .onChange(of: draft) { _, value in
-            model.setComposerDraft(value, for: draftKey)
+            model.setComposerDraft(value, for: draftKey, replacing: input.editRange)
+            input.editRange = nil
             // Starting a command: list the computer's skills again.
             if value == "/" { Task { await model.refreshPlugins() } }
         }
@@ -338,15 +388,10 @@ struct Composer: View {
         })
     }
 
+    /// 选取附件后保留完整内容，不再按 100 MB 拒绝，上传仍使用分片。
     private func append(_ new: [OutgoingFile]) {
         guard canAttach else { return }
-        for file in new {
-            guard file.data.count <= OutgoingFile.maxSize else {
-                model.lastError = "\(file.name) is larger than 100 MB."
-                continue
-            }
-            files.append(file)
-        }
+        files.append(contentsOf: new)
     }
 
     /// Images (or files) on the clipboard become attachments.
@@ -367,17 +412,25 @@ struct Composer: View {
             append(picked)
         }
 
+    /// 选择成员只编辑光标所在片段，不触发发送。
     private func mention(_ member: Bot) {
-        guard let at = draft.lastIndex(of: "@") else { return }
-        draft = String(draft[..<at]) + "@\(member.name) "
+        guard let range = input.mentionRange else { return }
+        let start = draft.utf16.distance(from: draft.startIndex, to: range.lowerBound)
+        dismissedMention = mentionKey
+        input.insertMention(member.name)
+        model.bindComposerMention(Mention(botId: member.id, start: start, end: start + 1 + member.name.utf16.count), text: draft, for: draftKey)
         focused = true
     }
 
+    /// 把群快捷命令转换为成员 host 意图，不在客户端复制生命周期逻辑。
     private func run(_ command: SlashCommand) {
         guard let bot else { return }
         switch command.action {
         case .fast:
             model.toggleFastMode(bot)
+            draft = ""
+        case .session(let mode):
+            model.switchSession(botId, mode: mode)
             draft = ""
         case .skill(let id):
             draft = "/\(id) "

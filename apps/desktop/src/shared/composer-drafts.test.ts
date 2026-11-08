@@ -68,3 +68,16 @@ test('late edits from a retired store cannot overwrite a reopened conversation',
   previous.clear()
   assert.equal(new ComposerDrafts(disk, 'account/computer').get('bot'), 'new text')
 })
+
+// 身份随草稿持久化，普通编辑只移动未被触及的区间。
+test('selected identities survive reopening and move with edits outside their token', () => {
+  const disk = storage()
+  const drafts = new ComposerDrafts(disk, 'mentions')
+  drafts.selectMention('g', '😀@同名 tail', { botId: 'stable-id', start: 2, end: 5 })
+  const reopened = new ComposerDrafts(disk, 'mentions')
+  assert.deepEqual(reopened.mentions('g'), [{ botId: 'stable-id', start: 2, end: 5 }])
+  reopened.set('g', 'x😀@同名 tail')
+  assert.deepEqual(reopened.mentions('g'), [{ botId: 'stable-id', start: 3, end: 6 }])
+  reopened.set('g', 'x😀@改名 tail')
+  assert.deepEqual(reopened.mentions('g'), [])
+})

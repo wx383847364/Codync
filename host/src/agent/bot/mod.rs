@@ -20,9 +20,11 @@ mod background_work;
 mod cmd;
 mod codex_names;
 mod compaction;
+mod delivery;
 mod fallback;
 mod fast_mode;
 mod files;
+mod group_context;
 mod launch;
 mod lifecycle;
 mod modes;
@@ -41,7 +43,6 @@ pub(crate) use launch::{launch_commands, select_model, start_agent, system_promp
 use crate::agent::acp::{self, Acp, Incoming};
 use crate::agent::config::FastModeSupport;
 use crate::chat::context::{Identity, Snapshot};
-use crate::chat::group::GroupTurn;
 use crate::chat::memory;
 use crate::hub::{BotStatus, Hub};
 use crate::store::{BotConfig, Entry, EntryKind, Lane, now_ms};
@@ -67,6 +68,7 @@ pub struct BotHandle {
     pub task: tokio::task::JoinHandle<()>,
 }
 
+/// 创建成员 actor，持久投递只接受房间指定的执行命令。
 pub fn spawn(hub: Arc<Hub>, base: BotConfig) -> BotHandle {
     let (tx, rx) = mpsc::unbounded_channel();
     let session_id = hub.store.bot(&base.id).ok().flatten().and_then(|b| b.session_id);
@@ -92,7 +94,9 @@ pub fn spawn(hub: Arc<Hub>, base: BotConfig) -> BotHandle {
         run_sessions: HashMap::new(),
         lane,
         turn_session: None,
-        active_group: None,
+        active_delivery: None,
+        pending_completion: None,
+        pending_new_session: None,
         active_routine: None,
         routine_deadline: None,
         routine_timed_out: false,
@@ -100,6 +104,10 @@ pub fn spawn(hub: Arc<Hub>, base: BotConfig) -> BotHandle {
         session_fresh: false,
         profile_resend: HashSet::new(),
         compacting: None,
+        group_compaction: None,
+        context_blocks: HashMap::new(),
+        context_attempts: HashMap::new(),
+        context_usage_at: HashMap::new(),
         raw_prompt: false,
         handoff: None,
         compaction_notice: None,
@@ -258,7 +266,9 @@ struct Actor {
     lane: Lane,
     /// The session the current turn prompts.
     turn_session: Option<String>,
-    active_group: Option<GroupTurn>,
+    active_delivery: Option<delivery::ActiveDelivery>,
+    pending_completion: Option<delivery::PendingCompletion>,
+    pending_new_session: Option<bool>,
     active_routine: Option<String>,
     routine_deadline: Option<Instant>,
     routine_timed_out: bool,
@@ -270,6 +280,11 @@ struct Actor {
     profile_resend: HashSet<String>,
     /// The running turn is a compaction the host started (`Some(true)` while the user is away).
     compacting: Option<bool>,
+    group_compaction: Option<group_context::Maintenance>,
+    context_blocks: HashMap<String, group_context::Blocked>,
+    /// 维护元数据写失败仍记住本次结果，防止同一存储故障引起重复整理。
+    context_attempts: HashMap<String, group_context::Attempt>,
+    context_usage_at: HashMap<String, i64>,
     /// The next prompt goes as it is: a command such as `/compact`, with nothing put before or after it.
     raw_prompt: bool,
     /// What the next prompt carries from the conversation it starts over from.
@@ -354,7 +369,7 @@ struct RoutineCompletion {
 type Done = Result<Value>;
 
 impl Actor {
-    /// 收齐回合更新并先记录本次实报用量，再决定完成或回退，避免漏记失败尝试。
+    /// 收齐回合更新并记录实报用量，再完成执行或受控回退；群整理不走业务回退链。
     async fn on_turn_done(&mut self, done: Done, done_tx: &mpsc::UnboundedSender<Done>) {
         // Updates sent before the prompt response are already queued; apply them first.
         while let Some(inc) = self.conn.as_mut().and_then(|c| c.rx.try_recv().ok()) {
@@ -365,7 +380,9 @@ impl Actor {
             }
         }
         self.record_usage(&done);
-        if let Err(error) = &done
+        // 整理失败只结束维护，不能按业务回退链把 /compact 发给另一模型执行。
+        if self.group_compaction.is_none()
+            && let Err(error) = &done
             && self.fall_back(error, done_tx).await
         {
             return;
@@ -378,10 +395,12 @@ impl Actor {
             Some(sid) if failed => self.close_reopenable(&sid).await,
             _ => {}
         }
+        self.apply_pending_session();
+        crate::chat::group::wake(&self.hub, Some(&self.cfg.id));
         self.next_in_queue(done_tx).await;
     }
 
-    /// 运行 bot actor；只恢复既有允许恢复的回合，退出时保留取消尝试的未知用量。
+    /// 串行处理成员命令、执行更新与持久投递恢复；退出时记录取消尝试的未知用量。
     async fn run(mut self, mut rx: mpsc::UnboundedReceiver<Cmd>, interrupted: Option<Lane>) {
         let (done_tx, mut done_rx) = mpsc::unbounded_channel::<Done>();
         let mut flush_tick = tokio::time::interval(Duration::from_millis(300));
@@ -392,6 +411,7 @@ impl Actor {
         } else if let Some(lane) = interrupted {
             self.resume_interrupted(lane, &done_tx).await;
         }
+        let mut delivery_ticks = 0u8;
         loop {
             tokio::select! {
                 cmd = rx.recv() => {
@@ -418,6 +438,13 @@ impl Actor {
                         self.cancel_deadline = None;
                         if let Some(c) = self.conn.take() { c.acp.kill().await; }
                     }
+                    // 周期补查保证丢失的提交后通知和启动窗口不会遗失 queued 投递。
+                    delivery_ticks=(delivery_ticks+1)%10;
+                    if delivery_ticks==0 {crate::chat::group::wake(&self.hub,None);}
+                    // 超时仅结束维护，投递仍保持排队。
+                    self.expire_group_compaction().await;
+                    self.retry_delivery_save(false);
+                    self.apply_pending_session();
                     self.release_idle().await;
                     // The idle check may have queued a compaction.
                     if self.turn.is_none() && !self.queue.is_empty() {
@@ -431,7 +458,7 @@ impl Actor {
         self.stop_requested = true;
         self.record_usage(&Err(anyhow!("shutdown")));
         self.complete_request(Err(anyhow!("recipient shut down")), true, None);
-        self.complete_group(Err(anyhow!("bot shut down")));
+        self.finish_delivery(crate::store::deliveries::Status::Interrupted, None, Some("bot shut down".into()));
         if let Some(c) = self.conn.take() {
             c.acp.kill().await;
         }

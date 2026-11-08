@@ -334,3 +334,46 @@ async fn a_process_with_a_replaced_sign_in_starts_again_before_asking_to_sign_in
     assert_eq!(card["data"]["connectionRequest"]["entryIds"].as_array().map(Vec::len), Some(1), "{card}");
     assert_eq!(prompts(), 5, "tried once more on a new process, then no more");
 }
+
+/// 失败模型的片段只能留在 trace；fallback 无正文成功应显示 noReply，不能误派生旧内容。
+#[tokio::test]
+async fn group_fallback_without_text_does_not_complete_the_failed_attempt_output() {
+    let host = Host::start().await;
+    let bot = host
+        .call(
+            "createBot",
+            json!({"name":"Relay", "backend":"custom", "command":agent("primary"), "connectors":[],"notify":false}),
+        )
+        .await["bot"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    host.call("updateBot", json!({"id":bot,"fallbacks":[{"backend":"codex","command":agent("standin")}]})).await;
+    let other = host
+        .call(
+            "createBot",
+            json!({"name":"Peer","backend":"custom","command":agent("peer"),"connectors":[],"notify":false}),
+        )
+        .await["bot"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let group =
+        host.call("createBot", json!({"name":"Fallback room","kind":"group","members":[bot,other]})).await["bot"]["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+    let folder = host.home.join("bots").join(&bot).join("workspace");
+    std::fs::write(folder.join("primary.limit"), "").unwrap();
+    std::fs::write(folder.join("standin.quiet"), "").unwrap();
+    host.call("send", json!({"botId":group,"text":"@Relay work"})).await;
+    let card =
+        wait_for(&host, &group, "fallback noReply", |e| e["data"]["deliveryRows"][0]["status"] == "noReply").await;
+    assert_eq!(card["data"]["deliveryRows"][0]["status"], "noReply");
+    let history = host.call("history", json!({"botId":group})).await;
+    assert!(
+        !history["entries"].as_array().unwrap().iter().any(|e| e["kind"] == "agent" && e["data"]["final"] == true),
+        "{history}"
+    );
+    assert!(host.log(&bot, "standin.jsonl").iter().any(|r| r["method"] == "session/prompt"));
+}

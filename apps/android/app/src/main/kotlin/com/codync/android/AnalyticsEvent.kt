@@ -93,6 +93,10 @@ internal sealed class AnalyticsEvent(val name: String) {
     data class ScreenViewed(val screen: AnalyticsScreen) : AnalyticsEvent("screen_viewed") {
         override val properties get() = mapOf("screen" to screen.json)
     }
+    /** 草稿图片预览结果，只有固定类别，不包含文件名或图片。 */
+    data class AttachmentPreview(val decoded: Boolean) : AnalyticsEvent("attachment_preview") {
+        override val properties get() = mapOf("outcome" to JsonPrimitive(if (decoded) "opened" else "decode_failed"))
+    }
     /** A dev server opened, or its address copied; the host reports what it does itself. */
     data class DevServerAction(val use: DevServerUse) : AnalyticsEvent("dev_server_action") {
         override val properties get() = mapOf("action" to use.json)

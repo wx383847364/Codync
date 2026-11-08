@@ -6,6 +6,30 @@
 - **Group chats and replies** are host features every client drives through the same methods (`send` with `replyTo`, `createBot {kind: group}`); clients never route, parse mentions or build quotes themselves. A group is a roster row whose members answer in their own sessions (Grok Bot's room turns); a reply stays in its chat and session, its quote read before its text: [docs/features/groups-and-replies.md](../features/groups-and-replies.md).
 - **A session that fails** with an internal error its agent gives no category (JSON-RPC `-32603` without `data.errorKind`) is closed right after the turn, when the agent can close and reopen sessions: Claude's adapter otherwise answers every later prompt on it with "The Claude Agent session has ended". The next message reopens it and the conversation carries on (`acp::may_end_session`).
 - **Lead bot**: the host makes the first one per computer (`chat/lead.rs`), and the user may pick another (`setLead`) or delete it; on top of every roster, never hidden; its instructions ask for initiative, the *Check in* routine made with the first runs twice a day, and it opens a call with a turn of its own (`Cmd::Prompt`, no user message): [docs/features/lead-bot.md](../features/lead-bot.md).
-- Bot collaboration: built-in `team` MCP (`chat/team.rs`) lists visible bots and sends one a request through its actor queue (`message_bot`); nothing waits, and the reply comes back to the sender as a turn of its own in its main chat. Requests and replies are separate turns, bounded by the chain's hop count; native subagents stay with the harness. See [docs/features/bot-collaboration.md](../features/bot-collaboration.md).
+- Bot collaboration: built-in `team` MCP (`chat/team.rs`) lists visible bots and sends one a request through its actor queue (`message_bot`); private-chat requests return immediately, and their reply comes back to the sender as a turn of its own in its main chat. Requests and replies are separate turns, bounded by the chain's hop count; native subagents stay with the harness. See [docs/features/bot-collaboration.md](../features/bot-collaboration.md).
 - **Context & memory**: frozen instruction snapshot per session + compaction epoch (Claude gets it as a system prompt), profile edits as update blocks, memory in the host (a layer shared by all bots and one per bot, written by the user, the bots' tools and dreaming), busy-time messages folded into one turn or steered into the running one, interrupted turns resumed: [docs/features/context-and-memory.md](../features/context-and-memory.md).
 - **Chat shows only**: user messages, the bot's messages (`data.final`: each `send_message` call from the built-in `chat` MCP, Grok Bot's way, also between turns from work the agent goes on with in the background, into the bot's own chat with a *done* alert, unless the user stopped its last turn; a turn that sent none falls back to its last text, unless it reacted to the user's message instead or passed), permission cards, notices. Nothing streams into a bubble; narration, thoughts, tool calls, plans are trace entries (Full conversation sheet; with [Show thinking details](../features/chat-messages.md#while-it-works) on (Settings › Chat), the live activity also unfolds the running turn's steps, without the bot's `bookkeeping` tool calls): [docs/features/chat-messages.md](../features/chat-messages.md).
+
+## Durable group execution
+
+Group dispatch uses `store/deliveries`, `chat/group` and `agent/bot/delivery`. The room
+runner is the only selector; actors claim specified IDs and commit `started` before
+prompt send. `active_delivery` marks memory, tools, lane, analytics, cancellation and
+cleanup branches. Group deliveries do not use private-chat inflight recovery. Both
+kinds wait; timeout does not cancel or terminate them. Finalization saves reply, state
+and derived deliveries in one transaction under the Hub's publication lock. Storage
+errors retain output per actor, are DB-independent runtime events on every reconnect,
+and block claims until bounded automatic retries or manual save succeeds. `sweep` and
+`resume` have no dispatch role. Group rounds, reply totals and handoff depth are tracing
+metadata, never completion conditions. Members explicitly hand the result or a blocking
+question to the user; host idle means no runnable work, not a semantic completion verdict. See [groups and replies](../features/groups-and-replies.md).
+
+Group input is assembled from a transactional protected snapshot (`store/group_context`)
+and bounded sourced background (`chat/group/context`), with a delivery-bound, revalidated
+paged history reader. Full task/user originals, stable mention identities and open plan
+entries survive background budgeting. Group context maintenance (`agent/bot/group_context`)
+runs before claim in the existing actor/session, marked `team::Turn::Maintenance` until
+completion including Stop grace. It filters streamed content and denies built-in and
+configured connector tool calls; private summaries never enter group entries. Reported
+usage is distinct from prompt estimates. Inadequate known space blocks only the queued
+request with an actionable notice; it never terminalizes work or replays started work.

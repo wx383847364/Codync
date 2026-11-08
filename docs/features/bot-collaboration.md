@@ -8,6 +8,22 @@ Every bot receives the built-in `team` MCP server. `list_bots` returns the other
 
 The host records each exchange as one notice in both chats. Every client shows it as a compact row (centered in the apps, one ` · ` line in the terminal UI), "Messaged [avatar] Owen" in the sender's chat and "Message from [avatar] Egan" in the recipient's, with no request text. In a chat a run of consecutive exchanges with the same peer, in either direction, is one row, "3 messages with [avatar] Owen"; anything else the chat shows (a message, another notice, a card, an exchange with another peer) ends the run, trace entries do not, and the run is marked failed if any exchange failed. Only a failure is marked (danger color and a warning mark). Tapping the row opens a read-only "Egan ⇄ Owen" conversation sheet with the pair's whole history: author-labelled grey bubbles for each request and reply, time separators, "Waiting for Owen…" or the failure detail under a pending or failed exchange. It is laid out like the Full conversation sheet, with the pair as its title and an X to close. Tool details also remain in the trace. There is no additional team setup screen; a lead bot can set up the team itself (see Team management).
 
+## Requests from a group
+
+`message_bot(botId, message, idempotencyKey?)` uses the actor's trusted room and execution
+context to create a durable `task`. The tool returns queued immediately to its caller,
+while the single room runner waits for the recipient's result (ten-minute wait limit,
+execution continues after timeout). Target membership is checked at admission, claim and
+before sending. Hidden members of that room are eligible. Results stay in that group.
+
+An optional key is scoped to source member, room and target. Same key and exact body
+returns the original request and current status before checking capacity; a different
+body is a conflict. No key promises no cross-connection deduplication. Capacity checking
+and insertion are atomic (64 pending globally, 16 per sender). Two tool calls without a
+key remain two tasks, even to the same target. A final textual @ to a target already
+assigned by this execution is display-only. Round and chain depth propagate across
+text/tool transitions for tracing, without a group handoff cutoff. Group work continues until a result is delivered to the user or their input is needed. The eight-hop cutoff described for private-chat request chains is separate and unchanged.
+
 ## Bots on other computers
 
 When this computer is in a network with the user's other computers, `list_bots` also lists their bots (ids
@@ -167,7 +183,7 @@ delivered byte counts alone do not establish token or cost savings. No automatic
 - The reply then reaches the sender's queue as a turn of its own in its main chat (`[Codync: Owen replied to your message_bot request <id> ("<request>").]`, quoting the first 1,000 bytes of the request, since the session taking the reply, the main one, may not be the one that sent it: a routine run's, or one replaced by a new session). Replies that arrive while the sender is busy are taken together in one turn. That turn's final reply is an ordinary message to you, with the usual "done" push; the request turn itself sends no push. A failed request comes back the same way (`couldn't finish …`), so the sender can tell you.
 - A reply turn isn't the user speaking: memory doesn't take it as your words. If the sender wants another bot to have the answer, it messages that bot.
 - The recipient uses its own folder, tools, memory and permission policy. Permission cards appear in its chat. The sender's transcript is not copied; only the request is passed. Requests are not treated as user facts by the memory keeper.
-- In a group room turn `message_bot` is refused: the reply would land in the member's own chat, away from the room. Members @-mention each other there instead ([groups](groups-and-replies.md#how-a-group-answers-hostsrcchatgrouprs-grok-bots-design)).
+- In a group delivery turn, `message_bot` accepts another current member and saves the result in the source group. Text `@` assigns a conversational answer; tool tasks retain their exact body and optional scoped idempotency key. See [groups](groups-and-replies.md).
 - Native Claude Code/Codex subagents remain managed by the harness. Codync does not turn them into permanent bots or override their delegation settings.
 
 The team tools add no task scheduler or isolated worktrees. Give bots explicit file ownership when they share a working directory.
@@ -217,3 +233,11 @@ A bot made this way records its creator (`createdBy`, next to `createdAt`); clie
 - `host/src/chat/manage.rs` (+ `Cmd::Approve` in `agent/bot/updates.rs`): team management; `host/tests/manage_e2e.rs` walks an allowed `create_bot`, a denied `update_bot`, and cards that end when the turn stops or the agent cancels the call, through the real `manage` MCP process.
 
 Run `cargo test` and `cargo clippy --all-targets -- -D warnings` in `host/`.
+
+Group context uses complete task/user originals and saved open plans plus bounded sourced
+progress, rather than copying all room history into every request. The current delivery
+ID scopes `search_history` exact reads to the source room; older details remain available
+without exposing private chats. Native same-session context maintenance can run between
+saved results and the next claim. It has no work tools or final reply and does not spend
+a collaboration round. Background and maintenance budgets never cancel accepted work.
+See [group input and recovery](groups-and-replies.md#how-a-group-answers-hostsrcchatgrouprs).

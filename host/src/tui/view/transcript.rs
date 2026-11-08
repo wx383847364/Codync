@@ -139,6 +139,8 @@ fn intro(out: &mut Built, app: &App, b: &Bot, width: usize) {
 }
 
 /// One chat entry.
+/// 按消息类型生成终端内容，投递卡按来源事件和 attempt 显示。
+/// 按消息类型渲染聊天内容；派工卡只在显式展开后显示投递详情，原文只出现在来源消息。
 fn entry_lines(out: &mut Built, app: &App, b: &Bot, e: &Entry, info: &HashMap<i64, TurnInfo>, width: usize) {
     let t = theme();
     // In a group each reply is its author's; elsewhere the bot's own.
@@ -251,7 +253,10 @@ fn entry_lines(out: &mut Built, app: &App, b: &Bot, e: &Entry, info: &HashMap<i6
                 bot_message_line(out, app, e, (x.peer(), x.peer_name.as_deref()), &lead, failed, from);
                 return;
             }
-            let text = if let Some(status) = e.data["connectionRequest"]["status"].as_str() {
+            // 派工卡只显示一行摘要；正文属于原消息，不进入折叠详情。
+            let text = if e.data["deliveryRows"].is_array() {
+                format!("{} · o {}详情", e.notice_text(), if app.unfolded.contains(&e.id) { "收起" } else { "展开" })
+            } else if let Some(status) = e.data["connectionRequest"]["status"].as_str() {
                 let hint = if e.data["connectionRequest"]["kind"] == "agent" { "C signs in" } else { "C connects" };
                 format!(
                     "{} · {} · {}",
@@ -279,23 +284,56 @@ fn entry_lines(out: &mut Built, app: &App, b: &Bot, e: &Entry, info: &HashMap<i6
                 e.notice_text()
             };
             gap(out);
-            match e.data["style"].as_str() {
-                Some("error") => out.lines.extend(md::wrap(
-                    &[Span::styled(text, t.red)],
-                    width,
-                    &[Span::styled(" × ", t.red)],
-                    &[Span::raw("   ")],
-                )),
-                _ => out.lines.extend(md::wrap(
-                    &[Span::styled(text, t.dim)],
-                    width,
-                    &[Span::styled(" · ", t.dim)],
-                    &[Span::raw("   ")],
-                )),
+            // 窄终端也只占一行，完整成员状态仍可用 o 展开查看。
+            if e.data["deliveryRows"].is_array() {
+                let (prefix, style) = if e.data["style"] == "error" { (" × ", t.red) } else { (" · ", t.dim) };
+                out.lines.push(Line::from(Span::styled(truncate(&format!("{prefix}{text}"), width), style)));
+            } else {
+                match e.data["style"].as_str() {
+                    Some("error") => out.lines.extend(md::wrap(
+                        &[Span::styled(text, t.red)],
+                        width,
+                        &[Span::styled(" × ", t.red)],
+                        &[Span::raw("   ")],
+                    )),
+                    _ => out.lines.extend(md::wrap(
+                        &[Span::styled(text, t.dim)],
+                        width,
+                        &[Span::styled(" · ", t.dim)],
+                        &[Span::raw("   ")],
+                    )),
+                }
             }
             let folded = unfoldable(e);
             if app.unfolded.contains(&e.id) {
-                let full = folded.map_or_else(|| call_lines(app, b, e), |f| vec![f.to_owned()]);
+                let full = if let Some(rows) = e.data["deliveryRows"].as_array() {
+                    let mut details = vec![format!(
+                        "第 {} 次投递{}",
+                        e.data["deliveryAttempt"].as_i64().unwrap_or(1),
+                        if e.data["parentDeliveryId"].is_string() { " · 重试投递" } else { "" }
+                    )];
+                    for row in rows {
+                        let reason = row["detail"]
+                            .as_str()
+                            .filter(|text| !text.is_empty())
+                            .map(|text| format!(" · {text}"))
+                            .unwrap_or_default();
+                        details.push(format!(
+                            "{}：{}{reason}",
+                            app.author_name(row["targetBotId"].as_str()),
+                            Entry::delivery_status(row["status"].as_str().unwrap_or_default())
+                        ));
+                    }
+                    if rows
+                        .iter()
+                        .any(|row| matches!(row["status"].as_str(), Some("failed" | "interrupted" | "noReply")))
+                    {
+                        details.push("F 重试失败的派工".into());
+                    }
+                    details
+                } else {
+                    folded.map_or_else(|| call_lines(app, b, e), |f| vec![f.to_owned()])
+                };
                 for text in full {
                     out.lines.extend(md::wrap(
                         &[Span::styled(text, t.dim)],

@@ -14,12 +14,26 @@ import kotlinx.serialization.json.*
 
 // Composer drafts (saved as you type) and the files that go with them.
 
-fun AppStore.editDraft(botId: String, text: String) {
+/** 编辑草稿时同步维护身份，避免离线或重试按名字重新派发。 */
+fun AppStore.editDraft(botId: String, text: String, replacement: IntRange? = null) {
     if (state.value.loading) return
     val current = state.value.drafts[botId]
     if (current?.text == text || current == null && text.isEmpty()) return
-    try { updateDraft((current ?: ComposerDraft(botId)).copy(text = text)) }
+    try { updateDraft((current ?: ComposerDraft(botId)).copy(text = text, mentions = editMentions(current?.text.orEmpty(), text, current?.mentions.orEmpty(), replacement))) }
     catch (error: Exception) { showError(error) }
+}
+
+/** 原文和选人身份在同一份草稿快照中保存。 */
+fun AppStore.bindMention(key: String, text: String, mention: Mention) {
+    editDraft(key, text)
+    val current = state.value.drafts[key] ?: return
+    updateDraft(current.copy(mentions = current.mentions.filterNot { it.start < mention.end && it.end > mention.start } + mention))
+}
+
+/** host 拒发后恢复原目标草稿，不覆盖随后输入的新内容。 */
+internal fun AppStore.restoreFailedDraft(send: PendingSend) {
+    val key = send.draftKey ?: send.botId
+    if (state.value.drafts[key]?.text.isNullOrEmpty()) updateDraft(ComposerDraft(key, send.text, send.files, send.mentions, send.nonce))
 }
 
 /** Puts [text] after what's in [botId]'s message box (text shared from another app), as much of it as the box holds. */
@@ -48,9 +62,13 @@ fun AppStore.removeDraftFile(botId: String, file: OutgoingFile) = action("draft-
     if (state.value.pending.none { send -> send.files.any { it.path == file.path } }) withContext(Dispatchers.IO) { attachments.discard(file) }
 }
 
+/** 修改已尝试发送的正文、附件或身份属于新意图，不能复用旧请求的幂等 nonce。 */
 private fun AppStore.updateDraft(draft: ComposerDraft) {
     val book = draftBook ?: return
-    val drafts = if (draft.text.isEmpty() && draft.files.isEmpty()) state.value.drafts - draft.botId else state.value.drafts + (draft.botId to draft)
+    val previous = state.value.drafts[draft.botId]
+    val represented = state.value.pending.any { it.nonce == draft.nonce } || state.value.entries.any { it.clientNonce == draft.nonce }
+    val saving = draft.forSaving(previous, represented)
+    val drafts = if (saving.text.isEmpty() && saving.files.isEmpty()) state.value.drafts - saving.botId else state.value.drafts + (saving.botId to saving)
     book.validate(drafts.values, checkPaths = false)
     mutableState.update { it.copy(drafts = drafts) }
     persistDrafts()
@@ -74,6 +92,7 @@ internal fun AppStore.persistDrafts() {
 }
 
 /** Sends draft `key` (the chat's, or one of its artifacts') to chat `botId`, quoting `replyTo` when there is one. */
+/** 先持久化草稿和 nonce，再写待发送记录，身份随同一快照传递。 */
 fun AppStore.sendDraft(key: String, botId: String, text: String, replyTo: ReplyQuote?, onQueued: () -> Unit) {
     editDraft(key, text)
     val draft = state.value.drafts[key] ?: return
@@ -85,7 +104,7 @@ fun AppStore.sendDraft(key: String, botId: String, text: String, replyTo: ReplyQ
         persistDrafts()
         draftWriter?.join()
         check(savedDrafts[key] == draft) { "Couldn't save this draft. Retry to send it." }
-        val send = PendingSend(draft.nonce, botId, draft.text.trim(), System.currentTimeMillis(), files = draft.files, replyTo = replyTo)
+        val send = PendingSend(draft.nonce, botId, draft.text, System.currentTimeMillis(), files = draft.files, replyTo = replyTo, mentions = draft.mentions, draftKey = key)
         lastSentNonce = send.nonce
         savePending(send)
         mutableState.update { it.copy(drafts = it.drafts - key) }
@@ -120,13 +139,13 @@ suspend fun AppStore.sharedImage(entryId: String, file: SharedFile): File = cach
     withContext(Dispatchers.IO) { try { saved.copyTo(destination, overwrite = true) } finally { folder.deleteRecursively() } }
 }
 
-/** A file from the computer, fetched once into the attachment cache by `fetch`. */
+/** 缓存来自电脑的文件；回收其他旧副本时保留当前文件，允许大附件突破缓存软额度。 */
 private suspend fun AppStore.cachedFile(id: String, size: Long, fetch: suspend (HostFiles, File) -> Unit): File {
     val request = contextScope.async { downloadLocks.getOrPut(id) { Mutex() }.withLock {
     val destination = withContext(Dispatchers.IO) { attachments.cached(id) }
     if (!destination.exists() || destination.length() != size) {
         fetch(HostFiles(ready()), destination)
-        withContext(Dispatchers.IO) { attachments.trim() }
+        withContext(Dispatchers.IO) { AttachmentFiles.trim(destination) }
     }
     destination
     } }

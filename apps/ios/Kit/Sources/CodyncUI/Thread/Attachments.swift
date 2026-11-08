@@ -137,10 +137,16 @@ struct AttachmentList: View {
     }
 }
 
-/// A picture full size: a sent image or one a bot shared.
+/// 大图面板复用已发送、bot 分享及本地草稿的图片读取方式。
 struct AttachmentViewer: View {
     let name: String
     let image: AttachmentImage
+
+    /// 本地草稿无需上传即可预览，图片解码沿用统一的尺寸约束。
+    init(local file: OutgoingFile) {
+        name = file.name
+        image = AttachmentImage(local: file, maxPixels: 4096)
+    }
 
     init(file: Attachment, botId: String) {
         name = file.name
@@ -171,6 +177,13 @@ struct AttachmentImage: View {
     let load: @MainActor (BotStore) async -> Data?
     @Environment(BotStore.self) private var model
     @State private var image: CGImage?
+
+    /// 直接读取尚未发送的草稿数据，不产生网络调用或改变草稿。
+    init(local file: OutgoingFile, maxPixels: Int) {
+        id = file.id.uuidString
+        self.maxPixels = maxPixels
+        load = { _ in file.data }
+    }
 
     init(file: Attachment, botId: String, maxPixels: Int, contentMode: ContentMode = .fit) {
         id = file.id

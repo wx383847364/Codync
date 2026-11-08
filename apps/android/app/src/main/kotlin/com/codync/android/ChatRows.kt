@@ -119,6 +119,7 @@ internal fun chatItems(entries: List<Entry>, pending: List<PendingSend>, busy: B
 
 /** One chat-visible entry, with what can be done to it. `reply` quotes it in the composer; `addFallback` opens a bot's fallbacks;
  *  `openArtifact` opens an artifact card's artifact. */
+/** 呈现群投递聚合卡和原有聊天消息，重试使用投递身份。 */
 @Composable internal fun ChatRow(entry: Entry, groupStart: Boolean, chat: Bot?, state: AppState, store: AppStore,
     openTrace: () -> Unit, reply: (() -> Unit)?, connect: ConnectionRequestActions, addFallback: (Bot) -> Unit, openArtifact: (OpenArtifact) -> Unit) {
     val group = chat?.kind == "group"
@@ -145,7 +146,8 @@ internal fun chatItems(entries: List<Entry>, pending: List<PendingSend>, busy: B
         } else if (entry.data["handoff"] is JsonObject) Box(Modifier.padding(top = 10.dp)) {
             // A fresh conversation starts at the left, as on the iPhone.
             HandoffCardRow(entry, entry.data["handoff"] as JsonObject, state, store)
-        } else Box(Modifier.padding(top = 10.dp)) {
+        } else if (entry.data["deliveryRows"] is JsonArray) DeliveryNotice(entry, state, store)
+        else Box(Modifier.padding(top = 10.dp)) {
             // In a group, the member whose agent failed.
             val owner = state.bots.firstOrNull { it.id == (entry.data.text("author") ?: entry.botId) && it.kind != "group" }
             NoticeRow(entry, owner?.let { { addFallback(it) } })

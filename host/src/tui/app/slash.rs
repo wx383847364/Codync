@@ -13,6 +13,8 @@ pub enum SlashAction {
     Fast,
     DevServers,
     Skill,
+    Mention,
+    Session,
 }
 
 /// A command the list offers.
@@ -26,11 +28,15 @@ pub struct SlashCommand {
 
 impl SlashCommand {
     /// The row's text after `/name`.
+    /// 描述命令的用户行为，包含群成员选择和会话切换选项。
     pub fn about(&self) -> String {
         match self.action {
+            SlashAction::Mention => self.detail.clone(),
             SlashAction::Skill if self.detail.is_empty() => self.title.clone(),
             SlashAction::Skill => self.detail.replace('\n', " "),
-            SlashAction::Fast | SlashAction::DevServers => format!("{} · {}", self.title, self.detail),
+            SlashAction::Fast | SlashAction::DevServers | SlashAction::Session => {
+                format!("{} · {}", self.title, self.detail)
+            }
         }
     }
 }
@@ -72,9 +78,40 @@ impl App {
 
     /// Built-in commands, then the skills the bot (or any member of a group) has on, whose name
     /// or title holds the `/partial` being typed.
+    /// 按来源列出适用命令，群成员选择与会话操作保持四端一致。
     pub fn slash_commands(&self) -> Vec<SlashCommand> {
         let draft = self.draft();
+        if let Some((start, end)) = self.mention_query() {
+            let query = draft.text[start + 1..end].to_lowercase();
+            return self
+                .reached()
+                .into_iter()
+                .filter(|bot| bot.name.to_lowercase().contains(&query))
+                .map(|bot| SlashCommand {
+                    name: bot.id.clone(),
+                    title: bot.name.clone(),
+                    detail: bot.id.chars().take(8).collect(),
+                    action: SlashAction::Mention,
+                })
+                .collect();
+        }
         let Some((query, None)) = crate::market::slash_command(&draft.text) else { return vec![] };
+        if query.starts_with("new") && self.bot().is_some_and(|b| !b.group) {
+            return [
+                ("new", "after", "在当前任务结束后新建会话"),
+                ("new-now", "immediate", "立即停止并新建"),
+                ("new-cancel", "cancel", "取消切换"),
+            ]
+            .into_iter()
+            .filter(|(name, _, _)| name.contains(query))
+            .map(|(name, mode, title)| SlashCommand {
+                name: name.into(),
+                title: title.into(),
+                detail: mode.into(),
+                action: SlashAction::Session,
+            })
+            .collect();
+        }
         let query = query.to_lowercase();
         let bots = self.reached();
         let skills = self.plugins.1.iter().filter_map(|s| {
@@ -101,6 +138,7 @@ impl App {
 
     /// Keys while the list is up: ↑/↓ move, Tab or Return runs the highlighted command (Return
     /// sends a skill whose name is already typed out). Returns whether it took the key.
+    /// 以键盘操作候选列表，插入成员后保留光标前后正文。
     pub(super) fn slash_key(&mut self, k: KeyEvent) -> bool {
         if !k.modifiers.is_empty() {
             return false;
@@ -112,7 +150,13 @@ impl App {
         match k.code {
             KeyCode::Down => self.slash_pick = (typed, (sel + 1) % n),
             KeyCode::Up => self.slash_pick = (typed, (sel + n - 1) % n),
+            KeyCode::Esc if commands[sel].action == SlashAction::Mention => {
+                self.mention_dismissed = Some((typed, self.draft().cursor));
+            }
             KeyCode::Tab | KeyCode::Enter => {
+                if k.kind == crossterm::event::KeyEventKind::Repeat {
+                    return true;
+                }
                 let picked = &commands[sel];
                 if k.code == KeyCode::Enter && picked.action == SlashAction::Skill && typed[1..] == picked.name {
                     return false;
@@ -133,8 +177,53 @@ impl App {
         true
     }
 
+    /// 光标处的查询；Esc 只关闭当前片段，文本或光标变化后重新出现。
+    fn mention_query(&self) -> Option<(usize, usize)> {
+        if !self.bot()?.group {
+            return None;
+        }
+        let draft = self.draft();
+        if self.mention_dismissed.as_ref() == Some(&(draft.text.clone(), draft.cursor)) {
+            return None;
+        }
+        let end = draft.cursor;
+        let at = draft.text[..end].rfind('@')?;
+        if at > 0 && !draft.text[..at].chars().next_back()?.is_whitespace() {
+            return None;
+        }
+        let query = &draft.text[at + 1..end];
+        (!query.contains('\n') && query.encode_utf16().count() <= 24).then_some((at, end))
+    }
+
+    /// 执行所选命令，群操作逐成员发送可信 host 意图。
     fn run_slash(&mut self, command: &SlashCommand) {
+        if command.action == SlashAction::Session {
+            if let Some(bot) = &self.selected {
+                self.call("newSession", json!({"botId":bot,"mode":command.detail}), After::Nothing);
+            }
+            if let Some(bot) = &self.selected {
+                self.drafts.entry(bot.clone()).or_default().clear();
+            }
+            return;
+        }
+        if command.action == SlashAction::Mention {
+            if let Some((start, end)) = self.mention_query()
+                && let Some(key) = self.selected.clone()
+            {
+                let draft = self.drafts.entry(key).or_default();
+                let before = draft.text[..start].encode_utf16().count();
+                let token = format!("@{}", command.title);
+                draft.replace_range(start, end, &format!("{token} "));
+                draft.mentions.push(crate::chat::mentions::Mention {
+                    bot_id: command.name.clone(),
+                    start: before,
+                    end: before + token.encode_utf16().count(),
+                });
+            }
+            return;
+        }
         let fill = match command.action {
+            SlashAction::Session | SlashAction::Mention => unreachable!("handled above"),
             // Each bot's own setting, so it holds in its own chat too.
             SlashAction::Fast => {
                 let bots = self.fast_bots();
@@ -202,13 +291,14 @@ mod tests {
     }
 
     #[tokio::test]
+    /// 只在对应前缀列出新增会话选项，原内置和技能排序保持一致。
     async fn the_list_offers_built_in_commands_then_the_bots_skills() {
         let mut app =
             app_with(&json!({"id": "b", "name": "Bot", "skills": ["pdf", "docx"], "fastModeSupport": "offered"}));
         app.drafts.insert("b".into(), super::Editor::with("/"));
         assert_eq!(names(&app), ["fast", "pdf", "docx"], "only skills the bot has on");
         app.drafts.insert("b".into(), super::Editor::with("/new"));
-        assert!(names(&app).is_empty(), "no command for a new session");
+        assert_eq!(names(&app), ["new", "new-now", "new-cancel"], "new session defaults to waiting");
         app.bots.get_mut("b").expect("the bot").fast_support = "unknown".into();
         app.drafts.insert("b".into(), super::Editor::with("/"));
         assert_eq!(names(&app), ["fast", "pdf", "docx"], "offered until the agent says otherwise");

@@ -12,8 +12,30 @@ use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 
 impl Actor {
+    /// 根据持久投递身份处理取消与会话操作，旧通知不得取消新的群执行。
     pub(super) async fn on_cmd(&mut self, cmd: Cmd, done_tx: &mpsc::UnboundedSender<Done>) -> bool {
+        let Some(cmd) = self.maintenance_command(cmd) else { return true };
         match cmd {
+            Cmd::Delivery { id, reply } => self.begin_delivery(id, reply, done_tx).await,
+            Cmd::RetryDeliverySave => {
+                if self.pending_completion.is_none() {
+                    self.hub.delivery_storage_error(&self.cfg.id, None);
+                }
+                self.retry_delivery_save(true);
+                self.apply_pending_session();
+            }
+            Cmd::SessionSwitch { mode } => {
+                if mode == "cancel" {
+                    self.pending_new_session = None;
+                } else {
+                    self.pending_new_session = Some(mode == "immediate");
+                    if mode == "immediate" {
+                        self.cancel_turn().await;
+                    }
+                    self.apply_pending_session();
+                }
+                self.hub.set_runtime(&self.cfg.id, |r| r.pending_new_session = self.pending_new_session.is_some());
+            }
             Cmd::RefreshTools => {
                 self.tools_changed = true;
             }
@@ -22,15 +44,23 @@ impl Actor {
             Cmd::Steer { entry_id } => self.steer(entry_id).await,
             Cmd::Steered { entry_id, outcome } => self.steer_answered(&entry_id, &outcome, done_tx).await,
             Cmd::Unqueue { entry_id } => self.unqueue(&entry_id),
-            Cmd::Group(turn) => {
-                // The room asks again: this turn answers for any still waiting there.
-                self.queue.retain(|q| !matches!(q, Queued::Group(g) if g.lane == turn.lane));
-                self.enqueue(Queued::Group(turn), done_tx).await;
-            }
-            Cmd::CancelGroup { chat } => {
-                // Dropping a queued turn's reply tells the room it won't come.
-                self.queue.retain(|q| !matches!(q, Queued::Group(g) if g.lane.chat == chat));
-                if self.active_group.as_ref().is_some_and(|g| g.lane.chat == chat) {
+            Cmd::CancelGroup { chat, delivery_ids } => {
+                // 取消准确的维护来源，旧队列项不能在 Stop 后再启动。
+                for id in &delivery_ids {
+                    self.context_blocks.remove(id);
+                }
+                self.queue.retain(|q| !matches!(q,Queued::Compact {group:Some(g),..} if g.room==chat && delivery_ids.contains(&g.delivery)));
+                if self.group_compaction.as_ref().is_some_and(|g| g.room == chat && delivery_ids.contains(&g.delivery))
+                {
+                    self.cancel_turn().await;
+                }
+
+                // 取消范围由已提交事务返回，不能仅凭房间名停掉后来开始的投递。
+                if self
+                    .active_delivery
+                    .as_ref()
+                    .is_some_and(|d| d.delivery.room_id == chat && delivery_ids.contains(&d.delivery.id))
+                {
                     self.cancel_turn().await;
                 }
             }
@@ -50,16 +80,6 @@ impl Actor {
             Cmd::Stop => self.stop().await,
             Cmd::Permission { entry_id, option_id } => self.answer_permission(&entry_id, option_id).await,
             Cmd::Approve { title, detail, reply } => self.ask_approval(&title, &detail, reply),
-            Cmd::NewSession => {
-                if self.turn.is_some() {
-                    self.stop().await;
-                }
-                self.forget_session();
-                self.forget_parked();
-                // Retain and summarize completed exchanges even when the user starts afresh. The chat shows no line
-                // for it: the user just confirmed it.
-                let _ = self.dreamer.send(memory::DreamEvent::Flush);
-            }
             Cmd::SwitchBack => self.switch_back().await,
             Cmd::CallEnded { call } => {
                 if self.turn_call.as_ref() == Some(&call) {
@@ -127,8 +147,12 @@ impl Actor {
         }
     }
 
+    /// 停止当前成员执行与私聊队列，其他群的持久 queued 请求仍保留。
     pub(super) async fn stop(&mut self) {
-        self.hub.team.end_turn(&self.cfg.id);
+        if self.group_compaction.is_none() {
+            // 维护的 MCP 禁令保留到进程确认结束或被强杀，避免 Stop 的取消宽限期泄漏工具。
+            self.hub.team.end_turn(&self.cfg.id);
+        }
         if let Err(error) = self.hub.routines.cancel_queued(&self.hub.store, &self.cfg.id) {
             tracing::error!(error = format!("{error:#}"), "couldn't cancel queued routines");
         }
@@ -138,15 +162,11 @@ impl Actor {
         // Queued messages are dropped too: Stop means "stop everything". A room's late turn stays: the room was
         // told this member answers there once free, and only the group's Stop drops it.
         for queued in std::mem::take(&mut self.queue) {
-            match queued {
-                Queued::Group(turn) if turn.late => self.queue.push_back(Queued::Group(turn)),
-                Queued::User { entry_id, .. } => {
-                    if let Some(mut e) = self.hub.store.entry(&entry_id) {
-                        e.data["status"] = "cancelled".into();
-                        self.hub.set_entry(&entry_id, &e.data);
-                    }
-                }
-                _ => {}
+            if let Queued::User { entry_id, .. } = queued
+                && let Some(mut e) = self.hub.store.entry(&entry_id)
+            {
+                e.data["status"] = "cancelled".into();
+                self.hub.set_entry(&entry_id, &e.data);
             }
         }
         self.cancel_turn().await;
@@ -181,12 +201,22 @@ impl Actor {
         self.forget_session();
     }
 
+    /// 保存和会话切换完成后才处理成员队列，投递选择始终由房间负责。
     pub(super) async fn next_in_queue(&mut self, done_tx: &mpsc::UnboundedSender<Done>) {
-        if self.turn.is_none() && std::mem::take(&mut self.restart_after_turn) {
+        if self.turn.is_none()
+            && self.pending_completion.is_none()
+            && self.pending_new_session.is_none()
+            && std::mem::take(&mut self.restart_after_turn)
+        {
             self.restart_agent().await;
         }
         let main = Lane::main(&self.cfg.id);
-        while self.turn.is_none() && self.routine_completion.is_none() && !self.queue.is_empty() {
+        while self.turn.is_none()
+            && self.routine_completion.is_none()
+            && self.pending_completion.is_none()
+            && self.pending_new_session.is_none()
+            && !self.queue.is_empty()
+        {
             match self.queue.front() {
                 Some(Queued::Routine(_)) => {
                     let Some(Queued::Routine(id)) = self.queue.pop_front() else { unreachable!("front is a routine") };
@@ -256,34 +286,15 @@ impl Actor {
                     }
                     continue;
                 }
-                Some(Queued::Group(_)) => {
-                    let Some(Queued::Group(mut turn)) = self.queue.pop_front() else {
-                        unreachable!("front is a group turn")
-                    };
-                    // A newer message in the room (or Stop) ended the room turn that queued this; a late turn
-                    // answers anyway (see `GroupTurn::late`).
-                    if turn.reply.is_closed() || !(turn.late || self.hub.groups.current(&turn.lane, turn.epoch)) {
-                        continue;
-                    }
-                    if turn.late
-                        && let Err(error) = crate::chat::group::refresh(&self.hub, &mut turn, &self.cfg)
-                    {
-                        tracing::warn!(bot = self.cfg.id, error = format!("{error:#}"), "late room turn dropped");
-                        continue;
-                    }
-                    let (lane, prompt) = (turn.lane.clone(), turn.prompt.clone());
-                    self.active_group = Some(turn);
-                    let result = self.start_turn(lane, &[], &prompt, false, done_tx).await;
-                    if let Err(e) = result {
-                        self.start_error(e, done_tx).await;
-                    }
-                    continue;
-                }
                 Some(Queued::Compact { .. }) => {
-                    let Some(Queued::Compact { idle }) = self.queue.pop_front() else {
+                    let Some(Queued::Compact { idle, group }) = self.queue.pop_front() else {
                         unreachable!("front is a compaction")
                     };
-                    self.start_compaction(idle, done_tx).await;
+                    if let Some(group) = group {
+                        self.start_group_compaction(group, done_tx).await;
+                    } else {
+                        self.start_compaction(idle, done_tx).await;
+                    }
                     continue;
                 }
                 _ => {}
@@ -313,7 +324,7 @@ impl Actor {
         }
     }
 
-    /// 启动失败也留下未知用量，且不重放有副作用的委派执行。
+    /// 启动失败记录未知用量并保存投递终态；保存失败时保留来源群和恢复入口。
     pub(super) fn start_failed(&mut self, e: &anyhow::Error) {
         self.record_usage(&Err(anyhow!("start_failed")));
         if self.turn.is_some() {
@@ -321,7 +332,7 @@ impl Actor {
         }
         self.finish_routine(crate::routines::Status::Failed, Some(format!("Could not start routine: {e:#}")), None);
         self.complete_request(Err(anyhow!("couldn't start recipient: {e:#}")), false, None);
-        self.complete_group(Err(anyhow!("couldn't start: {e:#}")));
+        self.finish_delivery(crate::store::deliveries::Status::Failed, None, Some(format!("couldn't start: {e:#}")));
         if !self.invite_sign_in(e) {
             // `{:#}` keeps the reason ("starting `npx …`: EACCES"), not just "agent process exited".
             self.failure_notice(e, &format!("Couldn't start the agent: {e:#}"), "start_failed");
@@ -338,9 +349,11 @@ impl Actor {
         }
         self.hub.set_runtime(&self.id(), |r| {
             r.status = BotStatus::Error;
-            r.activity = "Couldn't start".into();
+            r.activity = r.storage_error.clone().unwrap_or_else(|| "Couldn't start".into());
             r.started_at = None;
-            r.lane = None;
+            if r.storage_error.is_none() {
+                r.lane = None;
+            }
             r.message = None;
             r.session = None;
         });
@@ -399,12 +412,6 @@ impl Actor {
     ) {
         if let Some(request) = self.active_request.take() {
             request.complete(result, cancelled, entry);
-        }
-    }
-
-    pub(super) fn complete_group(&mut self, result: Result<Option<String>>) {
-        if let Some(turn) = self.active_group.take() {
-            let _ = turn.reply.send(result);
         }
     }
 

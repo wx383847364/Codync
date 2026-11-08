@@ -16,7 +16,7 @@ impl Actor {
         format!("compaction.{}.{session}", self.cfg.id)
     }
 
-    fn conversation(&self, session: &str) -> Conversation {
+    pub(super) fn conversation(&self, session: &str) -> Conversation {
         self.hub
             .store
             .kv_get(&self.conversation_key(session))
@@ -54,9 +54,10 @@ impl Actor {
 
     /// The bot's own chat, not a room, a routine or another bot's request: the conversation the user comes
     /// back to, and the only one compacted ahead of time.
+    /// 仅用户主会话允许压缩策略，群投递保持完整来源。
     fn in_main_chat(&self) -> bool {
         self.lane.chat == self.cfg.id
-            && self.active_group.is_none()
+            && self.active_delivery.is_none()
             && self.active_routine.is_none()
             && self.active_request.is_none()
             && self.turn_session.is_some()
@@ -65,7 +66,7 @@ impl Actor {
 
     /// The command that makes the agent compact, with the keep-list where it takes one. Before the agent runs, its
     /// harness stands in for the adapter.
-    fn compact_command(&self) -> Option<String> {
+    pub(super) fn compact_command(&self) -> Option<String> {
         let adapter = self.conn.as_ref().map_or(
             match self.cfg.backend.as_str() {
                 "claude" => Adapter::Claude,
@@ -82,8 +83,10 @@ impl Actor {
     }
 
     /// The agent reported its context use.
+    /// 记录真实使用量与新鲜度，群执行也参与同一会话资源维护。
     pub(super) fn track_usage(&mut self, used: u64, size: u64) {
         let Some(sid) = self.turn_session.clone() else { return };
+        self.context_usage_at.insert(sid.clone(), now_ms());
         let Some(conn) = self.conn.as_mut() else { return };
         let before = conn.usage.insert(sid, (used, size)).map(|(used, _)| used);
         if !conn.reports_compaction && compacted_by_usage(before, used) {
@@ -119,12 +122,21 @@ impl Actor {
         c.compacted(self.compacting.is_some(), self.compacting == Some(true), now_ms());
         self.save_conversation(&sid, &c);
         let _ = self.dreamer.send(memory::DreamEvent::Flush);
+        let grouped = self.active_delivery.is_some() || self.group_compaction.is_some();
+        if let Some(group) = self.group_compaction.as_mut() {
+            group.confirmed = true;
+        }
+        // 共享会话的完整摘要可能含私聊，群里只发布不含正文的整理状态。
+        self.compaction_notice = None;
         let data = json!({
-            "text": "Earlier context was summarized to make room.",
+            "text": if grouped {"已整理上下文，原始任务与待办仍保留。"} else {"Earlier context was summarized to make room."},
             "style": "info",
             "compaction": {"summary": Value::Null, "byHost": self.compacting.is_some()},
         });
-        self.compaction_notice = self.add(EntryKind::Notice, self.turn.unwrap_or(0), data).map(|e| e.id);
+        let notice = self.add(EntryKind::Notice, self.turn.unwrap_or(0), data).map(|e| e.id);
+        if !grouped {
+            self.compaction_notice = notice;
+        }
         if let Some(summary) = summary {
             self.keep_summary(&sid, &summary);
         }
@@ -135,6 +147,10 @@ impl Actor {
         if let Err(error) = self.hub.store.kv_set(&handoff::summary_key(&self.cfg.id, session), summary) {
             tracing::warn!(bot = %self.cfg.id, error = format!("{error:#}"), "couldn't keep the summary");
         }
+        // 群压缩摘要只保存在私有检查点，不能通过群卡片发布。
+        if self.active_delivery.is_some() || self.group_compaction.is_some() {
+            return;
+        }
         if let Some(id) = &self.compaction_notice
             && let Some(mut entry) = self.hub.store.entry(id)
         {
@@ -143,10 +159,11 @@ impl Actor {
         }
     }
 
-    /// 主聊天回合结束后学习缓存寿命并决定压缩或交接；消费观测由 usage 模块统一处理。
+    /// 回合结束后更新主聊天或群会话的压缩状态与缓存寿命；尝试消费由 usage 模块统一记录。
     pub(super) fn after_turn(&mut self, done: &Done) {
         let compacting = self.compacting.take();
-        if !self.in_main_chat() {
+        let grouped = self.active_delivery.is_some() || self.group_compaction.is_some();
+        if !self.in_main_chat() && !grouped {
             return;
         }
         let Some(sid) = self.turn_session.clone() else { return };
@@ -168,9 +185,13 @@ impl Actor {
         }
         c.turn_ended(now);
         self.save_conversation(&sid, &c);
+        // 群只记录使用量，整理在持久保存结果后的下一次领取前安排。
+        if grouped {
+            return;
+        }
         match rules::at_turn_end(&c, now) {
             Decision::Compact if self.compact_command().is_some() => {
-                self.queue.push_back(Queued::Compact { idle: false });
+                self.queue.push_back(Queued::Compact { idle: false, group: None });
             }
             Decision::Rollover => self.draft_handoff(&sid, handoff::Reason::Full),
             _ => {}
@@ -188,7 +209,7 @@ impl Actor {
         let now = now_ms();
         let life = self.cache_life();
         if rules::while_idle(&c, life, now) == Decision::Compact && self.compact_command().is_some() {
-            self.queue.push_back(Queued::Compact { idle: true });
+            self.queue.push_back(Queued::Compact { idle: true, group: None });
         } else if rules::rollover_due(&c, life, now) && handoff::pending(&self.hub.store, &self.cfg.id).is_none() {
             let reason = if now - c.last_turn >= life.ms() { handoff::Reason::Cold } else { handoff::Reason::Away };
             self.draft_handoff(&sid, reason);
@@ -224,9 +245,15 @@ impl Actor {
         }
         self.compacting = Some(idle);
         self.raw_prompt = true;
-        if let Err(e) = self.start_turn(Lane::main(&self.cfg.id), &[], &command, true, done_tx).await {
+        // 群维护的运行状态留在来源群，完整摘要仍只存入私有 session 检查点。
+        let lane = self.group_compaction.as_ref().map_or_else(|| Lane::main(&self.cfg.id), |g| Lane::main(&g.room));
+        if let Err(e) = self.start_turn(lane, &[], &command, true, done_tx).await {
             self.compacting = None;
-            self.start_failed(&e);
+            if self.group_compaction.is_some() {
+                self.finish_group_compaction(&Err(e));
+            } else {
+                self.start_failed(&e);
+            }
         }
     }
 

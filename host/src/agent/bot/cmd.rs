@@ -1,6 +1,5 @@
 //! What reaches a bot's actor ([`Cmd`]) and the turns that wait in its queue ([`Queued`]).
 
-use crate::chat::group::GroupTurn;
 use crate::store::{BotConfig, Lane};
 use anyhow::Result;
 use serde_json::Value;
@@ -61,11 +60,10 @@ pub enum Cmd {
         data: Value,
         reply: tokio::sync::oneshot::Sender<Result<String>>,
     },
-    /// Its turn in a group's room turn.
-    Group(GroupTurn),
-    /// The group's room turns stopped: drop its queued turns, stop a running one.
+    /// 只停止本次已持久取消的投递；延迟命令不能影响同群后来接受的新工作。
     CancelGroup {
         chat: String,
+        delivery_ids: Vec<String>,
     },
     Stop,
     Permission {
@@ -78,7 +76,15 @@ pub enum Cmd {
         detail: String,
         reply: tokio::sync::oneshot::Sender<bool>,
     },
-    NewSession,
+    /// 只领取房间 runner 指定的持久投递，reply 只表示等待结束。
+    Delivery {
+        id: String,
+        reply: tokio::sync::oneshot::Sender<bool>,
+    },
+    RetryDeliverySave,
+    SessionSwitch {
+        mode: String,
+    },
     Reconfigure(Box<BotConfig>),
     /// The user wants the bot's own agent again (`switchBack`).
     SwitchBack,
@@ -105,6 +111,6 @@ pub(super) enum Queued {
     /// A compaction the host decided on (see `compaction`); `idle` while the user is away.
     Compact {
         idle: bool,
+        group: Option<super::group_context::Maintenance>,
     },
-    Group(GroupTurn),
 }

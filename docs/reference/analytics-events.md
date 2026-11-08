@@ -79,6 +79,7 @@ host answers and sends it once the host is up.
 | `bots_reordered` | host | `reorderBots` | — |
 | `section_renamed` | host | `renameSection` | `removed`: whether it removed the section (`to` empty or `null`); never the names |
 | `bot_deleted` | host | `deleteBot` | — |
+| `attachment_preview` | desktop, iPhone, Android | Local draft image preview | `outcome`: `opened` or `decode_failed`; no filename, path or image content |
 | `message_sent` | host | `send` (a resend counts once) | `kind`, `agent`, `reply` (whether it quotes a message), `attachments` (count) |
 | `bot_reply_read` | host (`team`) | A bot uses the read-only local reply tool | `mode` (`page`/`query`/`ranges`), `outcome` (`trace`/`summary`/`pending`/`unavailable`/`error`), `error` (`invalid_or_unavailable` or null); no queries, offsets, request IDs or content |
 | `message_steered` | host | *Send now* on a queued message (`steer`), once its outcome is known | `agent`, `how` (`joined` the running turn / `next` turn, the turn ended first / `interrupted` the user's turn / `moved_up` behind other work / `failed`, it waits) |
@@ -192,3 +193,14 @@ rating. Neither StoreKit nor Google Play provides those outcomes. The [invitatio
 describes timing, exclusions, and cooldowns.
 
 Both phones also report `link_opened` with `link: issues` for their independent **Report an issue** action, and `link: app_store` for **Update Codync** (Android opens Google Play).
+
+Group delivery events: `group_delivery_accepted` (`kind`, `source`, target count or
+`keyed`), `group_delivery_finished` (`outcome`), `group_delivery_storage` (`outcome`,
+`category`), and `group_mention_rejected` (`category`). These never include message
+text, prompts, names, bot/delivery IDs, keys or file content.
+
+Group context events: `group_context_prepared` (`outcome`, protected/background estimated
+tokens, background budget, nullable reported context used/size) and
+`group_context_compacted` (`outcome`: confirmed/unconfirmed/failed/cancelled/timeout,
+context before, nullable fresh context after/size). They contain no prompt, original
+text, excerpts, plan steps, summary, file paths or task/room IDs. Estimates are not billing.

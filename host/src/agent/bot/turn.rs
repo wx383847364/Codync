@@ -25,6 +25,7 @@ impl Actor {
 
     /// The prompt for `text` in session `sid`: what the agent should hear first (its profile, a handoff, a memory
     /// change) and after (a profile update, how to share files).
+    /// 按执行来源组合提示词，派工不追加私聊用户专用提醒。
     async fn compose(&mut self, sid: &str, text: &str) -> Result<String> {
         let instructions = self.conn.as_ref().map_or(Instructions::FirstMessage, Conn::instructions);
         let mut snapshot = self.snapshot(sid).await?;
@@ -62,7 +63,7 @@ impl Actor {
             prompt = format!("{prompt}\n\n{update}");
             self.announce = Some((snapshot, identity));
         }
-        let own_chat = self.active_group.is_none() && self.active_request.is_none() && self.active_routine.is_none();
+        let own_chat = self.active_delivery.is_none() && self.active_request.is_none() && self.active_routine.is_none();
         if remind_files && own_chat {
             prompt.push_str("\n\n[Codync: send_file(path, name?) shares any regular file up to 100 MiB as a downloadable card. Use it instead of sending a local path.]");
         }
@@ -72,7 +73,7 @@ impl Actor {
         Ok(prompt)
     }
 
-    /// 为消息或委派启动一次回合尝试；启动失败与回退分别观测。
+    /// 为消息或委派启动一次执行尝试，重置来源输出并观测启动失败与回退。
     pub(super) async fn start_turn(
         &mut self,
         lane: Lane,
@@ -110,7 +111,15 @@ impl Actor {
         self.turn_text = from_user.then(|| text.to_owned());
         self.turn_entries = if from_user { entry_ids.to_vec() } else { Vec::new() };
         // A room turn answers the user's message in the room; another turn, the messages it was given.
-        let answered = self.active_group.as_ref().map_or(self.turn_entries.as_slice(), |g| g.answers.as_slice());
+        // 群投递沿用来源事件的语音归属，但不把派工 prompt 当作用户原话喂给记忆。
+        let delivery_source = self.active_delivery.as_ref().and_then(|active| {
+            active.delivery.batch_root_id.clone().or_else(|| active.delivery.source_entry_id.clone())
+        });
+        let answered = if let Some(source) = delivery_source.as_ref() {
+            std::slice::from_ref(source)
+        } else {
+            self.turn_entries.as_slice()
+        };
         let opens = self.prompt_call.take().filter(|call| crate::chat::calls::is_live(&self.hub.store, call));
         self.turn_call = crate::chat::calls::of_turn(&self.hub.store, answered).or(opens);
         self.turn_memory_revision.clear();
@@ -118,7 +127,11 @@ impl Actor {
         self.first_prompt = None;
         self.stop_requested = false;
         self.cancel_deadline = None;
-        let team_turn = if self.active_request.is_some() {
+        let team_turn = if self.group_compaction.is_some() {
+            crate::chat::team::Turn::Maintenance
+        } else if let Some(active) = &self.active_delivery {
+            crate::chat::team::Turn::Delivery { room: active.delivery.room_id.clone(), id: active.delivery.id.clone() }
+        } else if self.active_request.is_some() {
             crate::chat::team::Turn::Request
         } else {
             crate::chat::team::Turn::Chat(self.reply_hops.unwrap_or(0))
@@ -129,6 +142,11 @@ impl Actor {
         self.tools.clear();
         self.plan_entry = None;
         self.last_text = None;
+        // fallback 的失败片段只留 trace，不能成为下一模型 attempt 的最终回复或派生派工。
+        if let Some(active) = self.active_delivery.as_mut() {
+            active.output = None;
+            active.output_open = false;
+        }
         self.sent.clear();
         self.reacted = Reacted::No;
         self.joined = false;
@@ -139,14 +157,16 @@ impl Actor {
         } else {
             self.relay_turn(&lane, entry_ids, text).await;
         }
-        // relay_turn 已选定本次执行器；先固定身份，再进入可能失败的会话初始化。
+        // relay_turn 已选定执行器，先固定尝试身份，再进入可能失败的会话初始化。
         self.begin_usage();
-        // A bot request or room turn isn't resumed after a host restart (the room that waited is gone): a request's
+        // 群投递由持久投递表恢复，started 不重放；私聊 inflight 不承载群执行。
+        // A bot request's
         // persisted notices are marked interrupted instead of silently repeating work. Nor is a call's opening (the
         // call is over). A reply turn is resumed.
         self.set_inflight(
-            self.active_request.is_none()
-                && self.active_group.is_none()
+            self.group_compaction.is_none()
+                && self.active_request.is_none()
+                && self.active_delivery.is_none()
                 && self.active_routine.is_none()
                 && !self.active_prompt,
         );
@@ -179,6 +199,11 @@ impl Actor {
         if let Some(sid) = session {
             self.sync_mode(&sid).await?;
             self.sync_fast_mode(&sid).await;
+        }
+        if hidden && self.session_fresh && self.group_compaction.is_some() {
+            // 无法重载旧 sid 时新会话无须整理；必须结束维护标记，原投递仍 queued。
+            self.finish_group_compaction(&Err(anyhow!("context maintenance skipped after session reload failed")));
+            return Ok(());
         }
         if hidden && self.session_fresh {
             // A new session must never silently repeat an interrupted routine, and has nothing to compact.
@@ -221,6 +246,7 @@ impl Actor {
         let prompt =
             if std::mem::take(&mut self.raw_prompt) { text.to_owned() } else { self.compose(&sid, text).await? };
         self.hub.set_runtime(&self.id(), |r| r.activity = "Thinking…".into());
+        self.commit_delivery_start()?;
         let acp = self.conn.as_ref().ok_or_else(|| anyhow!("agent not running"))?.acp.clone();
         let params = json!({
             "sessionId": sid,
@@ -231,7 +257,10 @@ impl Actor {
             self.set_inflight(true);
         }
         // From here what changes in its memory folders is the bot's, however it changed them.
-        memory::turns::begin_turn(&self.cfg.id, &sid, self.hub.runtime(&self.cfg.id).message);
+        if self.group_compaction.is_none() {
+            // 维护没有用户或业务来源，也不能成为文件记忆变更的归属回合。
+            memory::turns::begin_turn(&self.cfg.id, &sid, self.hub.runtime(&self.cfg.id).message);
+        }
         // Written before this returns, so a Stop right after is sent after the prompt.
         let answer = acp.send("session/prompt", params).await?;
         if !self.turn_memory_revision.is_empty()
@@ -246,11 +275,17 @@ impl Actor {
         Ok(())
     }
 
-    /// 收束回合并保留委派最终文本的精确来源；执行结束不代表独立验收。
+    /// 保留私聊回复精确来源与群投递结果；保存故障时保留来源 lane，完成不代表验收。
     pub(super) fn finish_turn(&mut self, done: &Done) {
         if self.turn.is_none() {
             return;
         }
+        if self.group_compaction.is_some() {
+            self.finish_group_compaction(done);
+            return;
+        }
+        // 写库失败时从仍在内存的流缓冲保留完整结果，不从可能滞后的 entry 重建。
+        let delivery_text = self.active_delivery.as_ref().and_then(|active| active.output.clone());
         self.after_turn(done);
         // The bot's own edits to its memory files, checked and shown in the chat it made them from.
         memory::turns::scan_after_turn(self.hub.clone(), self.cfg.clone());
@@ -264,7 +299,7 @@ impl Actor {
         let mut final_text = None;
         let mut reply_entry = None;
         let routine = self.active_routine.is_some();
-        let grouped = self.active_group.is_some() || routine;
+        let grouped = self.active_delivery.is_some() || routine;
         let delegated = self.active_request.is_some();
         let sent = std::mem::take(&mut self.sent);
         let reacted = std::mem::take(&mut self.reacted);
@@ -283,7 +318,7 @@ impl Actor {
             // A pass stays in the trace: neither a room nor the user sees it (a bot request's reply goes back as it is).
             if delegated || !text.as_deref().is_none_or(crate::chat::group::is_pass) {
                 // A bot request's answer belongs to the bot that sent it and the exchange notice.
-                if !delegated {
+                if !delegated && self.active_delivery.is_none() {
                     e.data["final"] = true.into();
                     self.hub.set_entry(&id, &e.data);
                 }
@@ -292,6 +327,9 @@ impl Actor {
                 }
                 final_text = text;
             }
+        }
+        if let Some(text) = delivery_text.clone().filter(|_| !stopped) {
+            final_text = Some(text);
         }
         if final_text.is_none() {
             final_text = self.files.summary.take();
@@ -354,12 +392,22 @@ impl Actor {
             let text = (status == crate::routines::Status::Succeeded).then(|| final_text.clone()).flatten();
             self.finish_routine(status, detail, text);
         }
-        self.complete_request(reply, stopped, reply_entry.as_ref());
-        self.complete_group(if stopped || failed || stop_reason != "end_turn" {
-            Err(anyhow!("turn did not complete ({stop_reason})"))
+        // 完成事务同时保存最终回复、终态和派生投递；取消后的迟到结果不派生任务。
+        let delivery_status = if stopped {
+            crate::store::deliveries::Status::Cancelled
+        } else if failed || stop_reason != "end_turn" {
+            crate::store::deliveries::Status::Failed
+        } else if final_text.as_deref().is_none_or(crate::chat::group::is_pass) {
+            crate::store::deliveries::Status::NoReply
         } else {
-            Ok(final_text.clone())
-        });
+            crate::store::deliveries::Status::Completed
+        };
+        self.finish_delivery(
+            delivery_status,
+            final_text.clone().or(delivery_text),
+            (stopped || failed).then(|| format!("turn ended: {stop_reason}")),
+        );
+        self.complete_request(reply, stopped, reply_entry.as_ref());
         self.turn = None;
         self.reply_hops = None;
         self.reply_requests.clear();
@@ -384,10 +432,12 @@ impl Actor {
             let _ = self.dreamer.send(memory::DreamEvent::Turn(turn));
         }
         self.hub.set_runtime(&self.id(), |r| {
-            r.status = if failed { BotStatus::Error } else { BotStatus::Idle };
-            r.activity = String::new();
+            r.status = if failed || r.storage_error.is_some() { BotStatus::Error } else { BotStatus::Idle };
+            r.activity = r.storage_error.clone().unwrap_or_default();
             r.started_at = None;
-            r.lane = None;
+            if r.storage_error.is_none() {
+                r.lane = None;
+            }
             r.message = None;
             r.session = None;
         });
@@ -462,10 +512,13 @@ impl Actor {
     }
 
     /// What started the turn that is starting or running.
+    /// 标识真实执行来源，群派工不计作用户消息或用户记忆。
     pub(super) fn source(&self) -> TurnSource {
-        if self.active_routine.is_some() {
+        if self.group_compaction.is_some() {
+            TurnSource::Host
+        } else if self.active_routine.is_some() {
             TurnSource::Routine
-        } else if self.active_group.is_some() {
+        } else if self.active_delivery.is_some() {
             TurnSource::Group
         } else if self.active_request.is_some() || self.reply_hops.is_some() {
             TurnSource::Bot

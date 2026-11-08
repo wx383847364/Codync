@@ -64,7 +64,9 @@ for line in sys.stdin:
             update(sid, {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "Edited a.txt"}})
             send({"id": message["id"], "error": LIMIT})
         else:
-            update(sid, {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": f"{NAME} answered"}})
+            # 无输出成功用于验证 fallback 不会把上一 attempt 的失败片段当作最终回复。
+            if not os.path.exists(f"{NAME}.quiet"):
+                update(sid, {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": f"{NAME} answered"}})
             send({"id": message["id"], "result": {"stopReason": "end_turn"}})
     else:
         send({"id": message["id"], "error": {"code": -32601, "message": "not supported"}})

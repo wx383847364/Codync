@@ -48,6 +48,12 @@
   height: 100%;
   object-fit: contain;
 }
+.attachment-preview {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  cursor: zoom-in;
+}
 .attachment-remove {
   position: absolute;
   top: 4px;

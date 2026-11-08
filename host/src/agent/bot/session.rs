@@ -92,7 +92,7 @@ impl Actor {
         saved.into_iter().find(|(k, _)| k == key).map(|(_, v)| v.into())
     }
 
-    /// ACP connectors, team collaboration, and optional team management and computer control.
+    /// 组装当前成员的 MCP 定义，所有 connector 绑定成员身份，便于整理期间阻止新的工作工具。
     pub(super) fn mcp_servers(&self) -> Result<Value> {
         let Ok(exe) = std::env::current_exe() else {
             tracing::warn!("can't locate codync-host for MCP servers");
@@ -103,7 +103,7 @@ impl Actor {
             (if self.cfg.connectors.is_empty() { Vec::new() } else { crate::market::connectors(&self.hub.store)? })
                 .iter()
                 .filter(|c| self.cfg.connectors.contains(&c.id))
-                .filter_map(|c| c.acp(&exe, port))
+                .filter_map(|c| c.acp(&exe, port, &self.cfg.id))
                 .collect();
         let composio = crate::market::composio::enabled_for(&self.hub.store, &self.cfg.connectors)?;
         let builtin = [
@@ -155,6 +155,7 @@ impl Actor {
 
     /// Makes sure the agent runs and `slot`'s session (main, or a routine run's) is live;
     /// sets `turn_session`.
+    /// 保留会话身份，系统提示合同更新时通过重载原会话传递，不能继续使用旧工具限制。
     async fn ensure_session(&mut self, slot: Option<&str>) -> Result<()> {
         if !self.cfg.connectors.is_empty()
             || self.hub.store.kv_read(&format!("agent-env:{}", self.cfg.backend))?.is_some()
@@ -220,7 +221,7 @@ impl Actor {
         // rebuilds its query and resumes the same conversation).
         let current = self.session_for(slot);
         let snapshot = match (&current, instructions) {
-            (Some(sid), Instructions::ClaudeMeta) => Some(self.snapshot(sid).await?),
+            (Some(sid), Instructions::ClaudeMeta | Instructions::SystemPrompt) => Some(self.snapshot(sid).await?),
             _ => None,
         };
         let Some(conn) = self.conn.as_ref() else { bail!("agent not running") };
@@ -238,7 +239,9 @@ impl Actor {
             };
             self.hub.set_runtime(&self.cfg.id, |r| r.activity = "Resuming session…".into());
             let mut params = self.session_params(&servers, Some(&sid));
-            if let Some(s) = &snapshot {
+            if let Some(s) = &snapshot
+                && instructions == Instructions::ClaudeMeta
+            {
                 params["_meta"] = claude_meta(&self.cfg, &s.system);
             }
             if instructions == Instructions::SystemPrompt {
@@ -314,7 +317,7 @@ impl Actor {
         self.session_fresh = true;
         self.turn_session = Some(sid.clone());
         context::adopt(&self.hub.store, &self.cfg, &sid, system.clone(), revision)?;
-        if instructions == Instructions::ClaudeMeta {
+        if matches!(instructions, Instructions::ClaudeMeta | Instructions::SystemPrompt) {
             self.applied_system.insert(sid, system);
         }
         Ok(())

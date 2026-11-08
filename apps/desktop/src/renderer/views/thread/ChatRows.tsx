@@ -18,6 +18,7 @@ import { callLength, relativeTime } from './chat-items'
 import { MarkdownText } from './Markdown'
 import { PermissionCard } from './PermissionCard'
 import { ConnectionRequestCard } from '../marketplace/ConnectionRequestCard'
+import { DeliveryNotice } from './DeliveryNotice'
 import { AgentSwitchNotice, HandoffNotice } from './HandoffNotice'
 
 export function reactionPick(store: BotStore, entry: Entry): ReactionPick {
@@ -25,6 +26,7 @@ export function reactionPick(store: BotStore, entry: Entry): ReactionPick {
 }
 
 /** One chat-visible entry, with what can be done to it. */
+/** 渲染普通消息与投递聚合卡，主动重试保留旧 attempt。 */
 export const ChatRow = memo(function ChatRow({ entry, groupStart, chat, openTrace, onReply, openAgent, openArtifact }: {
   entry: Entry
   groupStart: boolean
@@ -67,6 +69,7 @@ export const ChatRow = memo(function ChatRow({ entry, groupStart, chat, openTrac
       if (entry.data.connectionRequest) return <div className="chat-row group-start"><ConnectionRequestCard entry={entry} /></div>
       if (entry.data.handoff) return <div className="chat-row notice"><HandoffNotice entry={entry} card={entry.data.handoff} /></div>
       if (entry.data.agentSwitch) return <div className="chat-row notice"><AgentSwitchNotice entry={entry} carried={entry.data.agentSwitch.carried} /></div>
+      if (entry.data.deliveryRows) return <div className="chat-row notice"><DeliveryNotice entry={entry} /></div>
       return <div className="chat-row notice"><NoticeRow entry={entry} addFallback={entry.data.addFallback && openAgent ? () => openAgent(entry.data.author ?? entry.botId) : undefined} /></div>
   }
 })

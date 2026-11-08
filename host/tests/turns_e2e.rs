@@ -107,8 +107,9 @@ async fn stop_ends_a_turn_whose_agent_ignores_the_cancel() {
     assert_eq!(common::bot(&sync, &bot)["status"], "idle");
 }
 
+/// 忙成员必须执行两个已接受来源，后来的消息不能替换先前任务。
 #[tokio::test]
-async fn a_member_busy_elsewhere_answers_only_the_latest_room_turn() {
+async fn a_member_busy_elsewhere_keeps_both_accepted_room_requests() {
     if common::python_missing() {
         return;
     }
@@ -137,13 +138,16 @@ async fn a_member_busy_elsewhere_answers_only_the_latest_room_turn() {
         host.wait_for(&group, Duration::from_secs(30), |e| e["kind"] == "agent" && e["data"]["final"] == true).await;
     assert_eq!(reply["data"]["text"], "reply: group");
     tokio::time::sleep(Duration::from_secs(2)).await;
-    // The room turn "second" replaced was skipped: no room prompt saw "first" without "second".
+    // 每个来源各产生一次执行；窗口可能同时含两条，但不能合并为一次任务。
     let prompts = std::fs::read_to_string(folder.join("prompts.jsonl")).unwrap();
-    let rooms: Vec<&str> = prompts.lines().filter(|p| p.contains("[Group chat")).collect();
+    // 群上下文已改为完整保护包，仍逐次核验两个独立来源都执行，不能按旧窗口标题找回合。
+    let rooms: Vec<&str> =
+        prompts.lines().filter(|p| p.contains("Protected task material. Context delivery ID:")).collect();
     assert!(rooms.iter().any(|p| p.contains("User: second")), "{rooms:?}");
-    assert!(!rooms.iter().any(|p| p.contains("User: first") && !p.contains("User: second")), "{rooms:?}");
+    assert!(rooms.iter().any(|p| p.contains("User: first")), "{rooms:?}");
+    assert_eq!(rooms.len(), 2, "both accepted requests execute: {rooms:?}");
     let finals = host.entries(&group).await.into_iter().filter(|e| e["kind"] == "agent" && e["data"]["final"] == true);
-    assert_eq!(finals.count(), 1);
+    assert_eq!(finals.count(), 2);
 }
 
 #[tokio::test]

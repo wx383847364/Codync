@@ -779,7 +779,10 @@ mod tests {
         p.send(json!({"id": 3, "sub": "events", "b": {"since": hub.store.current_rev(), "client": "ios"}})).await;
         let hello = p.recv().await.unwrap();
         assert_eq!((hello["id"].as_u64(), hello["ev"]["type"].as_str()), (Some(3), Some("hello")));
-        assert_eq!(p.recv().await.unwrap()["ev"]["type"], "icons");
+        // 每次重连都包含DB无关运行时快照，包含null以清除断线期间恢复的错误。
+        for _ in 0..hello["ev"]["catchUp"].as_u64().unwrap_or(0) {
+            let _ = p.recv().await.unwrap();
+        }
         assert!(hub.phone_connected());
 
         assert!(hub.revoke_device(&dk).unwrap());

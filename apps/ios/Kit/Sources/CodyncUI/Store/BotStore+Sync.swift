@@ -82,6 +82,7 @@ extension BotStore {
         if new != hostVersion { Motion.animate { hostVersion = new } }
     }
 
+    /// 应用运行态与持久事件，保存故障快照不更新数据库游标。
     private func apply(_ event: HostEvent) {
         switch event {
         case let .icons(icons, revision):
@@ -100,6 +101,13 @@ extension BotStore {
             windowFloors = requestedSince > 0 && !hostRewound ? loadedFloors() : [:]
             catchUpRev = hostRev
             bump(rev)
+        case let .deliveryStorageError(id, error, status, activity, workingChat, pendingNewSession):
+            // 运行时快照独立于数据库 rev，明确覆盖断线前的错误与待切换状态。
+            bots[id]?.storageError = error
+            bots[id]?.status = status
+            bots[id]?.activity = activity
+            bots[id]?.workingChat = workingChat
+            bots[id]?.pendingNewSession = pendingNewSession
         case .bot(let received):
             let bot = putHostBot(received)
             bump(bot.rev)
@@ -154,9 +162,11 @@ extension BotStore {
         scheduleSave()
     }
 
+    /// 镜像重建同时清理正文及选人身份，防止旧范围附着到新草稿。
     private func resetMirror() {
         iconsRevision = -1
         composerDrafts = [:]
+        composerMentions = [:]
         persistComposerDrafts()
         bots = [:]
         entries = entries.mapValues { $0.filter { $0.id.hasPrefix("local-") } }.filter { !$0.value.isEmpty }

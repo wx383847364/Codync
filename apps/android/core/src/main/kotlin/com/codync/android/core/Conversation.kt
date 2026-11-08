@@ -70,6 +70,7 @@ data class Entry(
         private fun isPass(text: String) =
             text.trim().trim('"', '.', '*').lowercase().let { it.isEmpty() || it == "(pass)" || it == "pass" }
 
+        /** 解析独立运行时故障与持久事件，未知事件按既有规则兼容。 */
         fun decode(value: JsonObject): Entry {
             val entry = WireJson.decodeFromJsonElement<Entry>(value)
             require(entry.id.isNotBlank() && entry.botId.isNotBlank() && entry.kind.isNotBlank() && entry.seq >= 0 && entry.rev >= 0) {
@@ -79,12 +80,14 @@ data class Entry(
             val fields = WireJson.decodeFromJsonElement<EntryFields>(entry.data)
             require(fields.callSeconds == null || fields.callSeconds >= 0)
             require(fields.options.orEmpty().all { it.optionId.isNotBlank() })
-            require(fields.attachments.orEmpty().all { it.size in 0..MAX_FILE_BYTES && it.name.isNotBlank() })
+            // 用户附件没有总大小上限，仍拒绝负数和无效名称；bot 发布快照沿用自己的限制。
+            require(fields.attachments.orEmpty().all { it.size >= 0 && it.name.isNotBlank() })
             return entry
         }
     }
 }
 
+// bot 发布的快照及内存备份沿用既有界限；用户发送的附件不使用此上限。
 const val MAX_FILE_BYTES = 100L * 1024 * 1024
 
 @Serializable
@@ -140,10 +143,14 @@ data class PendingSend(
     val replyTo: ReplyQuote? = null,
     /** The voice call it was said in (on-device or speech to text). */
     val call: String? = null,
+    val mentions: List<Mention> = emptyList(),
+    val draftKey: String? = null,
 ) {
     /** The `send` request for it, with the ids of its uploaded files. */
+    /** 构造实际发送正文，原始 UTF-16 提及范围与附件引用一起传输。 */
     fun body(attachments: List<String> = emptyList()): JsonObject = buildJsonObject {
         put("botId", botId); put("text", text); put("clientNonce", nonce)
+        put("mentions", WireJson.encodeToJsonElement(kotlinx.serialization.builtins.ListSerializer(Mention.serializer()), mentions))
         replyTo?.let { put("replyTo", it.id) }
         call?.let { put("call", it) }
         if (attachments.isNotEmpty()) put("attachments", JsonArray(attachments.map(::JsonPrimitive)))
@@ -157,6 +164,7 @@ sealed interface MirrorEvent {
     data class Icons(val icons: Map<String, CustomIcon>, val revision: Long = 0) : MirrorEvent
     /** The stream's first event; `network` is null from hosts before the network view (or one this app can't read). */
     data class Hello(val hostId: String, val rev: Long, val usage: JsonObject, val screen: JsonObject?, val network: NetworkView? = null) : MirrorEvent
+    data class DeliveryStorageError(val botId: String, val error: String?, val status: String, val activity: String, val workingChat: String?, val pendingNewSession: Boolean) : MirrorEvent
     data class BotChanged(val bot: Bot) : MirrorEvent
     data class EntryChanged(val entry: Entry) : MirrorEvent
     data class Usage(val value: JsonObject) : MirrorEvent
@@ -177,6 +185,7 @@ sealed interface MirrorEvent {
                 requireNotNull(value["rev"]?.jsonPrimitive?.longOrNull),
                 value["usage"]?.jsonObject ?: JsonObject(emptyMap()), value["screen"]?.takeUnless { it == JsonNull }?.jsonObject,
                 value["network"]?.takeUnless { it == JsonNull }?.let { runCatching { NetworkView.decode(it) }.getOrNull() })
+            "deliveryStorageError" -> DeliveryStorageError(requireNotNull(value.text("botId")), value.text("storageError"), value.text("status") ?: "idle", value.text("activity").orEmpty(), value.text("workingChat"), value["pendingNewSession"]?.jsonPrimitive?.booleanOrNull == true)
             "bot" -> BotChanged(HostClient.decode(value.getValue("bot").jsonObject))
             "entry" -> EntryChanged(Entry.decode(value.getValue("entry").jsonObject))
             "usage" -> Usage(value.getValue("usage").jsonObject)
@@ -202,3 +211,73 @@ data class MirrorSnapshot(
     val screen: JsonObject? = null,
     val icons: Map<String, CustomIcon> = emptyMap(),
 )
+
+/** 固定成员身份，偏移始终采用实际请求正文的 UTF-16 半开区间。 */
+@Serializable
+data class Mention(val botId: String, val start: Int, val end: Int)
+
+/** 片段外的编辑平移绑定；触及片段正文时解除绑定，避免改名误投。 */
+fun editMentions(before: String, after: String, mentions: List<Mention>, replacement: IntRange? = null): List<Mention> {
+    if (replacement != null) {
+        val delta = after.length - before.length
+        // 原生编辑范围只移动外部绑定，修改显示片段必须解除旧身份。
+        return mentions.mapNotNull { mention ->
+            val extendsName = mention.end == replacement.first && delta > 0 && (mention.end in after.indices && after.codePointAt(mention.end).let { Character.isLetterOrDigit(it) || it == '_'.code })
+            when {
+                mention.end <= replacement.first && !extendsName -> mention
+                mention.start >= replacement.last + 1 -> mention.copy(start = mention.start + delta, end = mention.end + delta)
+                else -> null
+            }
+        }
+    }
+    if (before == after) return mentions
+    var start = 0
+    var suffix = 0
+    while (start < before.length && start < after.length && before[start] == after[start]) start++
+    while (suffix < before.length && suffix < after.length && before[before.length - suffix - 1] == after[after.length - suffix - 1]) suffix++
+    // 重复字符有多个可能的编辑范围，保守解除可能被触及的身份。
+    val removed = maxOf(0, before.length - after.length, before.length - start - suffix)
+    val earliest = before.length - suffix - removed
+    val latestEnd = start + removed
+    val delta = after.length - before.length
+    return mentions.mapNotNull { mention -> when {
+        mention.end <= earliest && !(mention.end == earliest && delta > 0 && (mention.end in after.indices && after.codePointAt(mention.end).let { Character.isLetterOrDigit(it) || it == '_'.code })) -> mention
+        mention.start >= latestEnd -> mention.copy(start = mention.start + delta, end = mention.end + delta)
+        else -> null
+    } }
+}
+
+/** 聚合卡内的目标行，当前显示名从成员列表读取。 */
+@Serializable
+data class DeliveryRow(val deliveryId: String, val targetBotId: String, val status: String, val detail: String = "") {
+    /** 状态使用中文展示，未知协议值保留稳定兜底。 */
+    val statusText: String get() = when (status) {
+        "queued" -> "等待执行"
+        "claimed" -> "准备执行"
+        "started" -> "执行中"
+        "completed" -> "已完成"
+        "failed" -> "失败"
+        "interrupted" -> "已中断"
+        "noReply" -> "未回复"
+        "cancelled" -> "已停止"
+        else -> "状态待更新"
+    }
+
+    companion object {
+        /** 一行聚合当前目标，仅全部停止时才宣称自动接力停止。 */
+        fun summary(rows: List<DeliveryRow>): String {
+            val first = rows.firstOrNull() ?: return "群内派工状态待更新"
+            if (rows.all { it.status == "cancelled" && it.detail == first.detail }) {
+                when (first.detail) {
+                    "对话轮次上限" -> return "自动接力已达 3 轮，已停止继续派工"
+                    "群派工链深上限" -> return "自动接力已达链深上限，已停止继续派工"
+                    "房间发言上限" -> return "本轮发言已达上限，已停止继续派工"
+                }
+            }
+            val counts = linkedMapOf<String, Int>()
+            for (row in rows) counts[row.statusText] = (counts[row.statusText] ?: 0) + 1
+            if (counts.size == 1) return "群内派工${first.statusText}"
+            return "群内派工：" + counts.entries.joinToString("，") { "${it.value} 项${it.key}" }
+        }
+    }
+}

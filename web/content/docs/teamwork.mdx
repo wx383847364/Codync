@@ -10,6 +10,18 @@ Give each bot a clear name and [standing instructions](/docs/bots) that say what
 
 The bot finds Reviewer among your bots and sends it the request. When Reviewer's answer comes back, the bot sums it up for you in its own chat. Bots see only your visible bots: a bot you hid from the bot list can't be messaged, and neither can a group.
 
+## Work assigned inside a group
+
+In a [group chat](/docs/groups), a bot can assign another member with `message_bot`.
+The request stays queued while that member is busy, and its final answer stays in the
+same group. The room waits for it before asking the next member; after ten minutes the
+room can continue while the overdue work finishes. A status card shows every target
+and offers retry after failure or interruption. Selected member identity and the full
+request are preserved. A repeated tool request is deduplicated only when the caller
+reuses its optional idempotency key with exactly the same text.
+
+The private-chat exchanges below send their answers back to the requesting bot.
+
 ## What you see in the chats
 
 Each exchange shows as one small row that names the other bot. The request text itself stays out of the chat:
@@ -25,7 +37,7 @@ The recipient's tool calls and thinking are in its own **Full conversation**.
 
 ## How a message runs
 
-Bots never wait on each other. When one bot messages another:
+In a private-chat exchange, bots do not wait on each other. When one bot messages another:
 
 1. **The request is queued and the sender goes on at once.** It can finish its turn or keep working.
 2. **The recipient does the work** in its own chat's session, one thing at a time: a busy recipient finishes what it's doing first.
@@ -61,13 +73,13 @@ Because nobody waits, there's no time limit: the recipient takes as long as the 
 - **Shared folders.** If two bots work in the same project, tell them who edits which files.
 - **Subagents.** Agents that start their own subagents (Claude Code, Codex) keep doing that themselves. Codync doesn't turn those into bots.
 
-In a [group chat](/docs/groups), members don't message each other this way; they @-mention each other in the room.
+In a [group chat](/docs/groups), members can use `@` for a conversational answer or `message_bot` for a task. Both keep results in the source group; see [Work assigned inside a group](#work-assigned-inside-a-group).
 
 ## Stopping, limits and restarts
 
 - **Stopping the sender** doesn't cancel what it already sent, but drops answers still waiting for it. Deleting the sender drops its answers too. The rows in both chats still show how each exchange ended.
 - **Stopping or deleting the recipient** cancels its queued requests and stops the one it's working on, which may leave partial changes.
-- **Limits:** a bot can have up to 16 messages queued or running at once, and the computer up to 64 in all. To keep bots from passing work around forever, a chain of requests stops after eight handoffs. Your next message starts a fresh allowance.
+- **Limits:** a bot can have up to 16 messages queued or running at once, and the computer up to 64 in all. In private chats, a chain of requests stops after eight handoffs. Your next message starts a fresh allowance. Group collaboration follows the [group handoff rules](/docs/groups#who-answers), without a fixed round or handoff cutoff.
 - **Restarts:** if the host restarts while requests are pending, they're marked as failed and not run again. Check what the bots already did before you ask again. An answer still waiting for a busy sender is lost on a restart, but stays readable in the conversation sheet.
 
 ## Bots on your other computers

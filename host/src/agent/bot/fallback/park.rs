@@ -118,20 +118,4 @@ impl Actor {
             }
         }
     }
-
-    /// `newSession`: every agent's conversation starts over, not only the current one's, and none is told what was
-    /// said before.
-    pub(in crate::agent::bot) fn forget_parked(&mut self) {
-        let bot = self.base.id.clone();
-        for step in 0..fallback::steps(&self.base) {
-            let forgot = self.hub.store.kv_delete(&parked_key(&bot, fallback::backend(&self.base, step)));
-            logged(&bot, "forget a parked session", forgot);
-        }
-        self.relay.recap = None;
-        logged(
-            &bot,
-            "mark the new session",
-            self.hub.store.kv_set(&fresh_key(&bot), &self.hub.store.last_seq(&bot).to_string()),
-        );
-    }
 }

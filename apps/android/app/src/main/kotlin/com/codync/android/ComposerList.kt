@@ -1,5 +1,10 @@
 package com.codync.android
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -29,8 +34,8 @@ import com.kyant.shapes.RoundedRectangle
 }
 
 /** A row of a list above the box: its icon, name and what it is; tapping it picks it (iOS `ComposerListRow`). */
-@Composable private fun ComposerListRow(title: String, detail: String, pick: () -> Unit, warning: Boolean = false, icon: @Composable () -> Unit) {
-    Row(Modifier.fillMaxWidth().plainButton(action = pick)
+@Composable private fun ComposerListRow(title: String, detail: String, pick: () -> Unit, warning: Boolean = false, modifier: Modifier = Modifier, icon: @Composable () -> Unit) {
+    Row(modifier.fillMaxWidth().plainButton(action = pick)
         .semantics(mergeDescendants = true) { contentDescription = title }.padding(horizontal = 14.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
         Box(Modifier.width(20.dp), contentAlignment = Alignment.Center) { icon() }
@@ -49,11 +54,17 @@ import com.kyant.shapes.RoundedRectangle
     }
 }
 
-/** The `@` list in a group: each member's face, name and description; tapping one mentions it (iOS `MentionList`). */
-@Composable internal fun MentionList(members: List<Bot>, bots: List<Bot>, mention: (Bot) -> Unit, modifier: Modifier = Modifier) {
+/** 群成员复用统一候选列表，保留稳定身份提示和键盘高亮滚动。 */
+@Composable internal fun MentionList(members: List<Bot>, bots: List<Bot>, mention: (Bot) -> Unit, modifier: Modifier = Modifier, selected: Int = 0) {
     ComposerList(modifier) {
-        for (member in members) ComposerListRow(member.name, member.description, { mention(member) }) {
-            BotAvatar(member, bots, 18.dp)
+        for ((index, member) in members.withIndex()) {
+            val bring = remember(member.id) { BringIntoViewRequester() }
+            // 键盘循环时只滚动候选，不改变编辑器焦点。
+            LaunchedEffect(selected, member.id) { if (index == selected) bring.bringIntoView() }
+            ComposerListRow(member.name, "${member.id.take(8)} · ${member.description}", { mention(member) },
+                modifier = Modifier.bringIntoViewRequester(bring).background(if (index == selected) Palette.surface else androidx.compose.ui.graphics.Color.Transparent)) {
+                BotAvatar(member, bots, 18.dp)
+            }
         }
     }
 }

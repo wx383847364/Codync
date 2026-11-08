@@ -58,6 +58,16 @@ fn str_arg<'a>(b: &'a Value, k: &str) -> Result<&'a str> {
 /// Runs one API method for `caller` (permissions per spec §6.6).
 pub async fn dispatch(hub: &Arc<Hub>, caller: &Caller, method: &str, b: Value) -> Result<Value> {
     devices::permit(caller, method)?;
+    // MCP 桥的 botId 由宿主绑定；整理期间拒绝工作工具。
+    let connector_call = matches!(method, "connectorRuntime" | "connectorTarget") && b["method"] == "tools/call";
+    if (method.ends_with("Call") || connector_call) && b["botId"].as_str().is_some_and(|id| hub.team.maintaining(id)) {
+        anyhow::bail!("tools are unavailable during context maintenance");
+    }
+    if method == "connectorRuntime" && b["checkOnly"] == true {
+        // 本地代理逐次检查执行窗口，不读取凭据或解锁保险库。
+        return Ok(serde_json::json!({}));
+    }
+
     let observed = crate::analytics::observe_call(hub, caller, method, &b);
     let result = route(hub, caller, method, b).await;
     let report = observed.and_then(|(event, properties)| match &result {

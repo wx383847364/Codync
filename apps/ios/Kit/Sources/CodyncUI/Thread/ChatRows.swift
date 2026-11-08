@@ -21,6 +21,7 @@ struct ChatRow: View {
     @Environment(BotStore.self) private var model
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
+    /// 呈现普通消息或投递聚合卡，重试保留原来源和 attempt 记录。
     var body: some View {
         switch entry.kind {
         case "user":
@@ -59,7 +60,8 @@ struct ChatRow: View {
             } else if entry.data.call != nil, let openCall {
                 CallLineRow(entry: entry, open: openCall).padding(.top, 6)
             } else {
-                NoticeRow(entry: entry, addFallback: addFallback).padding(.top, 10)
+                if entry.data.deliveryRows != nil { DeliveryNoticeRow(entry: entry).padding(.top, 10) }
+                else { NoticeRow(entry: entry, addFallback: addFallback).padding(.top, 10) }
             }
         }
     }

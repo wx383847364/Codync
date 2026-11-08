@@ -1,6 +1,12 @@
 import Foundation
 
 public struct EntryData: Codable, Hashable, Sendable {
+    public var deliveryAttempt: Int?
+    public var parentDeliveryId: String?
+    public var deliveryId: String?
+    public var deliveryBody: String?
+    public var deliveryRows: [DeliveryRow]?
+    public var mentions: [Mention]?
     public var connectionRequest: ConnectionRequest?
     /// A memory line an older host put in the chat. Memory lives in the bot's memory settings, so it isn't shown.
     public var memory: MemoryLine?
@@ -161,3 +167,94 @@ public struct Attachment: Codable, Hashable, Sendable, Identifiable {
     }
 }
 
+
+/// 固定成员身份，偏移始终使用实际请求正文的 UTF-16 半开区间。
+public struct Mention: Codable, Hashable, Sendable {
+    public var botId: String
+    public var start: Int
+    public var end: Int
+
+    /// 选择成员时创建绑定，名字只保留在正文中。
+    public init(botId: String, start: Int, end: Int) { self.botId = botId; self.start = start; self.end = end }
+
+    /// 编辑触及片段时解除绑定；片段外编辑同步移动偏移。
+    public static func edited(from before: String, to after: String, mentions: [Mention], replacement: Range<Int>? = nil) -> [Mention] {
+        /// 用完整 Unicode 标量判断片段边界，扩展汉字不能按单个高代理误判。
+        func nameContinues(at offset: Int) -> Bool {
+            guard offset >= 0, offset < after.utf16.count else { return false }
+            let position = after.utf16.index(after.utf16.startIndex, offsetBy: offset)
+            guard let scalarIndex = position.samePosition(in: after.unicodeScalars), let scalar = after.unicodeScalars[scalarIndex...].first else { return false }
+            return CharacterSet.alphanumerics.contains(scalar) || scalar == "_"
+        }
+        if let replacement {
+            let delta = after.utf16.count - before.utf16.count
+            // 原生范围解除重叠绑定，保留外部片段并换算 UTF-16 差值。
+            return mentions.compactMap { mention in
+                let extendsName = mention.end == replacement.lowerBound && delta > 0 && nameContinues(at: mention.end)
+                if mention.end <= replacement.lowerBound, !extendsName { return mention }
+                if mention.start >= replacement.upperBound { return Mention(botId: mention.botId, start: mention.start + delta, end: mention.end + delta) }
+                return nil
+            }
+        }
+        guard before != after else { return mentions }
+        let old = Array(before.utf16), new = Array(after.utf16)
+        var start = 0, suffix = 0
+        while start < old.count, start < new.count, old[start] == new[start] { start += 1 }
+        while suffix < old.count, suffix < new.count, old[old.count - suffix - 1] == new[new.count - suffix - 1] { suffix += 1 }
+        // 重复字符可能对应多个编辑位置；任何位置触及绑定都解除，避免静默误投。
+        let removed = max(0, old.count - new.count, old.count - start - suffix)
+        let earliest = old.count - suffix - removed, latestEnd = start + removed
+        let delta = new.count - old.count
+        // 无原生范围时保守处理重复字符，不能猜测一个可能误投的位置。
+        return mentions.compactMap { mention in
+            let extendsName = mention.end == earliest && delta > 0 && nameContinues(at: mention.end)
+            if mention.end <= earliest, !extendsName { return mention }
+            if mention.start >= latestEnd { return Mention(botId: mention.botId, start: mention.start + delta, end: mention.end + delta) }
+            return nil
+        }
+    }
+}
+
+/// 同一来源事件和 attempt 卡片内的一个目标，名字由客户端当前成员列表呈现。
+public struct DeliveryRow: Codable, Hashable, Sendable {
+    public var deliveryId: String
+    public var targetBotId: String
+    public var status: String
+    public var detail: String
+
+    /// 内部状态统一显示为中文；未知状态不暴露协议字段。
+    public var statusText: String {
+        switch status {
+        case "queued": "等待执行"
+        case "claimed": "准备执行"
+        case "started": "执行中"
+        case "completed": "已完成"
+        case "failed": "失败"
+        case "interrupted": "已中断"
+        case "noReply": "未回复"
+        case "cancelled": "已停止"
+        default: "状态待更新"
+        }
+    }
+
+    /// 默认一行只聚合状态；仅全部因同一保护规则停止时，展示该停止原因。
+    public static func summary(_ rows: [DeliveryRow]) -> String {
+        guard let first = rows.first else { return "群内派工状态待更新" }
+        if rows.allSatisfy({ $0.status == "cancelled" && $0.detail == first.detail }) {
+            switch first.detail {
+            case "对话轮次上限": return "自动接力已达 3 轮，已停止继续派工"
+            case "群派工链深上限": return "自动接力已达链深上限，已停止继续派工"
+            case "房间发言上限": return "本轮发言已达上限，已停止继续派工"
+            default: break
+            }
+        }
+        var counts: [String: Int] = [:]
+        var order: [String] = []
+        for row in rows {
+            if counts[row.statusText] == nil { order.append(row.statusText) }
+            counts[row.statusText, default: 0] += 1
+        }
+        if order.count == 1 { return "群内派工\(first.statusText)" }
+        return "群内派工：" + order.map { "\(counts[$0, default: 0]) 项\($0)" }.joined(separator: "，")
+    }
+}

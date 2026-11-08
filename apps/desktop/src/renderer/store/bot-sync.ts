@@ -224,6 +224,7 @@ export class BotSync extends BotMirror {
     this.hostVersion = next
   }
 
+  /** 应用消息与运行态，保存故障不推进数据库同步游标。 */
   private apply(event: HostEvent) {
     switch (event.type) {
       case 'icons':
@@ -239,6 +240,11 @@ export class BotSync extends BotMirror {
         if (event.rev < this.rev) this.rev = 0
         this.floors = snapshotFloors(this.entries, this.rev === 0 ? 0 : this.requestedSince)
         break
+      case 'deliveryStorageError': {
+        const bot = this.bots.get(event.botId)
+        if (bot) this.bots.set(bot.id, { ...bot, storageError: event.storageError, status: event.status, activity: event.activity, workingChat: event.workingChat, pendingNewSession: event.pendingNewSession })
+        break
+      }
       case 'bot':
         this.putHostBot(event.bot)
         this.bump(event.bot.rev)

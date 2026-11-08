@@ -9,9 +9,6 @@ use serde_json::{Value, json};
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
-/// Largest file accepted.
-pub const MAX_FILE: u64 = 100 * 1024 * 1024;
-
 /// Inside a personal workspace, so reading an upload needs no extra approval.
 /// A group (no workspace) keeps its members' shared files in its data folder.
 pub fn root(cfg: &BotConfig) -> PathBuf {
@@ -37,17 +34,14 @@ fn clean_name(name: &str) -> Result<String> {
     Ok(name.to_owned())
 }
 
-/// Appends one chunk at `offset`. A repeated chunk (a retry) is accepted as is.
-/// Returns the attachment once `done`.
+/// 按偏移追加分片，不限制附件总大小；重试当前分片可重复确认，完成后返回附件元数据。
 pub fn append(root: &Path, upload: &str, name: &str, offset: u64, data: &[u8], done: bool) -> Result<Option<Value>> {
     let dir = dir(root, upload)?;
     let path = dir.join(clean_name(name)?);
     std::fs::create_dir_all(&dir).context("creating the upload folder")?;
     let len = std::fs::metadata(&path).map_or(0, |m| m.len());
-    let end = offset + data.len() as u64;
-    if end > MAX_FILE {
-        bail!("file is larger than {} MB", MAX_FILE / 1024 / 1024);
-    }
+    // 总大小不设产品上限，但偏移加法必须校验溢出，不能把越界分片误认成重试。
+    let end = offset.checked_add(data.len() as u64).context("invalid upload offset")?;
     if offset == len {
         let mut file =
             std::fs::OpenOptions::new().create(true).append(true).open(&path).context("opening the upload")?;
@@ -103,6 +97,22 @@ pub fn prompt_suffix(paths: &[PathBuf]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 跨过旧 100 MiB 边界继续追加，并拒绝偏移溢出，不在测试中分配整文件内存。
+    #[test]
+    fn uploads_continue_beyond_the_old_size_limit_and_reject_offset_overflow() {
+        let root = std::env::temp_dir().join(format!("codync-large-upload-{}", uuid::Uuid::new_v4()));
+        let id = uuid::Uuid::new_v4().to_string();
+        append(&root, &id, "video.mp4", 0, b"", false).expect("prepare");
+        let path = dir(&root, &id).expect("dir").join("video.mp4");
+        let size = 100 * 1024 * 1024;
+        std::fs::OpenOptions::new().write(true).open(&path).expect("open").set_len(size).expect("sparse file");
+        let done = append(&root, &id, "video.mp4", size, b"tail", true).expect("large upload").expect("done");
+        assert_eq!(done["size"], size + 4);
+        assert_eq!(read(&root, &id, size, 4).expect("tail"), (b"tail".to_vec(), size + 4));
+        assert!(append(&root, &id, "video.mp4", u64::MAX, b"x", true).is_err());
+        std::fs::remove_dir_all(root).expect("cleanup");
+    }
 
     #[test]
     fn removing_an_upload_stays_inside_the_folder() {

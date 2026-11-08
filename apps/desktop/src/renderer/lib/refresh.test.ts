@@ -72,7 +72,7 @@ test('an already-online computer stays refreshing until the replacement stream a
   let receive!: (line: string) => void
   const ready = deferred()
   const store = sync({
-    call: async () => ({ version: '2.29.0', name: 'Test', backends: [] }),
+    call: async () => ({ version: '2.41.0', name: 'Test', backends: [] }),
     stream: (_path, onData) => { receive = onData; ready.resolve(); return () => {} },
   })
   store.connection = { kind: 'online' }

@@ -70,6 +70,13 @@ impl Actor {
     }
 
     pub(super) fn on_update(&mut self, u: &Value) {
+        // 原生整理的文本可能含其他聊天，只处理使用量和压缩完成事件。
+        if self.group_compaction.is_some()
+            && !matches!(u["sessionUpdate"].as_str(), Some("usage_update" | "compaction_update"))
+        {
+            return;
+        }
+
         let turn = self.turn.unwrap_or(0);
         match u["sessionUpdate"].as_str().unwrap_or_default() {
             "agent_message_chunk" => {
@@ -147,7 +154,11 @@ impl Actor {
                 }
             }
             "plan" => {
-                let data = json!({"entries": u["entries"].clone(), "author": self.cfg.id});
+                // 保存计划的来源投递，供整理后恢复未完成步骤。
+                let mut data = json!({"entries": u["entries"].clone(), "author": self.cfg.id});
+                if let Some(active) = &self.active_delivery {
+                    data["deliveryId"] = active.delivery.id.clone().into();
+                }
                 match &self.plan_entry {
                     Some(id) => {
                         self.hub.set_entry(id, &data);
@@ -164,6 +175,14 @@ impl Actor {
     }
 
     pub(super) async fn on_permission(&mut self, rpc_id: Value, params: Value) {
+        // 原生整理不执行工作；意外工具权限请求一律拒绝而不生成群审批卡。
+        if self.group_compaction.is_some() {
+            if let Some(conn) = &self.conn {
+                let _ = conn.acp.respond(rpc_id, acp::permission_answer(None)).await;
+            }
+            return;
+        }
+
         let options = params["options"].as_array().cloned().unwrap_or_default();
         let tool = &params["toolCall"];
         if self.cfg.permission == Permission::Auto
@@ -201,6 +220,7 @@ impl Actor {
         self.show_card(&title, data, Answer::Agent(rpc_id));
     }
 
+    /// 维护期间包括发送前和结束后的缓冲权限都拒绝；其他后台请求仍沿用原审批策略。
     /// A permission request from work the agent goes on with after its turn ended (a background subagent): no turn
     /// shows a card for it, so it gets what a turn would answer without asking, under the bot's Approve automatically,
     /// for one of this bot's own sessions, unless the user stopped its last turn. Anything else is declined.
@@ -208,9 +228,10 @@ impl Actor {
         let Some(conn) = &self.conn else { return };
         let own = params["sessionId"].as_str().is_some_and(|sid| conn.loaded.contains_key(sid));
         let options = params["options"].as_array().cloned().unwrap_or_default();
-        let pick = (self.cfg.permission == Permission::Auto && own && !self.stop_requested)
-            .then(|| auto_pick(&options))
-            .flatten();
+        let pick =
+            (self.group_compaction.is_none() && self.cfg.permission == Permission::Auto && own && !self.stop_requested)
+                .then(|| auto_pick(&options))
+                .flatten();
         tracing::info!(bot = %self.id(), approved = pick.is_some(), title = params["toolCall"]["title"].as_str(), "permission asked outside a turn");
         let _ = conn.acp.respond(rpc_id, acp::permission_answer(pick)).await;
     }
@@ -296,6 +317,7 @@ impl Actor {
 
     /// A `send_message`: the user's next bubble, in the turn's lane, right away. Only in the
     /// bot's own chat; a room, a bot request or a routine reads the turn's reply.
+    /// 检查发送工具的来源约束，群派工结果不得落入发送者私聊。
     pub(super) fn send_to_user(&mut self, text: String) -> anyhow::Result<()> {
         let Some(turn) = self.turn else { return self.send_between_turns(&text) };
         // A background result can't be told from this turn's own send (no session in the call): it may try again later.
@@ -304,7 +326,7 @@ impl Actor {
                 "send_message isn't available in a bot request: your final reply goes to the requesting bot, so put your answer there {LATER}"
             );
         }
-        if self.active_group.is_some() || self.active_routine.is_some() {
+        if self.active_delivery.is_some() || self.active_routine.is_some() {
             anyhow::bail!("send_message isn't available in this turn: write your answer as your reply {LATER}");
         }
         self.close_seg();
@@ -318,7 +340,12 @@ impl Actor {
 
     /// A `send_message` from work the agent goes on with after its turn ended (a background subagent's result): a
     /// message in the bot's own chat, with the alert a finished turn sends, unless the user stopped its last turn.
+    /// 空闲时仅按允许的来源发送，不能绕过群投递完成事务。
     fn send_between_turns(&self, text: &str) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            self.lane.chat == self.cfg.id && self.pending_completion.is_none(),
+            "group results belong in the source group"
+        );
         anyhow::ensure!(self.conn.is_some(), "no turn is running");
         anyhow::ensure!(!self.stop_requested, "the user stopped you: send nothing until they write again");
         self.add_between_turns(EntryKind::Agent, &json!({"text": text, "final": true, "author": self.cfg.id}))
@@ -328,16 +355,29 @@ impl Actor {
     }
 
     /// `react`: the emoji goes on the user's message this turn answers, or in a room on a message the bot was shown.
+    /// 把表情挂到当前来源聊天的目标消息，避免跨聊天操作。
     pub(super) fn react(&mut self, emoji: &str, to: Option<&str>) -> anyhow::Result<()> {
         if self.turn.is_none() {
             anyhow::bail!("no turn is running");
         }
-        let target = match (&self.active_group, self.turn_entries.last()) {
-            (Some(g), _) => crate::chat::reactions::in_room(&self.hub, &g.lane, &self.cfg.id, to, g.shown)?,
-            (None, Some(id)) => id.clone(),
-            (None, None) => anyhow::bail!("react works only on a message you're answering in a chat or a group chat"),
+        let target = if let Some(active) = &self.active_delivery {
+            // 完整原始用户消息即使不在24条窗口内，仍是本次回答和默认回应的来源。
+            let source =
+                active.delivery.source_entry_id.as_deref().and_then(|id| self.hub.store.entry(id)).filter(|entry| {
+                    entry.kind == EntryKind::User.as_str()
+                        && to.is_none_or(|who| who.trim().eq_ignore_ascii_case("user"))
+                });
+            if let Some(source) = source {
+                source.id
+            } else {
+                crate::chat::reactions::in_room(&self.hub, &self.lane, &self.cfg.id, to, &active.shown_entries)?
+            }
+        } else if let Some(id) = self.turn_entries.last() {
+            id.clone()
+        } else {
+            anyhow::bail!("react works only on a message you're answering")
         };
-        let in_chat = self.active_group.is_none();
+        let in_chat = self.active_delivery.is_none();
         if crate::chat::reactions::reacted_lately(&self.hub, &self.lane, &self.cfg.id, &target)? {
             if in_chat {
                 self.reacted = Reacted::Refused;
@@ -358,13 +398,31 @@ impl Actor {
 
     // MARK: streaming text segments
 
+    /// 累积本次输出并更新流消息，保存失败仍保留独立内存结果。
     pub(super) fn append(&mut self, kind: SegKind, text: &str) {
         if text.is_empty() {
             return;
         }
         let same = matches!(&self.seg, Seg::Open { kind: k, .. } if *k == kind);
+        // 结果缓冲独立于 entry 是否写入成功，首个 chunk 遇到数据库故障也不能丢失。
+        if kind == SegKind::Text
+            && let Some(active) = self.active_delivery.as_mut()
+        {
+            if active.output_open {
+                active.output.get_or_insert_default().push_str(text);
+            } else {
+                active.output = Some(text.to_owned());
+                active.output_open = true;
+            }
+        }
         if !same {
+            let output_open = self.active_delivery.as_ref().is_some_and(|a| a.output_open);
             self.close_seg();
+            if kind == SegKind::Text
+                && let Some(active) = self.active_delivery.as_mut()
+            {
+                active.output_open = output_open;
+            }
             let (k, data) = match kind {
                 SegKind::Text => (EntryKind::Agent, json!({"text": text, "final": false})),
                 SegKind::Thought => (EntryKind::Thought, json!({"text": text})),
@@ -384,23 +442,32 @@ impl Actor {
         }
     }
 
-    /// Persists streamed text at most every 300 ms (or immediately with `force`).
+    /// 最多每300毫秒保存流文本；重写 entry 时保留当前语音归属，强制关闭时同样适用。
     pub(super) fn flush(&mut self, force: bool) {
         if let Seg::Open { kind, entry_id, buf, flushed, dirty } = &mut self.seg
             && *dirty
             && (force || flushed.elapsed() >= Duration::from_millis(300))
         {
-            let data = match kind {
+            let mut data = match kind {
                 SegKind::Text => json!({"text": buf, "final": false, "author": self.cfg.id}),
                 SegKind::Thought => json!({"text": buf, "author": self.cfg.id}),
             };
+            if *kind == SegKind::Text
+                && let Some(call) = &self.turn_call
+            {
+                data["call"] = call.clone().into();
+            }
             self.hub.set_entry(entry_id, &data);
             *flushed = Instant::now();
             *dirty = false;
         }
     }
 
+    /// 关闭流片段并强制刷新，分离后续输出与当前段落。
     pub(super) fn close_seg(&mut self) {
+        if let Some(active) = self.active_delivery.as_mut() {
+            active.output_open = false;
+        }
         self.flush(true);
         self.seg = Seg::None;
     }

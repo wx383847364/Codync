@@ -20,18 +20,18 @@ class AttachmentFiles(private val context: Context, private val directory: File)
     private val outgoing = outgoingFolder(directory).apply { mkdirs() }
     private val downloads = File(directory, "attachments").apply { mkdirs() }
 
+    /** 流式复制选中的完整附件；总大小由可用存储决定，失败时删除半成品。 */
     suspend fun import(uri: Uri): OutgoingFile = withContext(Dispatchers.IO) {
         check(outgoing.mkdirs() || outgoing.isDirectory)
         var name = "file"
-        context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE), null, null, null)?.use { cursor ->
+        // 仅查询名称，provider 报告的大小不再用于拒绝视频或其他附件。
+        context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
             if (cursor.moveToFirst()) {
                 name = cursor.getString(0) ?: name
-                if (!cursor.isNull(1)) require(cursor.getLong(1) <= MAX_FILE_BYTES) { "Files must be 100 MiB or smaller." }
             }
         }
         name = cleanName(name)
-        val used = outgoing.listFiles().orEmpty().sumOf { it.length() }
-        require(outgoing.listFiles().orEmpty().size < 200 && used < 512L * 1024 * 1024) {
+        require(outgoing.listFiles().orEmpty().size < 200) {
             "Attachment storage is full. Send or remove older files first."
         }
         val destination = File(outgoing, UUID.randomUUID().toString())
@@ -39,14 +39,10 @@ class AttachmentFiles(private val context: Context, private val directory: File)
             val input = requireNotNull(context.contentResolver.openInputStream(uri)) { "Couldn't open the selected file." }
             input.use { source -> destination.outputStream().use { target ->
                 val buffer = ByteArray(64 * 1024)
-                var total = 0L
                 while (true) {
                     coroutineContext.ensureActive()
                     val count = source.read(buffer)
                     if (count < 0) break
-                    total += count
-                    require(total <= MAX_FILE_BYTES) { "Files must be 100 MiB or smaller." }
-                    require(used + total <= 512L * 1024 * 1024) { "Attachment storage is full. Send or remove older files first." }
                     target.write(buffer, 0, count)
                 }
                 target.fd.sync()
@@ -77,14 +73,11 @@ class AttachmentFiles(private val context: Context, private val directory: File)
         require(uuid == id.lowercase()) { "Invalid attachment ID." }
         return File(downloads, uuid)
     }
+    /** 发送后缓存本地副本，裁剪其他文件时保护当前副本，避免大文件立即被删。 */
     fun cache(id: String, source: OutgoingFile) {
-        File(source.path).copyTo(cached(id), overwrite = true)
-        trim()
-    }
-    fun trim() {
-        val files = downloads.listFiles().orEmpty().filter { it.isFile && !it.name.endsWith(".partial") }.sortedBy { it.lastModified() }
-        var bytes = files.sumOf { it.length() }
-        for (file in files) if (bytes > 512L * 1024 * 1024) { bytes -= file.length(); file.delete() }
+        val destination = cached(id)
+        File(source.path).copyTo(destination, overwrite = true)
+        trim(destination)
     }
 
     /**
@@ -106,6 +99,18 @@ class AttachmentFiles(private val context: Context, private val directory: File)
     }
 
     companion object {
+        /** 按缓存软额度淘汰旧文件，但当前即将使用的文件即使单独超额也必须保留。 */
+        fun trim(keeping: File) {
+            val directory = keeping.parentFile ?: return
+            // 正在写入的 partial 不参与淘汰；当前文件的路径由私有缓存生成。
+            val files = directory.listFiles().orEmpty().filter { it.isFile && !it.name.endsWith(".partial") }.sortedBy { it.lastModified() }
+            var bytes = files.sumOf { it.length() }
+            for (file in files) if (file != keeping && bytes > 512L * 1024 * 1024) {
+                val size = file.length()
+                if (file.delete()) bytes -= size
+            }
+        }
+
         /** Where account folder [directory] keeps the files its drafts and queued messages send. */
         fun outgoingFolder(directory: File) = File(directory, "outgoing")
         fun inOutgoing(directory: File, path: String) = File(path).canonicalFile.parentFile == outgoingFolder(directory).canonicalFile

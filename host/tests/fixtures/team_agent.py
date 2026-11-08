@@ -2,10 +2,13 @@
 
 import json
 import pathlib
+import re
 import subprocess
 import sys
 import threading
 import time
+import urllib.error
+import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
 output_lock = threading.Lock()
@@ -24,8 +27,29 @@ def update(value):
     send({"method": "session/update", "params": {"sessionId": "session", "update": value}})
 
 
-def mcp_call(server_name, tool, arguments):
-    """通过真实 MCP 进程调用工具；读取回复不需要接收者身份参数。"""
+# actor 单测没有可执行的宿主 CLI；通过真实 loopback API 测工具桥，完整 stdio MCP 留给 team_e2e。
+def direct_call(config, server_name, tool, arguments):
+    """供 actor 单测使用认证 HTTP 桥，完整集成测试仍经过真实 MCP。"""
+    body = {"botId": config["botId"], "name": tool, "arguments": arguments}
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{config['port']}/api/{server_name}Call", data=json.dumps(body).encode(),
+        headers={"Content-Type": "application/json", "Authorization": "Bearer " + config["token"]},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            value = json.load(response)
+        return {"content": [{"type": "text", "text": json.dumps(value)}]}
+    except urllib.error.HTTPError as error:
+        value = json.load(error)
+        return {"isError": True, "content": [{"type": "text", "text": value["error"]}]}
+
+
+# stdio 模式先校验名册；actor 单测显式选择 HTTP 桥，维护时直接验证目标工具拒绝。
+def mcp_call(server_name, tool, arguments, check_roster=True):
+    """按测试模式调用协作工具；读取回复不需要接收者身份参数。"""
+    direct = pathlib.Path("direct-api.json")
+    if direct.exists():
+        return direct_call(json.loads(direct.read_text()), server_name, tool, arguments)
     server = next(s for s in servers if s["name"] == server_name)
     with subprocess.Popen([server["command"], *server["args"]], stdin=subprocess.PIPE,
                           stdout=subprocess.PIPE, text=True) as mcp:
@@ -41,7 +65,7 @@ def mcp_call(server_name, tool, arguments):
         next_id = 3
         if server_name == "team":
             assert {t["name"] for t in tools["result"]["tools"]} == {"list_bots", "message_bot", "read_bot_reply"}
-            if tool == "message_bot":
+            if check_roster and tool == "message_bot":
                 cursor = None
                 while True:
                     # 实际沙箱可能超过默认二十个 bot，沿已有分页查找目标，不能假设第一页就是全集。
@@ -70,11 +94,56 @@ def chain():
 REPLIES_END = "\n\n[Codync: these are bot replies"
 
 
+# 维护走独立脚本，不消耗接力步骤；刻意模拟错误输出、权限和 MCP 调用以验证隔离。
+def compact(request):
+    config = json.loads(pathlib.Path("group-compact.json").read_text())
+    with open("compactions.jsonl", "a") as log:
+        log.write(json.dumps(request["params"]) + "\n")
+    # 多次真实维护各有独立原生事件，不能被宿主按同一个 compactionId 去重。
+    compaction_id = "group-native-compact-" + str(len(pathlib.Path("compactions.jsonl").read_text().splitlines()))
+    while config.get("hold") and not pathlib.Path("compact-release").exists() and not cancel.wait(0.01):
+        pass
+    for call in config.get("tools", []):
+        response = mcp_call(call["server"], call["name"], call["arguments"], check_roster=False)
+        with open("compact-tools.jsonl", "a") as log:
+            log.write(json.dumps({"name": call["name"], "response": response}) + "\n")
+    if config.get("permission"):
+        send({"id": "permission", "method": "session/request_permission", "params": {
+            "sessionId": request["params"]["sessionId"],
+            "toolCall": {"toolCallId": "compact-permission", "title": "COMPACT_PRIVATE_PERMISSION"},
+            "options": [{"optionId": "allow", "name": "Allow", "kind": "allow_once"}],
+        }})
+        # 即使已取消维护，也等待宿主的明确拒绝，覆盖取消宽限期的迟到请求。
+        assert permission.wait(5), "maintenance permission was not answered"
+        pathlib.Path("compact-permission.json").write_text(json.dumps(permission_reply))
+    if cancel.is_set() and config.get("holdAfterCancel"):
+        pathlib.Path("compact-cancelled").touch()
+        while not pathlib.Path("compact-cancel-release").exists():
+            time.sleep(0.01)
+    update({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "COMPACT_PRIVATE_AGENT"}})
+    update({"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": "COMPACT_PRIVATE_THOUGHT"}})
+    update({"sessionUpdate": "tool_call", "toolCallId": "compact-tool", "title": "COMPACT_PRIVATE_TOOL", "status": "in_progress"})
+    update({"sessionUpdate": "plan", "entries": [{"content": "COMPACT_PRIVATE_PLAN", "status": "pending", "priority": "high"}]})
+    if config.get("confirmed", True):
+        update({"sessionUpdate": "compaction_update", "compactionId": compaction_id, "status": "completed",
+                "summary": [{"type": "text", "text": "COMPACT_PRIVATE_SUMMARY"}]})
+    if "usage" in config:
+        update({"sessionUpdate": "usage_update", **config["usage"]})
+    send({"id": request["id"], "result": {"stopReason": "cancelled" if cancel.is_set() else "end_turn"}})
+
+
+# 真实 ACP 回合夹具：读取有限派工步骤并通过真实 MCP 服务发出任务。
 def prompt(request):
     """执行委派、分页读取与取消测试场景，不访问真实模型或账户。"""
     text = request["params"]["prompt"][0]["text"]
     with open("prompts.jsonl", "a") as log:
         log.write(json.dumps(text) + "\n")
+    with open("prompt-requests.jsonl", "a") as log:
+        log.write(json.dumps(request["params"]) + "\n")
+    # 原生维护必须先分流，不能把 /compact 算成普通群接力或用户回复。
+    if text.startswith("/compact") and pathlib.Path("group-compact.json").exists():
+        compact(request)
+        return
     if REPLIES_END in text:
         # Replies to requests this bot sent: relay what they said (whatever words they carry),
         # or pass on a chain the peer handed back.
@@ -180,17 +249,56 @@ def prompt(request):
             pass
     while "BLOCK" in text and not pathlib.Path("release").exists() and not cancel.wait(0.01):
         pass
-    if text.startswith("[Group chat") or "\n[Group chat" in text:
+    # 新任务包以稳定 delivery 标识区分群回合，仍按完整来源而非最后一段指令取请求。
+    if text.startswith("[Group chat") or "\n[Group chat" in text or "Protected task material. Context delivery ID:" in text:
         while "BLOCK" in text and not pathlib.Path("release").exists() and not cancel.wait(0.01):
             pass
         if cancel.is_set():
             send({"id": request["id"], "result": {"stopReason": "cancelled"}})
             return
+        # 群内真实MCP接力：配置只决定夹具行为，不替代host的来源上下文。
+        scripted = pathlib.Path("group-script.json")
+        if scripted.exists():
+            script = json.loads(scripted.read_text())
+            # 有限步骤用于验证长链最终交付，避免固定互相 @ 的夹具无限接力。
+            if "steps" in script:
+                cursor = pathlib.Path("group-script-step")
+                index = int(cursor.read_text()) if cursor.exists() else 0
+                cursor.write_text(str(index + 1))
+                script = script["steps"][min(index, len(script["steps"]) - 1)]
+            if "plan" in script:
+                update({"sessionUpdate": "plan", "entries": script["plan"]})
+            # 模拟 FirstMessage adapter 的原生自行整理，下一回合必须重新补发 profile。
+            if script.get("compacted"):
+                update({"sessionUpdate": "compaction_update", "compactionId": "group-script-compact", "status": "completed"})
+            if "usage" in script:
+                update({"sessionUpdate": "usage_update", **script["usage"]})
+            for task in script.get("tasks", []):
+                response = mcp_call("team", "message_bot", task)
+                assert not response.get("isError"), response
+            reply = script["reply"]
+            update({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": reply}})
+            send({"id": request["id"], "result": {"stopReason": "end_turn"}})
+            return
         # A room turn: answer only when the user spoke last, otherwise pass.
         room = text.split("New messages in the room (oldest first):\n", 1)[-1].split("\n\n", 1)[0]
-        last = room.strip().splitlines()[-1] if "New messages" in text else ""
+        lines = room.strip().splitlines()
+        last = lines[-1] if "New messages" in text and lines else ""
+        # 完整来源不在窗口时仍是本次请求；不能把窗口当作唯一任务正文。
+        if "Request (complete original):\n" in text:
+            source = text.split("Request (complete original):\n", 1)[1].split("\n\n", 1)[0]
+            if source.startswith("User:"):
+                last = source
+                # 无点名的群请求已有成员贡献时不重复答；明确 @ 的独立请求仍正常执行。
+                progress = text.split("Saved room progress excerpts", 1)[-1]
+                root = re.search(r"Original user task \(complete\); entryId=([^,]+)", text)
+                if "@" not in source and root and ("root=" + root.group(1) + " ") in progress:
+                    last = ""
         reply = "reply: group" if last.startswith("User:") else "(pass)"
         if last.startswith("User:") and "PING" in last:
+            reply = "@b over to you"
+        if last.startswith("User:") and "LATEAT" in last:
+            # A late answer: the room turn that asked is over by the time this lands.
             reply = "@b over to you"
         if "REACT" in last:
             response = mcp_call("chat", "react", {"emoji": "👍", "to": "user"})
@@ -220,13 +328,22 @@ for line in sys.stdin:
     request = json.loads(line)
     method = request.get("method")
     if method == "initialize":
-        send({"id": request["id"], "result": {"agentCapabilities": {
-            "loadSession": True, "_meta": {"claudeCode": {}},
-        }}})
+        # 仅显式夹具文件切换为 FirstMessage，原有 Claude/native 维护用例保持能力不变。
+        capabilities = {"loadSession": True}
+        if not pathlib.Path("first-message").exists():
+            capabilities["_meta"] = {"claudeCode": {}}
+        send({"id": request["id"], "result": {"agentCapabilities": capabilities}})
     elif method in ("session/new", "session/load"):
+        # 测试在claimed与started之间强杀host，准备会话时绝不发送任务prompt。
+        while pathlib.Path("hold-session").exists():
+            time.sleep(0.01)
         servers = request["params"]["mcpServers"]
         with open("sessions.jsonl", "a") as log:
             log.write(json.dumps(request) + "\n")
+        # 模拟原会话无法恢复；宿主应新建后跳过维护，不能留下 Maintenance 阻塞原投递。
+        if method == "session/load" and pathlib.Path("reject-load").exists():
+            send({"id": request["id"], "error": {"code": -32000, "message": "fixture cannot reload session"}})
+            continue
         pathlib.Path("servers.json").write_text(json.dumps(request["params"]["mcpServers"]))
         send({"id": request["id"], "result": {"sessionId": "session", "models": {
             "currentModelId": "old", "availableModels": [{"modelId": "old", "name": "Old"}, {"modelId": "new", "name": "New"}],

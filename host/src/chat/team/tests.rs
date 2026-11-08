@@ -125,6 +125,7 @@ impl Fixture {
     }
 }
 
+/// 验证私聊委派唤醒请求方、保留请求方输出合同并隔离用户消息。
 #[tokio::test]
 async fn message_roundtrip_wakes_the_sender_and_keeps_user_messages_separate() {
     let f = Fixture::new();

@@ -7,6 +7,7 @@ use anyhow::Result;
 use serde_json::{Value, json};
 
 impl Hub {
+    /// 输出持久配置和当前运行态，保存故障及待切换状态也纳入快照。
     pub fn bot_json(&self, row: &BotRow) -> Value {
         let cfg = &row.config;
         let mut v = serde_json::to_value(cfg).expect("BotConfig is plain data and always serializes");
@@ -35,6 +36,8 @@ impl Hub {
         v["status"] = json!(rt.status);
         v["activity"] = rt.activity.into();
         v["startedAt"] = rt.started_at.into();
+        v["storageError"] = rt.storage_error.into();
+        v["pendingNewSession"] = rt.pending_new_session.into();
         v["workingChat"] = rt.lane.as_ref().map(|l| l.chat.clone()).into();
         v["fastModeSupport"] = rt.fast_mode.as_str().into();
         if !cfg.is_group() {

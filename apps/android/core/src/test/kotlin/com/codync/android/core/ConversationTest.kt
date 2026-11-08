@@ -5,6 +5,28 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class ConversationTest {
+    /** 中文聚合同时覆盖保护停止、混合状态、未知状态与旧卡片空列表。 */
+    @Test fun `delivery summaries keep current outcomes without the original body`() {
+        val stopped = DeliveryRow("d", "b", "cancelled", "对话轮次上限")
+        assertEquals("自动接力已达 3 轮，已停止继续派工", DeliveryRow.summary(listOf(stopped)))
+        assertEquals("群内派工：1 项已停止，1 项执行中", DeliveryRow.summary(listOf(stopped, stopped.copy(status = "started"))))
+        assertEquals("群内派工已完成", DeliveryRow.summary(listOf(stopped.copy(status = "completed"))))
+        assertEquals("群内派工状态待更新", DeliveryRow.summary(emptyList()))
+        assertEquals("状态待更新", stopped.copy(status = "future").statusText)
+        assertEquals(listOf("等待执行", "准备执行", "执行中", "已完成", "失败", "已中断", "未回复", "已停止"),
+            listOf("queued", "claimed", "started", "completed", "failed", "interrupted", "noReply", "cancelled").map { stopped.copy(status = it).statusText })
+    }
+    /** 超过旧限制的附件能进入同步历史，负数仍由统一校验拒绝。 */
+    @Test fun `conversation updates accept large attachment metadata`() {
+        val value = buildJsonObject {
+            put("id", "e"); put("botId", "b"); put("seq", 1); put("rev", 1); put("kind", "user")
+            putJsonObject("data") {
+                putJsonArray("attachments") { addJsonObject { put("id", "a"); put("name", "video.mp4"); put("size", 101L * 1024 * 1024) } }
+            }
+        }
+        val decoded = Entry.decode(value)
+        assertEquals(101L * 1024 * 1024, decoded.data.getValue("attachments").jsonArray.single().jsonObject.getValue("size").jsonPrimitive.long)
+    }
     private fun entry(kind: String, final: Boolean = false) = Entry("e", 1, "b", rev = 1, kind = kind,
         data = buildJsonObject { put("text", "message"); put("final", final) })
 
@@ -46,9 +68,10 @@ class ConversationTest {
         assertEquals(500, long.replyQuote.text.length)
     }
 
+    /** send 新增结构化身份字段，附件与引用仍维持原请求语义。 */
     @Test fun `a send carries the message it quotes and its files`() {
         val send = PendingSend("n", "b", "Ship it", 1, replyTo = ReplyQuote("e", "user", "Ready?"))
-        assertEquals(buildJsonObject { put("botId", "b"); put("text", "Ship it"); put("clientNonce", "n"); put("replyTo", "e")
+        assertEquals(buildJsonObject { put("botId", "b"); put("text", "Ship it"); put("clientNonce", "n"); put("replyTo", "e"); putJsonArray("mentions") {}
             putJsonArray("attachments") { add("u1") } }, send.body(listOf("u1")))
         assertFalse("replyTo" in send.copy(replyTo = null).body())
     }
@@ -114,4 +137,15 @@ class ConversationTest {
             assertFails<IllegalArgumentException> { Entry.decode(value) }
         }
     }
+    /** 草稿、离线 pending 与重试序列化始终保留原 UTF-16 身份及未裁剪正文。 */
+    @Test fun `queued mentions retain stable identity and raw unicode offsets`() {
+        val send = PendingSend("n", "g", "  😀 @旧名 tail  ", 1, mentions = listOf(Mention("stable", 5, 8)))
+        val recovered = WireJson.decodeFromString<PendingSend>(WireJson.encodeToString(PendingSend.serializer(), send))
+        assertEquals(send, recovered)
+        assertEquals("  😀 @旧名 tail  ", recovered.body()["text"]?.jsonPrimitive?.content)
+        assertEquals("stable", recovered.body()["mentions"]?.jsonArray?.first()?.jsonObject?.get("botId")?.jsonPrimitive?.content)
+        assertEquals(emptyList<Mention>(), editMentions("@a", "@ab", listOf(Mention("a", 0, 2)), 2 until 2))
+        assertEquals(emptyList<Mention>(), editMentions("@a", "@a𠀀", listOf(Mention("a", 0, 2)), 2 until 2))
+    }
+
 }

@@ -20,6 +20,7 @@ interface ComposerMenuState<T> {
  * Both lists are for the query at the end of the draft, so with the caret elsewhere or text selected
  * every key but Escape edits the draft and Return sends.
  */
+/** 统一候选按键；方向键逐次循环，光标离开末尾查询后交回编辑器。 */
 export function useComposerMenu<T>(draft: string, items: T[], pick: (item: T) => void, returnPicks: (item: T, draft: string) => boolean = () => true) {
   const [highlight, setHighlight] = useState({ draft: '', index: 0 })
   const [dismissed, setDismissed] = useState<string | null>(null)
@@ -28,6 +29,7 @@ export function useComposerMenu<T>(draft: string, items: T[], pick: (item: T) =>
   const index = highlight.draft === draft ? Math.min(highlight.index, shown.length - 1) : 0
 
   /** Handles a key in the field while the list is up; returns whether it did. */
+  // IME 与组合快捷键交给输入框，确认只消费当前候选。
   const onKey = (e: KeyboardEvent<HTMLTextAreaElement>, composing: boolean): boolean => {
     const picked = shown[index]
     if (!picked || composing || e.altKey || e.metaKey || e.ctrlKey) return false
@@ -38,8 +40,9 @@ export function useComposerMenu<T>(draft: string, items: T[], pick: (item: T) =>
     if (!step && !picks && e.key !== 'Escape') return false
     e.preventDefault()
     e.stopPropagation()
-    if (step) setHighlight({ draft, index: (index + step + shown.length) % shown.length })
-    else if (picks) pick(picked)
+    // 同帧方向键累加最新高亮，重复确认只消费按键而不再次执行。
+    if (step) setHighlight((previous) => ({ draft, index: ((previous.draft === draft ? Math.min(previous.index, shown.length - 1) : 0) + step + shown.length) % shown.length }))
+    else if (picks) { if (!e.repeat) pick(picked) }
     else setDismissed(draft)
     return true
   }
@@ -106,12 +109,13 @@ export function CommandMenu({ menu }: { menu: ComposerMenuState<SlashCommand> })
 }
 
 /** The `@` list in a group: each member's face, name and description. */
+/** 成员列表复用命令布局，并显示稳定 ID 以区分同名成员。 */
 export function MentionMenu({ menu }: { menu: ComposerMenuState<Bot> }) {
   const tr = useTr()
   return <ComposerMenu menu={menu} label={tr('Members')} row={(m) => ({
     key: m.id,
     icon: <BotAvatar bot={m} size={18} animated={false} />,
     title: m.name,
-    detail: m.description,
+    detail: `${m.id.slice(0, 8)}${m.description ? ` · ${m.description}` : ''}`,
   })} />
 }

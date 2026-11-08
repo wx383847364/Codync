@@ -8,7 +8,7 @@ use std::path::PathBuf;
 
 pub struct Drafts {
     path: PathBuf,
-    saved: HashMap<String, String>,
+    saved: HashMap<String, serde_json::Value>,
 }
 
 impl Drafts {
@@ -35,15 +35,35 @@ impl Drafts {
         .await?
     }
 
+    /// 恢复草稿正文与已绑定身份，旧草稿兼容为空身份列表。
     pub fn restore(&self) -> HashMap<String, Editor> {
-        self.saved.iter().map(|(key, text)| (key.clone(), Editor::with(text))).collect()
+        self.saved
+            .iter()
+            .filter_map(|(key, value)| {
+                // 兼容旧纯文本格式，新的身份与光标随草稿一起恢复。
+                let editor = if let Some(text) = value.as_str() {
+                    Some(Editor::with(text))
+                } else {
+                    serde_json::from_value::<Editor>(value.clone()).ok()
+                };
+                editor
+                    .filter(|e| e.cursor <= e.text.len() && e.text.is_char_boundary(e.cursor))
+                    .map(|e| (key.clone(), e))
+            })
+            .collect()
     }
 
+    /// 一起持久化草稿正文与身份，离线后不按显示名重新路由。
     pub async fn save(&mut self, drafts: &HashMap<String, Editor>) -> Result<()> {
         let next: HashMap<_, _> = drafts
             .iter()
             .filter(|(_, editor)| !editor.text.is_empty())
-            .map(|(key, editor)| (key.clone(), editor.text.clone()))
+            .map(|(key, editor)| {
+                (
+                    key.clone(),
+                    if editor.mentions.is_empty() { serde_json::json!(editor.text) } else { serde_json::json!(editor) },
+                )
+            })
             .collect();
         if next == self.saved {
             return Ok(());

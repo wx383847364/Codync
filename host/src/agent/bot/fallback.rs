@@ -51,7 +51,7 @@ pub(super) struct Relay {
     exhausted: bool,
     /// The main session moved off this agent (and its session): its next turn there starts with a recap or a
     /// catch-up. Kept until the main session comes up on an agent.
-    recap: Option<(String, Option<String>)>,
+    pub(super) recap: Option<(String, Option<String>)>,
     /// This attempt's move in the chat, which shows what the agent was told once its session is up.
     line: Option<String>,
     /// What this attempt's agent hears first after the user's handoff (`carry_in`); this turn's only.

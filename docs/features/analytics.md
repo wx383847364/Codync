@@ -171,3 +171,8 @@ No client asks: sharing starts with the first launch. Every client has the same 
 *Share usage analytics* (iPhone, Android and desktop Settings, terminal UI `^k`). The App
 Store privacy label declares *Product Interaction* and *Coarse Location*, linked to the user, not used
 for tracking (the same two in `apps/ios/Resources/PrivacyInfo.xcprivacy`).
+
+Group delivery events: `group_delivery_accepted` (`kind`, `source`, target count or
+`keyed`), `group_delivery_finished` (`outcome`), `group_delivery_storage` (`outcome`,
+`category`), and `group_mention_rejected` (`category`). These never include message
+text, prompts, names, bot/delivery IDs, keys or file content.

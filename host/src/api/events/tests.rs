@@ -44,11 +44,12 @@ impl Drop for Fixture {
 }
 
 #[tokio::test]
+/// 全量重连保留删除记录，删除事务新增投递取消结果不影响原游标。
 async fn full_sync_removes_a_bot_deleted_while_the_client_was_offline() {
     let f = Fixture::new();
     f.add_bot("deleted");
     f.add_bot("kept");
-    let deleted_rev = f.hub.store.delete_bot("deleted").unwrap();
+    let (deleted_rev, _, _) = f.hub.store.delete_bot("deleted").unwrap();
 
     // An app/host update rewinds the cursor to zero while keeping the cached roster.
     let events = f.catch_up(0).await;
@@ -70,10 +71,11 @@ async fn full_sync_removes_a_bot_deleted_while_the_client_was_offline() {
 }
 
 #[tokio::test]
+/// 增量重连仅回放游标之后的删除，事务返回取消信息不改变删除语义。
 async fn incremental_sync_replays_deletions_only_after_the_saved_cursor() {
     let f = Fixture::new();
     let before = f.add_bot("deleted");
-    let deleted_rev = f.hub.store.delete_bot("deleted").unwrap();
+    let (deleted_rev, _, _) = f.hub.store.delete_bot("deleted").unwrap();
     let events = f.catch_up(before).await;
     assert_eq!(events.len(), 3);
     assert_eq!(events[2]["bot"]["deleted"], true);

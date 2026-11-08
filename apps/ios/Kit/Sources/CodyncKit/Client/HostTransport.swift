@@ -57,7 +57,7 @@ public extension HostTransport {
 /// in the relay mailbox while it is offline. `ChannelTransport` is the real one.
 public protocol RemoteTransport: HostTransport {
     func computerUpdates() -> AsyncStream<Computer>
-    func enqueue(botId: String, text: String, clientNonce: String, replyTo: String?) async throws
+    func enqueue(botId: String, text: String, clientNonce: String, replyTo: String?, mentions: [Mention]) async throws
     func cancelQueued(clientNonce: String) async -> MailboxCancel
     func listQueued() async throws -> [QueuedItem]
     func mailboxEvents() -> AsyncStream<MailboxEvent>
@@ -92,5 +92,12 @@ public enum HostError: LocalizedError, Sendable, Equatable {
         case .unreachable, .unreachableDirectly, .computerOffline: true
         default: false
         }
+    }
+}
+
+extension RemoteTransport {
+    /// 旧调用没有结构化身份，保持原有的空绑定语义。
+    public func enqueue(botId: String, text: String, clientNonce: String, replyTo: String?) async throws {
+        try await enqueue(botId: botId, text: text, clientNonce: clientNonce, replyTo: replyTo, mentions: [])
     }
 }

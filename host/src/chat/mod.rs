@@ -12,6 +12,7 @@ pub mod lead;
 pub mod library;
 pub mod manage;
 pub mod memory;
+pub mod mentions;
 pub mod messages;
 pub mod naming;
 pub mod oneshot;

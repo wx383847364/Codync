@@ -1,7 +1,6 @@
 package com.codync.android
 
 import android.util.AtomicFile
-import com.codync.android.core.MAX_FILE_BYTES
 import com.codync.android.core.MirrorSnapshot
 import com.codync.android.core.OutgoingFile
 import com.codync.android.core.WireJson
@@ -16,7 +15,13 @@ import kotlinx.serialization.json.jsonObject
 
 @Serializable
 data class ComposerDraft(val botId: String, val text: String = "",
-    val files: List<OutgoingFile> = emptyList(), val nonce: String = UUID.randomUUID().toString())
+    val files: List<OutgoingFile> = emptyList(), val mentions: List<com.codync.android.core.Mention> = emptyList(), val nonce: String = UUID.randomUUID().toString()) {
+    /** 已发送内容的编辑是新意图；相同内容重传仍使用原 nonce。 */
+    internal fun forSaving(previous: ComposerDraft?, represented: Boolean): ComposerDraft {
+        val changed = previous != null && (previous.text != text || previous.files != files || previous.mentions != mentions)
+        return if (changed && represented) copy(nonce = UUID.randomUUID().toString()) else this
+    }
+}
 
 /** One bounded draft book per account/computer; a draft's nonce also identifies its durable send. */
 class DraftBook(private val directory: File, computerId: String) {
@@ -37,9 +42,9 @@ class DraftBook(private val directory: File, computerId: String) {
             .map { WireJson.decodeFromJsonElement<ComposerDraft>(it) }
     }
 
-    /** A crash between pending-send commit and draft removal cannot offer the same draft twice. */
+    /** 清理已排队草稿，但失败后明确恢复的草稿应跨重启保留，供编辑或原样重传。 */
     @Synchronized fun recover(snapshot: MirrorSnapshot): List<ComposerDraft> {
-        val queued = snapshot.pending.map { it.nonce }.toSet() + snapshot.entries.mapNotNull { it.clientNonce }
+        val queued = snapshot.pending.filter { it.status != com.codync.android.core.SendStatus.Failed }.map { it.nonce }.toSet() + snapshot.entries.mapNotNull { it.clientNonce }
         val drafts = read().filter { it.nonce !in queued }
         save(drafts)
         return drafts
@@ -55,6 +60,7 @@ class DraftBook(private val directory: File, computerId: String) {
         catch (error: Throwable) { file.failWrite(output); throw error }
     }
 
+    /** 校验草稿身份和本地文件边界；大附件按非负大小接受，避免重启后丢失。 */
     fun validate(drafts: Collection<ComposerDraft>, checkPaths: Boolean = true) {
         require(drafts.size <= 64) { "Too many drafts. Send or clear an older draft first." }
         require(drafts.map { it.botId }.distinct().size == drafts.size) { "The saved drafts contain duplicate conversations." }
@@ -64,7 +70,8 @@ class DraftBook(private val directory: File, computerId: String) {
             require(draft.text.toByteArray().size <= TEXT_BYTES) { "Draft messages must be 64 KiB or smaller." }
             require(draft.files.size <= 20) { "Choose at most 20 files for one message." }
             for (attachment in draft.files) {
-                require(attachment.size in 0..MAX_FILE_BYTES && attachment.name.isNotBlank())
+                // 大附件草稿与重试必须保留，不能在重载时恢复旧的 100 MB 限制。
+                require(attachment.size >= 0 && attachment.name.isNotBlank())
                 if (checkPaths) require(AttachmentFiles.inOutgoing(directory, attachment.path)) { "A draft attachment belongs to another account." }
             }
         }

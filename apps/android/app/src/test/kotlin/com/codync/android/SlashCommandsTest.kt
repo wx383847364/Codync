@@ -15,7 +15,7 @@ class SlashCommandsTest {
         val bot = Bot("b", "Bot", skills = listOf("review"))
         val skills = listOf(InstalledSkill("review", "Review", "Reads diffs", "src", "/p"), InstalledSkill("other", "Other", "", "src", "/q"))
         assertEquals(listOf("review"), SlashCommands.list(bot, "", skills).map { it.name }.filter { it != "fast" })
-        assertNull("a new session is in the bot's menu", SlashCommands.builtIn(bot, " /new "))
+        assertEquals("after", SlashCommands.builtIn(bot, " /new ")?.sessionMode)
         assertTrue(SlashCommands.list(Bot("g", "Team", kind = "group"), "", skills).isEmpty())
     }
 
@@ -51,13 +51,13 @@ class SlashCommandsTest {
 
     @Test fun `mentions start after a space, stay short, and end with a member's full name`() {
         val members = listOf(Bot("a", "Alpha"), Bot("t", "Alpha Two"))
-        assertEquals("", mentionQuery("@", members))
-        assertEquals("Re", mentionQuery("hi @Re", members))
-        assertNull(mentionQuery("mail@host", members))
-        assertNull(mentionQuery("@" + "x".repeat(25), members))
-        assertNull(mentionQuery("@Alpha\nnext", members))
-        assertNull("an @ and a space is ordinary text", mentionQuery("meet @ home", members))
-        assertNull(mentionQuery("@alpha ", members))
-        assertEquals("a longer name can still be typed", "Alpha T", mentionQuery("@Alpha T", members))
+        assertEquals("", mentionQuery("@", members = members))
+        assertEquals("Re", mentionQuery("hi @Re", members = members))
+        assertNull(mentionQuery("mail@host", members = members))
+        assertNull(mentionQuery("@" + "x".repeat(25), members = members))
+        assertNull(mentionQuery("@Alpha\nnext", members = members))
+        assertNull("an @ and a space is ordinary text", mentionQuery("meet @ home", members = members))
+        assertNull(mentionQuery("@alpha ", members = members))
+        assertEquals("a longer name can still be typed", "Alpha T", mentionQuery("@Alpha T", members = members))
     }
 }

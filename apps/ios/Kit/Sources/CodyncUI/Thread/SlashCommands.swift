@@ -2,7 +2,7 @@ import CodyncKit
 
 /// A command in the composer's `/` list.
 struct SlashCommand: Identifiable, Equatable {
-    enum Action: Hashable { case fast, skill(String) }
+    enum Action: Hashable { case fast, skill(String), session(String) }
 
     /// What follows the `/`.
     let name: String
@@ -27,8 +27,10 @@ enum SlashCommands {
 
     /// Built-in commands, then the skills the bot has on (a group's: any member's), whose name or
     /// title holds `query`. `members` are a group's bots.
+    /// 按当前聊天列出适用命令，群成员共享会话切换语义。
     static func list(for bot: Bot?, members: [Bot] = [], query: String, skills: [InstalledSkill]) -> [SlashCommand] {
         guard let bot else { return [] }
+        if query.hasPrefix("new") { return sessions(bot).filter { $0.name.contains(query) } }
         let owners = bot.isGroup ? members : [bot]
         let own = skills.filter { skill in owners.contains { $0.skills.contains(skill.id) } }.map {
             SlashCommand(name: $0.id, icon: "book.pages", title: $0.name, detail: $0.description, warning: false, action: .skill($0.id))
@@ -39,9 +41,18 @@ enum SlashCommands {
     }
 
     /// A draft that is just a built-in command (`/fast`): sending it runs the command.
+    /// 解析已确认的内置命令，选择候选不会自动发送消息。
     static func builtIn(for bot: Bot?, members: [Bot] = [], draft: String) -> SlashCommand? {
         guard let bot, let name = query(draft.trimmingCharacters(in: .whitespacesAndNewlines)) else { return nil }
-        return builtIn(bot, members: members).first { $0.name == name }
+        return (builtIn(bot, members: members) + sessions(bot)).first { $0.name == name }
+    }
+
+    /// /new 默认等待，另两项分别强制切换和撤回待切换标记。
+    private static func sessions(_ bot: Bot) -> [SlashCommand] {
+        guard !bot.isGroup else { return [] }
+        return [("new", "after", "在当前任务结束后新建会话"), ("new-now", "immediate", "立即停止并新建"), ("new-cancel", "cancel", "取消切换")].map { name, mode, title in
+            SlashCommand(name: name, icon: "plus", title: title, detail: "主会话与群共享；先保存当前执行状态", warning: false, action: .session(mode))
+        }
     }
 
     /// Fast mode, while the bot (or a member of the group) shows it.

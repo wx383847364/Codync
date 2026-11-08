@@ -76,12 +76,13 @@ impl Actor {
         }
     }
 
+    /// 判断成员是否真正空闲，未保存结果和群执行都阻止清理会话。
     fn at_rest(&self) -> bool {
         self.turn.is_none()
             && self.queue.is_empty()
             && self.perms.is_empty()
             && self.active_request.is_none()
-            && self.active_group.is_none()
+            && self.active_delivery.is_none()
             && self.active_routine.is_none()
             && self.routine_completion.is_none()
             && self.cancel_deadline.is_none()

@@ -1,5 +1,4 @@
 //! Immutable snapshots explicitly published by a bot, independent of its workspace.
-use crate::chat::uploads::MAX_FILE;
 use anyhow::{Context as _, Result, ensure};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
@@ -9,6 +8,8 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 pub const CHUNK_SIZE: usize = 384 * 1024;
+// bot 主动发布快照的既有限额，与用户上传附件的总大小无关。
+pub const MAX_FILE: u64 = 100 * 1024 * 1024;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct SharedFile {

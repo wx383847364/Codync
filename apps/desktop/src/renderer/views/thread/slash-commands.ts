@@ -5,7 +5,7 @@
 import { fastModeDetail, fastModeShown, fastModeState, groupFastMode, type FastModeState } from '../../../shared/fast-mode.ts'
 import type { Bot } from '../../../shared/models.ts'
 
-export type SlashAction = { kind: 'fast' } | { kind: 'skill'; id: string }
+export type SlashAction = { kind: 'fast' } | { kind: 'session'; mode: string } | { kind: 'skill'; id: string }
 
 export interface SlashCommand {
   /** What follows the `/`. */
@@ -28,6 +28,16 @@ function builtIn(bot: Bot, members: Bot[]): SlashCommand[] {
   return fast ? [{ name: 'fast', icon: 'bolt', title: 'Fast mode', detail: fast.detail, warning: fast.state === 'refused', action: { kind: 'fast' } }] : []
 }
 
+/** /new 提供三项明确选择，默认等待；主会话和所有群共享新会话。 */
+function sessions(bot: Bot): SlashCommand[] {
+  if (bot.kind === 'group') return []
+  return [
+    ['new', 'after', '在当前任务结束后新建会话'],
+    ['new-now', 'immediate', '立即停止并新建'],
+    ['new-cancel', 'cancel', '取消切换'],
+  ].map(([name, mode, title]) => ({ name: name!, icon: 'plus', title: title!, detail: '主会话与群共享；先保存当前执行状态', warning: false, action: { kind: 'session', mode: mode! } }))
+}
+
 /** A bot's own Fast mode, while it shows it. */
 function ownFastMode(bot: Bot): { state: FastModeState; detail: string } | null {
   return fastModeShown(bot) ? { state: fastModeState(bot), detail: fastModeDetail(bot) } : null
@@ -37,20 +47,23 @@ function ownFastMode(bot: Bot): { state: FastModeState; detail: string } | null 
  * Built-in commands, then the bot's skills (ids in `bot.skills`; a group's `members` have them),
  * whose name or title holds `query`.
  */
+/** 按输入前缀列出群成员与会话命令，避免无关选项挤占候选。 */
 export function slashCommands(bot: Bot | null, query: string, installedSkills: { id: string; name: string; description: string }[], members: Bot[] = []): SlashCommand[] {
   if (!bot) return []
   const enabled = bot.kind === 'group' ? members.flatMap((m) => m.skills) : bot.skills
   const skills = installedSkills
     .filter((s) => enabled.includes(s.id))
     .map((s): SlashCommand => ({ name: s.id, icon: 'book.pages', title: s.name, detail: s.description, warning: false, action: { kind: 'skill', id: s.id } }))
+  if (query.startsWith('new')) return sessions(bot).filter((c) => c.name.includes(query))
   const q = query.toLowerCase()
   return [...builtIn(bot, members), ...skills].filter((c) => c.name.includes(q) || c.title.toLowerCase().includes(q))
 }
 
 /** A draft that is just a built-in command (`/fast`): sending it runs the command. */
+/** 解析已确认的内置命令，选人只插入正文而不执行发送。 */
 export function builtInCommand(bot: Bot | null, draft: string, members: Bot[] = []): SlashCommand | null {
   const name = slashQuery(draft.trim())
-  return bot && name !== null ? (builtIn(bot, members).find((c) => c.name === name) ?? null) : null
+  return bot && name !== null ? ([...builtIn(bot, members), ...sessions(bot)].find((c) => c.name === name) ?? null) : null
 }
 
 /**

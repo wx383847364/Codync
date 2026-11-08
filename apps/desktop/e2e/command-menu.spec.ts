@@ -86,3 +86,37 @@ test('typing / lists the bot\'s commands, and the keyboard moves, picks and hide
     await browser.close()
   }
 })
+
+/** 候选异步缩短时从当前可见高亮继续循环，不能沿用越界的旧索引。 */
+test('command arrows wrap from the visible highlight when enabled skills shrink', async () => {
+  const { browser, page } = await attach()
+  const skills: string[] = []
+  let botId: string | undefined
+  try {
+    for (const n of [1, 2]) {
+      const { skill } = await api<{ skill: { id: string } }>(page, 'installSkill', { name: `Shrink ${Date.now()} ${n}`, description: 'Menu regression', instructions: 'Test only.' })
+      skills.push(skill.id)
+    }
+    const name = `Shrinking commands ${Date.now()}`
+    botId = (await api<{ bot: { id: string } }>(page, 'createBot', { name, backend: 'custom', command: 'unused', skills, connectors: [] })).bot.id
+    await page.locator('.roster-row', { hasText: name }).click()
+    const field = page.locator('.composer textarea')
+    const rows = page.getByRole('listbox', { name: 'Commands' }).getByRole('option')
+    await field.fill('/')
+    await expect(rows).toHaveCount(3)
+    await field.press('ArrowUp')
+    await expect(rows.nth(2)).toHaveAttribute('aria-selected', 'true')
+    await api(page, 'updateBot', { id: botId, skills: [skills[0]] })
+    await expect(rows).toHaveCount(2)
+    await expect(rows.nth(1)).toHaveAttribute('aria-selected', 'true')
+    await field.press('ArrowDown')
+    await expect(rows.nth(0)).toHaveAttribute('aria-selected', 'true')
+    await field.press('ArrowUp')
+    await expect(rows.nth(1)).toHaveAttribute('aria-selected', 'true')
+    await expect(field).toHaveValue('/')
+  } finally {
+    if (botId) await api(page, 'deleteBot', { botId }).catch(() => {})
+    for (const id of skills) await api(page, 'removeSkill', { id }).catch(() => {})
+    await browser.close()
+  }
+})

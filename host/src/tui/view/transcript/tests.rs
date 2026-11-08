@@ -1,5 +1,65 @@
 use super::*;
 
+/// 窄终端的混合状态也只占一行，展开后仍能看到所有目标的完整状态。
+#[tokio::test]
+async fn mixed_delivery_summary_stays_one_line_in_a_narrow_terminal() {
+    use crate::tui::app::Msg;
+    use serde_json::json;
+    let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+    let mut app = App::new(crate::tui::net::Client::new("http://127.0.0.1:1", Some("fixture")), tx, String::new());
+    app.on_msg(Msg::Event(
+        json!({"type":"bot", "bot":{"id":"bot","name":"Member","cwd":"/workspace","backend":"custom","status":"idle"}}),
+    ));
+    app.on_msg(Msg::Event(json!({"type":"entry", "entry":{"id":"card","botId":"bot","seq":1,"kind":"notice","turn":1,"data":{"deliveryBody":"BODY_MUST_STAY_HIDDEN","deliveryRows":[{"targetBotId":"bot","status":"completed"},{"targetBotId":"c","status":"started"},{"targetBotId":"d","status":"failed"}]}}})));
+    let folded = build_chat(&app, app.bots.get("bot").unwrap(), 24);
+    let (_, start, end) = folded.messages.iter().find(|(id, _, _)| id == "card").unwrap();
+    let visible = folded.lines[*start..*end].iter().filter(|line| line.width() > 0).collect::<Vec<_>>();
+    assert_eq!(visible.len(), 1);
+    assert!(visible[0].width() <= 24);
+    app.unfolded.insert("card".into());
+    let opened = build_chat(&app, app.bots.get("bot").unwrap(), 24);
+    let text = opened.lines.iter().map(ToString::to_string).collect::<Vec<_>>().join("\n");
+    assert!(text.contains("已完成") && text.contains("执行中") && text.contains("失败"));
+    assert!(!text.contains("BODY_MUST_STAY_HIDDEN"));
+}
+
+/// 旧卡片即使持有整段原文也只显示摘要，o 键可展开和收起且不会重复原文。
+#[tokio::test]
+async fn delivery_cards_fold_details_and_render_source_text_once() {
+    use crate::tui::app::{Focus, Msg};
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use serde_json::json;
+    let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+    let mut app = App::new(crate::tui::net::Client::new("http://127.0.0.1:1", Some("fixture")), tx, String::new());
+    app.on_msg(Msg::Event(
+        json!({"type":"bot", "bot":{"id":"bot","name":"Member","cwd":"/workspace","backend":"custom","status":"idle"}}),
+    ));
+    app.on_msg(Msg::Event(json!({"type":"entry", "entry":{"id":"source","botId":"bot","seq":1,"kind":"agent","turn":1,"data":{"text":"ORIGINAL_ONLY_ONCE","final":true}}})));
+    app.on_msg(Msg::Event(json!({"type":"entry", "entry":{"id":"delivery","botId":"bot","seq":2,"kind":"notice","turn":1,"data":{"text":"ORIGINAL_ONLY_ONCE","deliveryBody":"ORIGINAL_ONLY_ONCE","deliveryAttempt":1,"deliveryRows":[{"deliveryId":"d","targetBotId":"bot","status":"cancelled","detail":"对话轮次上限"}]}}})));
+    app.selected = Some("bot".into());
+    app.focus = Focus::Chat;
+    app.chat_page = true;
+    // v 默认选中最新聊天消息，再向下选中其后的状态卡，保持原来的回复快捷键语义。
+    app.on_key(KeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE));
+    assert_eq!(app.pick.as_deref(), Some("source"));
+    app.on_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    assert_eq!(app.pick.as_deref(), Some("delivery"));
+    // 默认单行中文状态，不展示内部状态和投递次数。
+    let folded = build_chat(&app, app.bots.get("bot").unwrap(), 120);
+    let text = folded.lines.iter().map(ToString::to_string).collect::<Vec<_>>().join("\n");
+    assert!(text.contains("自动接力已达 3 轮，已停止继续派工"));
+    assert_eq!(text.matches("ORIGINAL_ONLY_ONCE").count(), 1);
+    assert!(!text.contains("Attempt") && !text.contains("cancelled") && !text.contains("第 1 次投递"));
+    assert!(folded.messages.iter().any(|(id, _, _)| id == "delivery"));
+    app.on_key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::NONE));
+    let opened = build_chat(&app, app.bots.get("bot").unwrap(), 120);
+    let text = opened.lines.iter().map(ToString::to_string).collect::<Vec<_>>().join("\n");
+    assert!(text.contains("第 1 次投递") && text.contains("Member：已停止"));
+    assert_eq!(text.matches("ORIGINAL_ONLY_ONCE").count(), 1);
+    app.on_key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::NONE));
+    assert!(!app.unfolded.contains("delivery"));
+}
+
 #[tokio::test]
 async fn generated_files_are_selectable_cards_without_duplicate_fallback_text() {
     use crate::tui::app::Msg;

@@ -74,6 +74,8 @@ pub struct Bot {
     pub skills: Vec<String>,
     pub status: Status,
     pub activity: String,
+    pub storage_error: Option<String>,
+    pub pending_new_session: bool,
     pub started_at: Option<i64>,
     pub unread: i64,
     pub last_message: String,
@@ -114,6 +116,7 @@ pub struct ModelOption {
 }
 
 impl AgentModel {
+    /// 解码 host 成员快照，包含保存故障和待新建会话状态。
     pub fn parse(v: &Value) -> Option<Self> {
         let pair = |v: &Value| {
             let id = v["id"].as_str()?.to_owned();
@@ -218,6 +221,8 @@ impl Bot {
                 _ => Status::Idle,
             },
             activity: s("activity"),
+            storage_error: v["storageError"].as_str().map(str::to_owned),
+            pending_new_session: v["pendingNewSession"].as_bool().unwrap_or(false),
             started_at: v["startedAt"].as_i64(),
             unread: v["unread"].as_i64().unwrap_or(0),
             last_message: s("lastMessage"),

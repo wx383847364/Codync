@@ -163,6 +163,7 @@ fn migrate_8(c: &Connection) -> Result<()> {
 }
 
 impl Store {
+    /// 打开并升级同一数据库，投递表和索引与其他状态一并初始化。
     pub fn open(path: &Path) -> Result<Self> {
         let c = Connection::open(path)?;
         c.execute_batch(
@@ -180,6 +181,7 @@ impl Store {
              CREATE INDEX IF NOT EXISTS entries_rev ON entries(rev);
              CREATE INDEX IF NOT EXISTS entries_bot ON entries(bot_id, seq);",
         )?;
+        super::deliveries::schema(&c)?;
         migrate(&c)?;
         codync_mem::schema::migrate(&c)?;
         let secret_key = if path == Path::new(":memory:") {

@@ -42,7 +42,7 @@ import kotlinx.coroutines.withContext
 
 private val THUMBNAIL = 112.dp
 
-/** A file going out with the next message, removable before it's sent (iOS `ComposerAttachment`): an image as a thumbnail, any other file as a chip. */
+/** 待发送图片支持触摸打开大图，移除独立，不上传或发送；其他文件仍显示名称。 */
 @Composable internal fun ComposerAttachment(file: OutgoingFile, remove: () -> Unit) {
     val expectsImage = remember(file.name) {
         MimeTypeMap.getSingleton().getMimeTypeFromExtension(file.name.substringAfterLast('.', "").lowercase())?.startsWith("image/") == true
@@ -50,13 +50,23 @@ private val THUMBNAIL = 112.dp
     val pixels = with(LocalDensity.current) { THUMBNAIL.roundToPx() }
     var image by remember(file.path) { mutableStateOf<ImageBitmap?>(null) }
     var loaded by remember(file.path) { mutableStateOf(false) }
+    var viewing by remember(file.path) { mutableStateOf(false) }
+    var preview by remember(file.path) { mutableStateOf<ImageBitmap?>(null) }
+    // 仅在打开预览后解码大图，避免每个草稿缩略图都占用大图内存。
+    LaunchedEffect(file.path, viewing) {
+        preview = if (viewing) thumbnail(file, 4096) else null
+    }
     LaunchedEffect(file.path, pixels) {
         image = thumbnail(file, pixels)
         loaded = true
+        // 文件名和图片不进入事件，仅记录解码失败。
+        if (expectsImage && image == null) Analytics.capture(AnalyticsEvent.AttachmentPreview(false))
     }
     val shown = image
     if (shown != null || expectsImage && !loaded) Box(Modifier.size(THUMBNAIL)) {
         Box(Modifier.fillMaxSize().clip(RoundedRectangle(16.dp)).background(Palette.surface)
+            // 触摸端沿用已发送图片的单击预览，移除按钮是独立的兄弟节点。
+            .plainButton { Analytics.capture(AnalyticsEvent.AttachmentPreview(true)); viewing = true }
             .semantics { contentDescription = "Image attachment: ${file.name}" }, contentAlignment = Alignment.Center) {
             if (shown != null) Image(shown, null, Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
             else Symbol("photo", size = 20.dp, tint = Palette.secondary)
@@ -67,6 +77,12 @@ private val THUMBNAIL = 112.dp
         Symbol(AttachmentIcon.symbol(file.name), size = 18.dp, tint = Palette.secondary)
         Text(file.name, Modifier.widthIn(max = 160.dp), style = Type.footnote, color = Palette.text, maxLines = 1, overflow = TextOverflow.MiddleEllipsis)
         RemoveButton(file.name, Palette.secondary, action = remove)
+    }
+    // 复用已有大图容器，关闭后保留草稿文件。
+    ImageSheet(file.takeIf { viewing }, { it.name }, { viewing = false }) { _, modifier ->
+        val bitmap = preview
+        if (bitmap != null) Image(bitmap, file.name, modifier, contentScale = ContentScale.Fit)
+        else Box(modifier, contentAlignment = Alignment.Center) { Symbol("photo", size = 24.dp, tint = Palette.secondary) }
     }
 }
 

@@ -3,26 +3,60 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 /// A one-line-or-more text field with readline-style editing.
-#[derive(Clone, Default, Debug)]
+#[derive(Clone, Default, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Editor {
     pub text: String,
     /// Byte offset, always on a char boundary.
     pub cursor: usize,
+    #[serde(default)]
+    pub mentions: Vec<crate::chat::mentions::Mention>,
 }
 
 impl Editor {
+    /// 从正文创建编辑器，旧文本默认没有结构化身份。
     pub fn with(text: &str) -> Self {
-        Self { text: text.to_owned(), cursor: text.len() }
+        Self { text: text.to_owned(), cursor: text.len(), mentions: vec![] }
     }
 
+    /// 清空正文与身份，不能让旧提及范围附着新草稿。
     pub fn clear(&mut self) {
+        self.mentions.clear();
         self.text.clear();
         self.cursor = 0;
     }
 
+    /// 插入正文并维护结构化身份，片段末尾扩展名字时解除原身份。
     pub fn insert(&mut self, s: &str) {
+        self.move_bindings(self.cursor, self.cursor, s);
         self.text.insert_str(self.cursor, s);
         self.cursor += s.len();
+    }
+
+    /// 一次替换同时维护删除与插入的 UTF-16 差值，保留后方既有身份。
+    pub fn replace_range(&mut self, from: usize, to: usize, text: &str) {
+        self.move_bindings(from, to, text);
+        self.text.replace_range(from..to, text);
+        self.cursor = from + text.len();
+    }
+
+    /// 编辑片段外平移 UTF-16 范围，编辑内部则解除绑定。
+    fn move_bindings(&mut self, from: usize, to: usize, text: &str) {
+        let inserted = text.encode_utf16().count();
+        let extends_name = text.chars().next().is_some_and(|c| c.is_alphanumeric() || c == '_');
+        let start = self.text[..from].encode_utf16().count();
+        let end = self.text[..to].encode_utf16().count();
+        // 插入名字字符会改变可见 token；标点、空格与外部编辑保留稳定身份。
+        self.mentions.retain_mut(|m| {
+            if m.end <= start {
+                return !(m.end == start && inserted > 0 && extends_name);
+            }
+            if m.start >= end {
+                m.start = m.start + inserted - (end - start);
+                m.end = m.end + inserted - (end - start);
+                return true;
+            }
+            false
+        });
     }
 
     fn prev(&self, i: usize) -> usize {
@@ -95,8 +129,10 @@ impl Editor {
         true
     }
 
+    /// 按字符边界删除正文，并解除或移动被影响的身份。
     fn cut(&mut self, from: usize, to: usize) {
         if from < to {
+            self.move_bindings(from, to, "");
             self.text.replace_range(from..to, "");
             self.cursor = from;
         }
@@ -124,6 +160,23 @@ pub(super) fn move_line(e: &mut Editor, d: isize) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Unicode 前缀不改变 UTF-16 身份，扩展名字或删除片段则解除绑定。
+    #[test]
+    fn edits_keep_only_unchanged_mention_tokens() {
+        let mut e = Editor::with("😀@a tail");
+        e.mentions.push(crate::chat::mentions::Mention { bot_id: "a".into(), start: 2, end: 4 });
+        e.cursor = "😀@a".len();
+        e.insert("!");
+        assert_eq!((e.mentions[0].start, e.mentions[0].end), (2, 4));
+        e.cursor = "😀@a".len();
+        e.insert("字");
+        assert_eq!(e.mentions, []);
+        e.mentions.push(crate::chat::mentions::Mention { bot_id: "a".into(), start: 2, end: 4 });
+        e.cursor = "😀@a".len();
+        e.key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
+        assert_eq!(e.mentions, []);
+    }
 
     #[test]
     fn editor_words_and_cuts() {

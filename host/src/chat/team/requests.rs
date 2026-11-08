@@ -16,12 +16,16 @@ pub(super) const MAX_PENDING_MESSAGES_PER_SENDER: usize = 16;
 pub struct Requests(pub(super) Mutex<RequestState>);
 
 /// A running turn, as bot messages see it.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub enum Turn {
     /// A turn in the bot's own chat, `hops` handoffs into a chain (0 for the user's own turn).
     Chat(u8),
     /// Answering another bot's request: the answer goes back in its reply, so it messages no one.
     Request,
+    /// 整理回合不允许工作工具。
+    Maintenance,
+    /// 群投递的可信来源，不接受模型提供房间或执行身份。
+    Delivery { room: String, id: String },
 }
 
 #[derive(Default)]
@@ -59,6 +63,19 @@ impl Requests {
         }
     }
 
+    /// MCP 调用读取 actor 设置的可信执行身份，不能从模型入参伪造。
+    pub fn delivery(&self, bot: &str) -> Option<(String, String)> {
+        match self.0.locked().active.get(bot) {
+            Some(Turn::Delivery { room, id }) => Some((room.clone(), id.clone())),
+            _ => None,
+        }
+    }
+
+    /// 工具桥据此隔离整理，不能派工或修改用户记忆。
+    pub fn maintaining(&self, bot: &str) -> bool {
+        matches!(self.0.locked().active.get(bot), Some(Turn::Maintenance))
+    }
+
     pub fn start_turn(&self, bot: &str, turn: Turn) {
         self.0.locked().active.insert(bot.to_owned(), turn);
     }
@@ -70,9 +87,12 @@ impl Requests {
 }
 
 impl RequestState {
+    /// 派工沿持久来源累计链深，文字与工具转换不能重置保护上限。
     fn next_hop(&self, from: &str) -> Result<u8> {
         match self.active.get(from) {
             None => bail!("the requesting bot is no longer working"),
+            Some(Turn::Delivery { .. }) => bail!("group deliveries use durable admission"),
+            Some(Turn::Maintenance) => bail!("tools are unavailable during context maintenance"),
             Some(Turn::Request) => {
                 bail!(
                     "message_bot isn't available while answering another bot's request: say what you need in your reply"

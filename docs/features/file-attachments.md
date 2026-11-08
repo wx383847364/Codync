@@ -9,7 +9,7 @@ Files travel in both directions: users attach inputs, and bots explicitly share 
   + menu.
   HEIC/TIFF/BMP become JPEG (`OutgoingFile.prepared`, `Thread/Attachments.swift`). Picked files show as chips above
   the text and can be removed; a message can be files only. Group chats take files too: they're
-  kept in the group's uploads folder and listed to each member under the message. Up to 100 MB per file.
+  kept in the group's uploads folder and listed to each member under the message. User uploads have no fixed total-size limit; available device memory and disk space still apply.
 - Upload: `upload {botId, uploadId, name, offset, data (base64), done}`, 384 KiB per call so each
   stays under the channel's 1 MiB message limit. A repeated chunk is accepted (retry); anything out
   of order is refused. Then `send {…, attachments: [uploadId]}`; the text may be empty.
@@ -29,6 +29,7 @@ Files travel in both directions: users attach inputs, and bots explicitly share 
 - Chat: images show as pictures (tap for full size), other files as cards. Other devices fetch a
   sent file with `readUpload {botId, uploadId, offset}` (384 KiB chunks) and cache it; the sender
   caches its own copy at upload.
+- Before sending, double-click a desktop image thumbnail (or activate it with the keyboard) to preview it locally; tap it on iPhone and Android. Closing keeps the draft, and Remove remains a separate action. Preview never uploads or sends the image. The terminal has no graphical thumbnails.
 - Desktop opens an image in a large panel that fits the window; a large image shrinks to fit
   below the header without cropping, even when the window is resized, and a small one keeps its
   own size. Sent and bot-shared images use the same viewer.

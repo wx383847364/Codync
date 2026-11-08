@@ -53,6 +53,8 @@ data class Bot(
     val memoryRev: Long? = null,
     val autoName: Boolean = false,
     val createdAt: Long = 0,
+    val storageError: String? = null,
+    val pendingNewSession: Boolean = false,
     val startedAt: Long? = null,
     val workingChat: String? = null,
     val lastMessage: String? = null,

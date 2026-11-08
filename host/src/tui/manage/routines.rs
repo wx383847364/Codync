@@ -208,8 +208,30 @@ impl App {
     }
 
     /// `F`: runs a failed routine run's work again: the picked notice's, else the newest in this chat.
+    /// 重试当前可恢复记录，群投递创建新 attempt 并保留原历史。
     pub(in crate::tui) fn retry_failed_run(&mut self) {
         let Some(bot) = self.selected.clone() else { return };
+        // 选中投递卡时重试该来源事件中的失败目标；旧记录始终保留。
+        let rows = self
+            .lane(&bot)
+            .into_iter()
+            .filter(|e| self.pick.as_ref().is_none_or(|id| *id == e.id))
+            .filter(|e| e.data["deliveryRows"].is_array())
+            .max_by_key(|e| e.seq)
+            .and_then(|e| e.data["deliveryRows"].as_array().cloned());
+        if let Some(rows) = rows {
+            let retry = rows
+                .iter()
+                .filter(|row| matches!(row["status"].as_str(), Some("failed" | "interrupted" | "noReply")))
+                .collect::<Vec<_>>();
+            if !retry.is_empty() {
+                for row in retry {
+                    self.call("retryDelivery", json!({"deliveryId":row["deliveryId"]}), After::Nothing);
+                }
+                self.flash("Trying failed deliveries again");
+                return;
+            }
+        }
         let run = self
             .lane(&bot)
             .into_iter()

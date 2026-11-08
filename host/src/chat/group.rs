@@ -1,82 +1,64 @@
-//! Group chats (Grok Bot's design): several bots and the user in one conversation.
-//!
-//! A group is a roster row (`BotKind::Group`) with a member list and its own
-//! transcript, but no agent. When the user writes, the group runs a *room turn*:
-//! up to [`MAX_ROUNDS`] rounds in which the members answer one at a time, each in
-//! its **own** session (a member's history is unified across its chats), told
-//! what was said since it last spoke. In the first round everyone answers unless
-//! the user @-mentions someone; later rounds only ask the members another member
-//! @-mentioned and who haven't spoken or been asked since. A member with nothing
-//! to add says `(pass)`, and a round where nobody speaks ends the turn. A newer
-//! message in the same lane (or Stop) moves the lane's epoch, which ends a running
-//! room turn before its next speaker.
+//! 群聊的唯一房间调度器。投递表决定谁执行，忙成员保持 queued。
+//! speak/task 共用十分钟等待位；等待超时不终止执行，已接受请求不被新消息覆盖。
+//! 持续执行有效派工，交付或需要用户输入时自然等待；累计轮次与链深不终止协作。
 
 use crate::LockExt;
-use crate::agent::bot::{Cmd, NoticeStyle};
+use crate::agent::bot::Cmd;
 use crate::hub::{BotStatus, Hub};
-use crate::remote::push::{self, AlertKind};
+
 use crate::store::{BotConfig, BotKind, Entry, EntryKind, Lane, Store};
-use anyhow::{Result, anyhow, bail};
+use anyhow::{Result, bail};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::oneshot;
 
-const MAX_ROUNDS: usize = 3;
-/// A member's turn that runs longer counts as a pass.
-const MEMBER_TIMEOUT: Duration = Duration::from_mins(10);
-/// Replies per room turn, across all rounds.
-const MAX_REPLIES: usize = 10;
-/// Room lines a member is shown per turn.
-const HISTORY_LINES: i64 = 24;
-/// A bot's line in another member's prompt is clipped (the user's never is).
-const LINE_CHARS: usize = 2000;
-const PASS: &str = "(pass)";
+mod context;
+pub(crate) mod history;
+pub use context::delivery_prompt;
 
-/// One member's turn in a room, queued on its actor like any other turn.
-pub struct GroupTurn {
-    pub lane: Lane,
-    pub prompt: String,
-    /// The newest message `prompt` shows (its `seq`): a reaction goes on what the member saw.
-    pub shown: i64,
-    /// The room turn that asked; a member skips it once a newer one started (see [`Rooms::current`]), unless `late`.
-    pub epoch: u64,
-    /// Queued while the member was busy elsewhere: it answers once free whatever the room did since, on a
-    /// prompt built when it starts ([`refresh`]). Only the group's Stop, the room asking the member again, or the
-    /// member leaving the group drops it (Stop in the member's own chat doesn't).
-    pub late: bool,
-    /// The reply the room sees, or `None` for a pass.
-    pub reply: oneshot::Sender<Result<Option<String>>>,
-    /// The user's message the room turn answers: one a voice call carried makes the reply the call's (`chat::calls`).
-    pub answers: Vec<String>,
+/// 补充背景预算供无正文埋点使用，不包含受保护任务原文。
+pub(crate) fn background_budget() -> usize {
+    context::BACKGROUND_TOKENS
 }
 
-/// Room turn epochs per group.
-#[derive(Default)]
-pub struct Rooms(Mutex<HashMap<String, u64>>);
+/// 十分钟只释放房间等待位，不把在途投递视为 pass 或失败。
+const MEMBER_TIMEOUT: Duration = Duration::from_mins(10);
+
+const PASS: &str = "(pass)";
+
+/// 每房间一个 runner；值只表示队列有更新，不决定投递生死。
+pub struct Rooms {
+    /// 已注册 runner 的 dirty 标记。
+    running: Mutex<HashMap<String, bool>>,
+    /// How long the room waits on a member: [`MEMBER_TIMEOUT`] in milliseconds.
+    member_timeout: AtomicU64,
+}
+
+impl Default for Rooms {
+    /// 初始化每房间唯一 runner 注册表和十分钟等待上限。
+    fn default() -> Self {
+        Self {
+            running: Mutex::default(),
+            member_timeout: AtomicU64::new(MEMBER_TIMEOUT.as_millis().try_into().unwrap_or(u64::MAX)),
+        }
+    }
+}
 
 impl Rooms {
-    fn next(&self, lane: &Lane) -> u64 {
-        let mut map = self.0.locked();
-        let epoch = map.entry(lane.chat.clone()).or_default();
-        *epoch += 1;
-        *epoch
+    fn member_timeout(&self) -> Duration {
+        Duration::from_millis(self.member_timeout.load(Ordering::Relaxed))
     }
 
-    pub fn current(&self, lane: &Lane, epoch: u64) -> bool {
-        self.0.locked().get(&lane.chat).copied() == Some(epoch)
+    #[cfg(test)]
+    pub fn set_member_timeout(&self, timeout: Duration) {
+        self.member_timeout.store(timeout.as_millis().try_into().unwrap_or(u64::MAX), Ordering::Relaxed);
     }
 
-    /// Stop: ends the room turn in `group` and the member turns in it.
-    pub fn stop(&self, hub: &Hub, group: &str) {
-        match self.0.locked().get_mut(group) {
-            Some(epoch) => *epoch += 1,
-            None => return,
-        }
-        let Ok(Some(row)) = hub.store.bot(group) else { return };
-        for member in &row.config.members {
-            let _ = hub.send_cmd(member, Cmd::CancelGroup { chat: group.to_owned() });
-        }
+    /// A room turn is running in `lane`'s group.
+    pub fn running(&self, lane: &Lane) -> bool {
+        self.running.locked().contains_key(&lane.chat)
     }
 }
 
@@ -110,301 +92,120 @@ pub fn with_members(store: &Store, members: &[String]) -> Result<Option<String>>
     }))
 }
 
-/// The user wrote in a group lane: start a room turn there (ending one still running).
-pub fn start(hub: &Arc<Hub>, group: &BotConfig, lane: Lane) {
-    let epoch = hub.groups.next(&lane);
-    let (hub, group_id) = (hub.clone(), group.id.clone());
+/// 持久取消该群当前已接受的投递，再由 Hub 按投递 ID 停止对应执行。
+pub fn stop(hub: &Hub, group: &str) -> Result<()> {
+    hub.cancel_deliveries(group, None, "群聊已停止")
+}
+
+/// 消息入库后唤醒唯一房间 runner；新消息不取消已接受投递。
+pub fn start(hub: &Arc<Hub>, group: &BotConfig, _lane: Lane) {
+    ensure_runner(hub, &group.id);
+}
+
+/// 幂等唤醒：已有 runner 时只置 dirty，避免退出窗口漏掉提交后通知。
+pub fn ensure_runner(hub: &Arc<Hub>, room: &str) {
+    let mut running = hub.groups.running.locked();
+    if let Some(dirty) = running.get_mut(room) {
+        *dirty = true;
+        return;
+    }
+    running.insert(room.to_owned(), false);
+    let (hub, room) = (hub.clone(), room.to_owned());
     tokio::spawn(async move {
-        if let Err(error) = run(&hub, &group_id, &lane, epoch).await {
-            tracing::warn!(group = group_id, error = format!("{error:#}"), "room turn failed");
+        if let Err(error) = run(&hub, &room).await {
+            tracing::error!(%room, %error, "delivery runner paused");
+            hub.groups.running.locked().remove(&room);
+            hub.emit_bot(&room);
         }
     });
 }
 
-async fn run(hub: &Arc<Hub>, group_id: &str, lane: &Lane, epoch: u64) -> Result<()> {
-    let mut replies = 0;
-    let mut last_reply: Option<(String, String, String)> = None;
-    // Members busy elsewhere: their turn waits in their queue, and they answer on their own once free.
-    let mut later: Vec<String> = vec![];
-    // The newest message each member was shown when last asked: what it passed on, it has seen.
-    let mut asked: HashMap<String, i64> = HashMap::new();
-    'rounds: for round in 0..MAX_ROUNDS {
-        let group = group(hub, group_id)?;
-        let members = members(hub, &group);
-        let since_user = since_last_user_message(hub, lane)?;
-        let mut speakers =
-            if round == 0 { responders(&members, &since_user) } else { cited(&members, &since_user, &asked) };
-        // Each round starts one member later, so the same bot doesn't always speak first.
-        if !speakers.is_empty() {
-            let offset = round % speakers.len();
-            speakers.rotate_left(offset);
+/// 四种唤醒统一指向房间；查询或通知失败保留 queued，交给周期补查。
+pub fn wake(hub: &Arc<Hub>, target: Option<&str>) {
+    match hub.store.delivery_rooms(target) {
+        Ok(rooms) => {
+            for room in rooms {
+                ensure_runner(hub, &room);
+            }
         }
-        let mut spoke = 0;
-        for member in &speakers {
-            if !hub.groups.current(lane, epoch) {
-                return Ok(());
-            }
-            // A full room turn still reports its last reply.
-            if replies >= MAX_REPLIES {
-                break 'rounds;
-            }
-            if later.contains(&member.id) {
+        Err(error) => tracing::error!(%error,"delivery wake query failed"),
+    }
+}
+
+/// 单 runner 按 `room_seq` 推进，忙成员本轮跳过；task 与 speak 都占房间等待位。
+async fn run(hub: &Arc<Hub>, room: &str) -> Result<()> {
+    let lane = Lane::main(room);
+    let visible_before = hub.store.messages_after(&lane, 0, 1)?.last().map_or(0, |entry| entry.seq);
+    let mut deferred = std::collections::HashSet::new();
+    loop {
+        let candidates = hub.store.queued_deliveries(room)?;
+        let next = candidates.into_iter().find(|d| !deferred.contains(&d.id));
+        let Some(delivery) = next else {
+            let mut running = hub.groups.running.locked();
+            if running.get(room) == Some(&true) {
+                running.insert(room.to_owned(), false);
+                deferred.clear();
                 continue;
             }
-            let (prompt, shown) = ask(hub, &group, &members, member, lane)?;
-            asked.insert(member.id.clone(), shown);
-            let (reply, answer) = oneshot::channel();
-            let busy = busy_elsewhere(hub, &member.id, lane);
-            let turn = GroupTurn {
-                lane: lane.clone(),
-                prompt,
-                shown,
-                epoch,
-                late: busy,
-                reply,
-                answers: answers(&since_user),
-            };
-            if hub.send_cmd(&member.id, Cmd::Group(turn)).is_err() {
-                continue;
+            // 在同一锁内移除，随后到达的通知会建立新的 runner。
+            running.remove(room);
+            drop(running);
+            // 成员最后的 idle 事件可能先于 runner 退出，必须再发布一次真实房间状态。
+            hub.emit_bot(room);
+            // 退出后的通知是尽力操作，失败不能让旧runner清掉后来者的注册标记。
+            match hub.store.messages_after(&lane, 0, 1) {
+                Ok(entries) => {
+                    if let Some(entry) =
+                        entries.last().filter(|e| e.seq > visible_before && e.kind == EntryKind::Agent.as_str())
+                        && let Err(error) = notify(hub, room, entry)
+                    {
+                        tracing::warn!(%error,"group notification failed");
+                    }
+                }
+                Err(error) => tracing::warn!(%error,"group notification lookup failed after runner exit"),
             }
-            // The room doesn't wait on a turn elsewhere (it can run for hours): it says so, and the member
-            // answers here when it's done.
-            if busy {
-                let text = format!("{} is busy in another chat and will answer here when it's done.", member.name);
-                let data = serde_json::json!({"text": text, "style": NoticeStyle::Info});
-                hub.add_entry(lane, EntryKind::Notice, hub.store.max_turn(group_id), &data);
-                later.push(member.id.clone());
-                tokio::spawn(answer_later(hub.clone(), group_id.to_owned(), (*member).clone(), answer));
-                continue;
-            }
-            // A failed, cancelled or overdue member turn counts as a pass; its error shows in the room.
-            if let Ok(Ok(Ok(Some(text)))) = tokio::time::timeout(MEMBER_TIMEOUT, answer).await {
-                spoke += 1;
-                replies += 1;
-                last_reply = Some((member.id.clone(), member.name.clone(), text));
-            }
+            return Ok(());
+        };
+        let valid = hub
+            .store
+            .bot(room)?
+            .filter(|r| !r.deleted)
+            .is_some_and(|r| r.config.members.contains(&delivery.target_bot_id));
+        if !valid {
+            hub.cancel_deliveries(room, Some(&delivery.target_bot_id), "已不在群内")?;
+            continue;
         }
-        if spoke == 0 {
-            break;
+        let runtime = hub.runtime(&delivery.target_bot_id);
+        if matches!(runtime.status, BotStatus::Working | BotStatus::NeedsInput) || runtime.storage_error.is_some() {
+            deferred.insert(delivery.id);
+            continue;
+        }
+        let (reply, answer) = oneshot::channel();
+        if hub.send_cmd(&delivery.target_bot_id, Cmd::Delivery { id: delivery.id.clone(), reply }).is_err() {
+            deferred.insert(delivery.id);
+            continue;
+        }
+        // 信号仅结束等待；超时和接收端关闭都不决定持久投递的生死。
+        if let Ok(Ok(false) | Err(_)) = tokio::time::timeout(hub.groups.member_timeout(), answer).await {
+            deferred.insert(delivery.id);
         }
     }
-    if let Some((from, name, text)) = last_reply {
-        alert(hub, group_id, &from, &name, &text)?;
-    }
+}
+
+/// 群回复使用群通知身份，绝不向成员私聊发送 Finished。
+pub fn notify(hub: &Hub, room: &str, entry: &Entry) -> Result<()> {
+    let Some(group) = hub.store.bot(room)?.filter(|r| !r.deleted) else { return Ok(()) };
+    let from = entry.data["author"].as_str().unwrap_or_default();
+    let name = hub.bot_name(from);
+    crate::remote::push::notify(
+        hub,
+        &group.config,
+        Some(from),
+        &format!("{name} in {}", group.config.name),
+        entry.data["text"].as_str().unwrap_or_default(),
+        crate::remote::push::AlertKind::Done,
+    );
     Ok(())
-}
-
-/// A busy member's reply, after the room turn moved on: it alerts like the room's last reply. Dropping the member's
-/// queued turn (see [`GroupTurn::late`]) ends this wait.
-async fn answer_later(
-    hub: Arc<Hub>,
-    group_id: String,
-    member: BotConfig,
-    answer: oneshot::Receiver<Result<Option<String>>>,
-) {
-    if let Ok(Ok(Some(text))) = answer.await
-        && let Err(error) = alert(&hub, &group_id, &member.id, &member.name, &text)
-    {
-        tracing::warn!(group = group_id, error = format!("{error:#}"), "late room reply not pushed");
-    }
-}
-
-/// The "done" push for `name`'s reply in the group.
-fn alert(hub: &Hub, group_id: &str, from: &str, name: &str, text: &str) -> Result<()> {
-    if let Some(group) = hub.store.bot(group_id)?.map(|r| r.config) {
-        push::notify(hub, &group, Some(from), &format!("{name} in {}", group.name), text, AlertKind::Done);
-    }
-    Ok(())
-}
-
-/// `member` runs a turn outside this room, so a room turn would queue behind it.
-fn busy_elsewhere(hub: &Hub, member: &str, lane: &Lane) -> bool {
-    let r = hub.runtime(member);
-    matches!(r.status, BotStatus::Working | BotStatus::NeedsInput) && r.lane.as_ref() != Some(lane)
-}
-
-/// A late turn starts: it shows the room as it is now, not as it was when the turn was queued.
-pub fn refresh(hub: &Hub, turn: &mut GroupTurn, me: &BotConfig) -> Result<()> {
-    let group = group(hub, &turn.lane.chat)?;
-    if !group.members.contains(&me.id) {
-        bail!("no longer in the group");
-    }
-    (turn.prompt, turn.shown) = ask(hub, &group, &members(hub, &group), me, &turn.lane)?;
-    turn.answers = answers(&since_last_user_message(hub, &turn.lane)?);
-    Ok(())
-}
-
-fn group(hub: &Hub, id: &str) -> Result<BotConfig> {
-    Ok(hub.store.bot(id)?.filter(|r| !r.deleted).ok_or_else(|| anyhow!("group deleted"))?.config)
-}
-
-/// `me`'s prompt for a turn in the room, and the newest message it shows (its `seq`).
-fn ask(hub: &Hub, group: &BotConfig, members: &[BotConfig], me: &BotConfig, lane: &Lane) -> Result<(String, i64)> {
-    let shown = hub.store.messages_after(lane, 0, 1)?.last().map_or(0, |e| e.seq);
-    Ok((member_prompt(hub, group, members, me, lane)?, shown))
-}
-
-fn members(hub: &Hub, group: &BotConfig) -> Vec<BotConfig> {
-    group
-        .members
-        .iter()
-        .filter_map(|id| hub.store.bot(id).ok().flatten())
-        .filter(|r| !r.deleted)
-        .map(|r| r.config)
-        .collect()
-}
-
-/// The lane's messages since the user last wrote there, that message included.
-fn since_last_user_message(hub: &Hub, lane: &Lane) -> Result<Vec<Entry>> {
-    let recent = hub.store.messages_after(lane, 0, HISTORY_LINES)?;
-    let start = recent.iter().rposition(|e| e.kind == EntryKind::User.as_str()).unwrap_or(0);
-    Ok(recent[start..].to_vec())
-}
-
-/// The user's message a room turn answers: the first of `since` (see [`since_last_user_message`]).
-fn answers(since: &[Entry]) -> Vec<String> {
-    since.first().filter(|e| e.kind == EntryKind::User.as_str()).map(|e| e.id.clone()).into_iter().collect()
-}
-
-/// Who answers the user: the members @-mentioned or replied to since the user's last message, or
-/// everyone when nobody (or `@all` / `@everyone`) is.
-fn responders<'a>(members: &'a [BotConfig], messages: &[Entry]) -> Vec<&'a BotConfig> {
-    let texts: Vec<&str> = messages.iter().filter_map(|e| e.data["text"].as_str()).collect();
-    let everyone = texts.iter().any(|t| names_everyone(t));
-    let replied = |m: &BotConfig| messages.iter().any(|e| e.data["replyTo"]["author"] == m.id.as_str());
-    let named: Vec<&BotConfig> = members.iter().filter(|m| replied(m) || texts.iter().any(|t| names(t, m))).collect();
-    if everyone || named.is_empty() { members.iter().collect() } else { named }
-}
-
-/// Who answers in a later round: the members another member @-mentioned since the user's last
-/// message (`@all` / `@everyone`: all the others) and who haven't spoken or been `asked` since.
-/// Nobody, and the room turn ends: a member pulls a teammate in by naming it.
-fn cited<'a>(members: &'a [BotConfig], messages: &[Entry], asked: &HashMap<String, i64>) -> Vec<&'a BotConfig> {
-    let mut cited_at: HashMap<&str, i64> = HashMap::new();
-    // The newest message each member answered or passed on.
-    let mut seen: HashMap<&str, i64> = asked.iter().map(|(id, seq)| (id.as_str(), *seq)).collect();
-    for e in messages.iter().filter(|e| e.kind == EntryKind::Agent.as_str()) {
-        let Some(author) = e.data["author"].as_str() else { continue };
-        let at = seen.entry(author).or_default();
-        *at = (*at).max(e.seq);
-        let text = e.data["text"].as_str().unwrap_or_default();
-        let everyone = names_everyone(text);
-        for member in members.iter().filter(|m| m.id != author) {
-            if everyone || names(text, member) {
-                cited_at.insert(&member.id, e.seq);
-            }
-        }
-    }
-    let pending = |m: &&BotConfig| {
-        cited_at.get(m.id.as_str()).is_some_and(|cited| seen.get(m.id.as_str()).is_none_or(|seen| seen < cited))
-    };
-    members.iter().filter(pending).collect()
-}
-
-/// `@all` or `@everyone` in `text`.
-fn names_everyone(text: &str) -> bool {
-    mentions(text, "all") || mentions(text, "everyone")
-}
-
-/// `member` @-mentioned in `text`.
-fn names(text: &str, member: &BotConfig) -> bool {
-    handles(&member.name).iter().any(|h| mentions(text, h))
-}
-
-/// Ways to @-mention a bot: its full name, without spaces, or its first word (lowercased).
-fn handles(name: &str) -> Vec<String> {
-    let lower = name.trim().to_lowercase();
-    let mut out = vec![lower.clone(), lower.split_whitespace().collect::<String>()];
-    if let Some(first) = lower.split_whitespace().next() {
-        out.push(first.to_owned());
-    }
-    out.retain(|h| !h.is_empty());
-    out.dedup();
-    out
-}
-
-/// `@handle` in `text`, not followed by more of a Latin word (`@al` isn't `@alice`).
-/// CJK names are often followed straight by the message, so only ASCII letters end a match early.
-fn mentions(text: &str, handle: &str) -> bool {
-    let lower = text.to_lowercase();
-    let needle = format!("@{handle}");
-    lower
-        .match_indices(&needle)
-        .any(|(i, _)| lower[i + needle.len()..].chars().next().is_none_or(|c| !(c.is_ascii_alphanumeric() || c == '_')))
-}
-
-fn member_prompt(hub: &Hub, group: &BotConfig, members: &[BotConfig], me: &BotConfig, lane: &Lane) -> Result<String> {
-    let peers: Vec<&BotConfig> = members.iter().filter(|m| m.id != me.id).collect();
-    let peer_names = if peers.is_empty() {
-        "just the user".to_owned()
-    } else {
-        peers.iter().map(|p| p.name.as_str()).collect::<Vec<_>>().join(", ")
-    };
-    let about = group.description.trim();
-    let room = if about.is_empty() { format!("\"{}\"", group.name) } else { format!("\"{}\" — {about}", group.name) };
-    let mut out =
-        vec![format!("You are {}, one participant in a group chat ({room}) with the user and {peer_names}.", me.name)];
-    if !peers.is_empty() {
-        out.push("Other participants in the room:".into());
-        for p in &peers {
-            let about =
-                if p.description.trim().is_empty() { String::new() } else { format!(" ({})", p.description.trim()) };
-            out.push(format!("- {}{about}", p.name));
-        }
-    }
-    out.push(format!(
-        "You have your full toolkit here. Do the work first, then answer: your final reply of this turn is \
-         the one message the room sees. Keep it short and conversational. After this round, only the \
-         participants someone @-mentions answer again: @-mention another participant when you need their \
-         answer or action, and only then. If you have nothing new worth adding, reply exactly \"{PASS}\". Never \
-         reveal private one-on-one context. Reactions are rare: react(emoji, to) only where a person would, \
-         never to a question or a request, `to` naming whose newest message (\"user\" or a participant). With \
-         nothing to add, a reaction and \"{PASS}\" agrees without a message."
-    ));
-    out.push(String::new());
-
-    let seen = hub.store.last_spoke(lane, &me.id);
-    let mut lines: Vec<String> = vec![];
-    let header = format!("[Group chat: \"{}\" - with {peer_names}]", group.name);
-    for e in hub.store.messages_after(lane, seen, HISTORY_LINES)? {
-        lines.push(line(hub, group, &e, me));
-    }
-    out.push(header);
-    if lines.is_empty() {
-        out.push("No new messages in the room since your last turn.".into());
-    } else {
-        out.push("New messages in the room (oldest first):".into());
-        out.extend(lines);
-    }
-    out.push(String::new());
-    out.push(format!(
-        "It's your turn, {}. Reply to the room if you have something worth adding, or reply exactly \"{PASS}\" if you don't.",
-        me.name
-    ));
-    Ok(out.join("\n"))
-}
-
-fn line(hub: &Hub, group: &BotConfig, e: &Entry, me: &BotConfig) -> String {
-    let text = e.data["text"].as_str().unwrap_or_default();
-    let reacted = crate::chat::reactions::describe(hub, e);
-    if e.kind == EntryKind::User.as_str() {
-        // As in the member's own chat (its skills), with the files the group keeps.
-        let root = crate::chat::uploads::root(group);
-        let attachments = e.data["attachments"].as_array().map_or(&[][..], Vec::as_slice);
-        let reply = crate::chat::replies::note(hub, &me.id, &e.data["replyTo"]).map(|n| format!("{n} "));
-        return format!(
-            "User: {}{}{reacted}",
-            reply.unwrap_or_default(),
-            crate::chat::prompt::of_message(&hub.store, &me.skills, &root, text, attachments)
-        );
-    }
-    let author = e.data["author"].as_str().unwrap_or_default();
-    let text = crate::agent::acp::truncate(text, LINE_CHARS);
-    if author == me.id {
-        format!("{} (you): {text}{reacted}", me.name)
-    } else {
-        format!("{}: {text}{reacted}", hub.bot_name(author))
-    }
 }
 
 /// A member's final text is a pass (the room doesn't see it).

@@ -8,7 +8,8 @@ use rusqlite::{OptionalExtension, params};
 use serde_json::Value;
 use std::fmt::Write as _;
 
-fn row_entry(r: &rusqlite::Row) -> rusqlite::Result<Entry> {
+/// 解码持久消息字段，保留结构化提及与投递元数据。
+pub(super) fn row_entry(r: &rusqlite::Row) -> rusqlite::Result<Entry> {
     let data: String = r.get(6)?;
     Ok(Entry {
         seq: r.get(0)?,
@@ -23,37 +24,62 @@ fn row_entry(r: &rusqlite::Row) -> rusqlite::Result<Entry> {
     })
 }
 
-const ENTRY_COLS: &str = "seq, id, bot_id, rev, kind, turn, data, created_at, updated_at";
+pub(super) const ENTRY_COLS: &str = "seq, id, bot_id, rev, kind, turn, data, created_at, updated_at";
 /// A bot still winding down after its deletion can't leave lines behind (`?2` is the chat).
 const LIVE_CHAT: &str = "WHERE NOT EXISTS (SELECT 1 FROM bots WHERE id = ?2 AND deleted = 1)";
 /// Leaves out a message the user took back before it went out (`unqueue`): no bot, model or list reads it.
 pub(super) const NOT_REMOVED: &str = "json_extract(data, '$.removed') IS NOT 1";
 
+/// 在现有事务内保存 entry，统一拒绝向已删除聊天插入或复活消息。
+pub(super) fn write_entry(
+    c: &rusqlite::Connection,
+    id: &str,
+    lane: &Lane,
+    kind: EntryKind,
+    turn: i64,
+    data: &Value,
+) -> Result<Entry> {
+    let rev = next_rev(c)?;
+    let now = now_ms();
+    let changed = c.execute(
+        "INSERT INTO entries(id,bot_id,rev,kind,turn,data,created_at,updated_at)
+        SELECT ?1,?2,?3,?4,?5,?6,?7,?7 WHERE NOT EXISTS(SELECT 1 FROM bots WHERE id=?2 AND deleted=1)
+        ON CONFLICT(id) DO UPDATE SET data=?6,rev=?3,updated_at=?7
+            WHERE NOT EXISTS(SELECT 1 FROM bots WHERE id=?2 AND deleted=1)",
+        params![id, lane.chat, rev, kind.as_str(), turn, data.to_string(), now],
+    )?;
+    ensure!(changed == 1, "the chat was deleted");
+    Ok(c.query_row(&format!("SELECT {ENTRY_COLS} FROM entries WHERE id=?"), [id], row_entry)?)
+}
+
+/// 在调用方读事务内复用可见消息搜索，不另取锁，也不改变原有私聊搜索语义。
+pub(super) fn search_messages_on(
+    c: &rusqlite::Connection,
+    bot_id: &str,
+    terms: &[String],
+    from: Option<i64>,
+    limit: i64,
+) -> Result<Vec<Entry>> {
+    let mut sql = format!(
+        "SELECT {ENTRY_COLS} FROM entries WHERE bot_id = ?1 AND seq <= ?3 AND {NOT_REMOVED} AND
+               (kind = 'user' OR (kind = 'agent' AND json_extract(data, '$.final') = 1))"
+    );
+    for i in 0..terms.len() {
+        let _ = write!(sql, " AND instr(lower(json_extract(data, '$.text')), ?{}) > 0", i + 4);
+    }
+    sql.push_str(" ORDER BY seq DESC LIMIT ?2");
+    let mut args: Vec<rusqlite::types::Value> =
+        vec![bot_id.to_owned().into(), limit.into(), from.unwrap_or(i64::MAX).into()];
+    args.extend(terms.iter().map(|t| t.to_lowercase().into()));
+    let mut st = c.prepare(&sql)?;
+    Ok(st.query_map(rusqlite::params_from_iter(args), row_entry)?.collect::<rusqlite::Result<_>>()?)
+}
+
 impl Store {
+    /// 通过共享写入路径保存消息，已删除聊天不能被迟到执行复活。
     pub fn insert_entry(&self, lane: &Lane, kind: EntryKind, turn: i64, data: &Value) -> Result<Entry> {
         let c = self.db.locked();
-        let rev = next_rev(&c)?;
-        let now = now_ms();
-        let id = uuid::Uuid::new_v4().to_string();
-        let added = c.execute(
-            &format!(
-                "INSERT INTO entries(id, bot_id, rev, kind, turn, data, created_at, updated_at)
-                 SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7 {LIVE_CHAT}"
-            ),
-            params![id, lane.chat, rev, kind.as_str(), turn, data.to_string(), now],
-        )?;
-        ensure!(added == 1, "the chat was deleted");
-        Ok(Entry {
-            id,
-            seq: c.last_insert_rowid(),
-            bot_id: lane.chat.clone(),
-            rev,
-            kind: kind.as_str().to_owned(),
-            turn,
-            data: data.clone(),
-            created_at: now,
-            updated_at: now,
-        })
+        write_entry(&c, &uuid::Uuid::new_v4().to_string(), lane, kind, turn, data)
     }
 
     /// Deterministic IDs make routine transcript publication retryable after a crash.
@@ -214,21 +240,9 @@ impl Store {
     /// contain every term (case-insensitive for ASCII), newest first, from `from` (a `seq`) back.
     // ponytail: substring scan, no index (CJK needs no tokenizer this way): 0.6 s over 180k messages of one bot.
     // An FTS5 trigram table once a bot's search passes a second.
+    /// 私聊搜索复用同一事务内查询，群检索另由可信投递校验权限。
     pub fn search_messages(&self, bot_id: &str, terms: &[String], from: Option<i64>, limit: i64) -> Result<Vec<Entry>> {
-        let mut sql = format!(
-            "SELECT {ENTRY_COLS} FROM entries WHERE bot_id = ?1 AND seq <= ?3 AND {NOT_REMOVED} AND
-               (kind = 'user' OR (kind = 'agent' AND json_extract(data, '$.final') = 1))"
-        );
-        for i in 0..terms.len() {
-            let _ = write!(sql, " AND instr(lower(json_extract(data, '$.text')), ?{}) > 0", i + 4);
-        }
-        sql.push_str(" ORDER BY seq DESC LIMIT ?2");
-        let mut args: Vec<rusqlite::types::Value> =
-            vec![bot_id.to_owned().into(), limit.into(), from.unwrap_or(i64::MAX).into()];
-        args.extend(terms.iter().map(|t| t.to_lowercase().into()));
-        let c = self.db.locked();
-        let mut st = c.prepare(&sql)?;
-        Ok(st.query_map(rusqlite::params_from_iter(args), row_entry)?.collect::<rusqlite::Result<_>>()?)
+        search_messages_on(&self.db.locked(), bot_id, terms, from, limit)
     }
 
     /// The newest `limit` bot-to-bot notices in `bot_id`'s main chat that involve `peer_id`, oldest first.
@@ -313,28 +327,17 @@ impl Store {
         logged("last entry of kind", row.optional()).flatten()
     }
 
-    /// The `seq` of `bot`'s last reply in `lane` (0 if it hasn't spoken there).
-    pub fn last_spoke(&self, lane: &Lane, bot: &str) -> i64 {
-        let c = self.db.locked();
-        let n = c.query_row(
-            "SELECT COALESCE(MAX(seq), 0) FROM entries WHERE bot_id = ?1 AND kind = 'agent'
-               AND json_extract(data, '$.final') = 1 AND json_extract(data, '$.author') = ?2",
-            params![lane.chat, bot],
-            |r| r.get(0),
-        );
-        logged("last spoke", n).unwrap_or(0)
-    }
-
     /// Permission cards left `pending` (and sends left `queued`) by a crash or restart
     /// can never be honored; returns how many were closed out.
+    /// 只清理旧普通通知，投递卡片由持久投递恢复逻辑管理。
     pub fn expire_pending(&self) -> Result<usize> {
         let ids: Vec<String> = {
             let c = self.db.locked();
             let mut st = c.prepare(
-                "SELECT id FROM entries WHERE (kind = 'permission' AND json_extract(data, '$.status') = 'pending')
+                "SELECT id FROM entries WHERE json_extract(data, '$.deliveryId') IS NULL AND ((kind = 'permission' AND json_extract(data, '$.status') = 'pending')
                   OR (kind = 'user' AND json_extract(data, '$.status') = 'queued')
                   OR (kind = 'notice' AND json_extract(data, '$.delegationId') IS NOT NULL
-                      AND json_extract(data, '$.status') IN ('queued', 'sent'))",
+                      AND json_extract(data, '$.status') IN ('queued', 'sent')))",
             )?;
             st.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?
         };

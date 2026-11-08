@@ -21,7 +21,7 @@ private let installed = [("pdf", "PDF"), ("code-review", "Code Review"), ("xlsx"
     let offered = try bot(#"{"id":"b","skills":["pdf","code-review"],"fastModeSupport":"offered"}"#)
     #expect(SlashCommands.list(for: offered, query: "", skills: installed).map(\.name) == ["fast", "pdf", "code-review"])
     #expect(SlashCommands.list(for: offered, query: "review", skills: installed).map(\.name) == ["code-review"])
-    #expect(SlashCommands.list(for: offered, query: "new", skills: installed).isEmpty, "a new session is in the bot's menu")
+    #expect(SlashCommands.list(for: offered, query: "new", skills: installed).map(\.name) == ["new", "new-now", "new-cancel"])
     #expect(SlashCommands.list(for: try bot(#"{"id":"b","skills":["pdf"]}"#), query: "xl", skills: installed).isEmpty)
     #expect(SlashCommands.list(for: try bot(#"{"id":"b"}"#), query: "", skills: []).map(\.name) == ["fast"], "offered until the agent says otherwise")
     #expect(SlashCommands.list(for: try bot(#"{"id":"b","fastModeSupport":"unsupported"}"#), query: "", skills: []).isEmpty, "no Fast mode on offer")

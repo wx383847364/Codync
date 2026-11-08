@@ -109,6 +109,7 @@ fun AppStore.cancelQueued(send: PendingSend) = action("cancel:" + send.nonce) {
     }
 }
 
+/** 沿离线和重试路径发送同一正文身份，拒发后恢复目标草稿。 */
 internal suspend fun AppStore.deliver(send: PendingSend) {
     if (!sends.add(send.nonce)) return
     try {
@@ -151,7 +152,11 @@ internal suspend fun AppStore.deliver(send: PendingSend) {
         withContext(NonCancellable) { savePending(send.copy(status = SendStatus.Failed, error = "Sending was interrupted. Retry uses the same message ID.")) }
         throw error
     } catch (error: Exception) {
-        savePending(afterFailure(send, state.value.computer.cloud, error))
+        // 提及被 host 拒绝时恢复原始绑定，用户的新草稿不被失败回包覆盖。
+        val failed = afterFailure(send, state.value.computer.cloud, error)
+        // 本机暂存只保留一个发送入口，真正拒发才恢复草稿。
+        if (failed.status == SendStatus.Failed) restoreFailedDraft(send)
+        savePending(failed)
     } finally {
         sends.remove(send.nonce)
         mutableState.update { it.copy(uploadProgress = it.uploadProgress - send.nonce) }

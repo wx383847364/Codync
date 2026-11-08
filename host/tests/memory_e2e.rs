@@ -381,3 +381,49 @@ async fn a_retry_after_a_failed_first_prompt_still_carries_the_instructions() {
 async fn a_retry_after_a_restart_still_carries_the_instructions() {
     retry_after_failed_first_prompt(true).await;
 }
+
+/// 旧冻结提示在三种 harness 通道都更新，沿用原会话且不再下发群工具禁令。
+#[tokio::test]
+async fn group_tool_policy_migrates_existing_profiles_on_every_instruction_channel() {
+    const LEGACY: &str = "group chats and requests from other bots can't use message_bot either";
+    for mode in ["claude", "system-resume", "first-resume"] {
+        let mut host = Host::start().await;
+        let bot = host.fixture_bot("Migrated member", "instructions_agent.py", mode).await;
+        host.reply(&bot, "before upgrade").await;
+        // 模拟旧版本留下的已交付快照，重启后不能要求用户清除原会话。
+        host.restart(|home| {
+            let db = rusqlite::Connection::open(home.join("codync.db")).unwrap();
+            let snapshots = db
+                .prepare("SELECT k,v FROM kv WHERE k LIKE ?1")
+                .unwrap()
+                .query_map([format!("context.{bot}.%")], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))
+                .unwrap()
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .unwrap();
+            assert_eq!(snapshots.len(), 1);
+            for (key, raw) in snapshots {
+                let mut snapshot: Value = serde_json::from_str(&raw).unwrap();
+                snapshot["system"] = format!("{}\n{LEGACY}.", snapshot["system"].as_str().unwrap()).into();
+                snapshot["unprompted"] = false.into();
+                db.execute("UPDATE kv SET v=?2 WHERE k=?1", rusqlite::params![key, snapshot.to_string()]).unwrap();
+            }
+        })
+        .await;
+        host.reply(&bot, "after upgrade").await;
+        assert_eq!(host.requests(&bot, "session/new").len(), 1, "{mode} preserves its original session");
+        let loads = host.requests(&bot, "session/load");
+        assert!(!loads.is_empty(), "{mode} reloads the existing session");
+        let policy = match mode {
+            "claude" => loads.last().unwrap()["params"]["_meta"]["systemPrompt"]["append"].as_str().unwrap().to_owned(),
+            "system-resume" => {
+                loads.last().unwrap()["params"]["systemPrompt"]["content"][0]["text"].as_str().unwrap().to_owned()
+            }
+            _ => host.prompts(&bot).last().unwrap().clone(),
+        };
+        assert!(policy.contains("results stay in the source group"), "{mode}: {policy}");
+        assert!(!policy.contains(LEGACY), "{mode}: {policy}");
+        if mode == "first-resume" {
+            assert!(policy.contains("<bot-profile>"));
+        }
+    }
+}

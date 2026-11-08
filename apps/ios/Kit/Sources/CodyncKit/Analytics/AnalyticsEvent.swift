@@ -32,6 +32,7 @@ public enum AnalyticsEvent: Equatable, Sendable {
     /// never), reconnects, the first phase stuck too long, why it failed.
     case voiceCallQuality(VoiceEngine, readyMs: Int?, reconnects: Int, stuck: VoiceStuck, failure: VoiceFailure)
     case screenViewed(Screen)
+    case attachmentPreview(PreviewOutcome)
     case reviewRequested(prompts: Int)
     case reviewLinkOpened
     /// A dev server opened, or its address copied; the host reports what it does itself.
@@ -59,6 +60,7 @@ public enum AnalyticsEvent: Equatable, Sendable {
         case settings, computers, usage, account, pairing, voiceSettings = "voice_settings", remoteScreen = "remote_screen"
         case library, artifact, network
     }
+    public enum PreviewOutcome: String, Sendable { case opened, decodeFailed = "decode_failed" }
 
     public enum NotificationKind: String, Sendable {
         case done, needsInput = "needs_input", failed
@@ -121,6 +123,7 @@ public enum AnalyticsEvent: Equatable, Sendable {
         }
     }
 
+    /// 稳定事件名用于三端对齐，不包含界面文本或附件内容。
     var name: String {
         switch self {
         case .appOpened: "app_opened"
@@ -147,12 +150,14 @@ public enum AnalyticsEvent: Equatable, Sendable {
         case .voiceCallStarted: "voice_call_started"
         case .voiceCallQuality: "voice_call_quality"
         case .screenViewed: "screen_viewed"
+        case .attachmentPreview: "attachment_preview"
         case .reviewRequested: "review_requested"
         case .reviewLinkOpened: "review_link_opened"
         case .devServerAction: "dev_server_action"
         }
     }
 
+    /// 仅序列化目录规定的类别属性，图片预览不记录名称、路径或数据。
     var properties: [String: Analytics.Value] {
         switch self {
         case let .appOpened(notifications, widgets):
@@ -187,6 +192,7 @@ public enum AnalyticsEvent: Equatable, Sendable {
         case .reviewLinkOpened: return ["source": .string("settings")]
         case let .devServerAction(use): return ["action": .string(use.rawValue)]
         case let .screenViewed(screen): return ["screen": .string(screen.rawValue)]
+        case let .attachmentPreview(outcome): return ["outcome": .string(outcome.rawValue)]
         }
     }
 }

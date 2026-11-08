@@ -45,6 +45,9 @@ const LEAD_ROLE: &str = "\nLead: you are the user's lead bot";
 /// What a bot that led hears once it no longer does.
 const NOT_LEAD: &str = "Lead: you are no longer the user's lead bot; ignore the earlier Lead instructions.";
 
+/// 仅迁移曾禁止群工具的冻结 profile，其他会话继续保持原缓存字节不变。
+const LEGACY_GROUP_TOOL_BAN: &str = "group chats and requests from other bots can't use message_bot either";
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct Snapshot {
@@ -122,15 +125,18 @@ fn save(store: &Store, bot_id: &str, s: &Snapshot) -> Result<()> {
 
 /// The snapshot for `session` at its current epoch, rendering a fresh one when
 /// the stored one belongs to another session or an earlier epoch.
+/// 修正旧群工具合同后保留原会话与 epoch，并通过既有通道重新下发更新后的 profile。
 pub fn resolve(store: &Store, cfg: &BotConfig, session: &str) -> Result<Snapshot> {
     let epoch = epoch(store, &cfg.id, session);
     let stored = load(store, &cfg.id, session);
-    if let Some(s) = stored.as_ref().filter(|s| s.epoch == epoch && !s.system.is_empty()) {
+    let migrated = stored.as_ref().is_some_and(|s| s.system.contains(LEGACY_GROUP_TOOL_BAN));
+    if let Some(s) = stored.as_ref().filter(|s| s.epoch == epoch && !s.system.is_empty() && !migrated) {
         return Ok(s.clone());
     }
     let identity = Identity::of(store, cfg);
     let memory = crate::chat::memory::current_revision(store, &cfg.id);
-    let unprompted = stored.as_ref().is_some_and(|old| old.unprompted);
+    // FirstMessage 需要补发一次；系统提示型 harness 则由 ensure_session 比较并重新加载原会话。
+    let unprompted = migrated || stored.as_ref().is_some_and(|old| old.unprompted);
     let s = Snapshot {
         session: session.to_owned(),
         epoch,
@@ -195,7 +201,7 @@ pub fn mark_prompted(store: &Store, bot_id: &str, sent: &Snapshot) -> Result<()>
     update_if_current(store, bot_id, sent, |current| std::mem::take(&mut current.unprompted))
 }
 
-/// The bot's instructions, rendered live.
+/// 实时渲染当前工具和来源合同，群派工结果只能留在可信来源群。
 pub fn render(store: &Store, cfg: &BotConfig) -> String {
     let name = cfg.name.trim();
     let mut lines = vec!["Agent profile:".to_owned()];
@@ -229,7 +235,7 @@ pub fn render(store: &Store, cfg: &BotConfig) -> String {
     lines.push(format!("Messages: {}", crate::chat::outbox::INSTRUCTIONS));
     lines.push(String::new());
     lines.push(
-        "Other conversations: your history is shared across them. A group chat turn starts with [Group chat: ...]; a request from another bot or a routine run says so in its first line. In group chats, routines and requests from other bots, send_message isn't available: your final reply is what gets delivered (to the room, the run's result or the bot that asked), so write it for its reader; group chats and requests from other bots can't use message_bot either. Replies to your own message_bot requests arrive as a turn of their own in this chat, starting with [Codync: ...]: carry on with the user's task from there, and your final reply goes to the user. These rules apply to the current turn, not later turns in this session. Only @-mention in group chats, and don't assume a group sees your private chat."
+        "Other conversations: your history is shared across them. A group chat turn includes [Group chat: ...]; a private request from another bot or a routine run says so. In group chats, routines and requests from other bots, send_message isn't available: your final reply is what gets delivered (to the room, the run's result or the bot that asked), so write it for its reader. In a group turn, message_bot can assign work to another current member using its botId; results stay in the source group and never arrive as private-chat reply turns. Group requests accept an optional idempotencyKey only for retransmission of the same exact task; changed tasks need a new key. You may also @-mention members in a group. Private requests from other bots cannot use message_bot: say what help you need in your reply. Replies to your own message_bot requests from private chats or routines arrive as a turn of their own in this chat, starting with [Codync: ...]: carry on with the user's task from there, and your final reply goes to the user. These rules apply to the current turn, not later turns in this session. Never assume a group sees your private chat."
             .to_owned(),
     );
     lines.push(String::new());
@@ -332,14 +338,43 @@ mod tests {
         Store::open(&path).expect("temp store")
     }
 
+    /// 渲染提示与 MCP 合同一致，群内工具不再继承私聊回复位置。
     #[test]
     fn instructions_say_where_bot_requests_and_their_replies_go() {
         let store = store();
         let system = render(&store, &cfg("Reporter", "Report outcomes"));
         assert!(system.contains("requests from other bots, send_message isn't available"));
-        assert!(system.contains("Replies to your own message_bot requests arrive as a turn of their own"));
+        assert!(system.contains(
+            "Replies to your own message_bot requests from private chats or routines arrive as a turn of their own"
+        ));
         assert!(system.contains("These rules apply to the current turn"));
+        assert!(system.contains("results stay in the source group"));
+        assert!(!system.contains(LEGACY_GROUP_TOOL_BAN));
+        assert!(crate::chat::team::INSTRUCTIONS.contains("In group turns"));
+        let tools = crate::chat::team::tools();
+        let message = tools.as_array().unwrap().iter().find(|tool| tool["name"] == "message_bot").unwrap();
+        assert!(message["description"].as_str().unwrap().contains("source group"));
         assert!(system.contains("use list_bots and message_bot (ids like name@computer), not SSH"));
+    }
+
+    /// 已存在会话按原 ID/epoch 迁移一次；交付新 profile 后恢复字节稳定缓存。
+    #[test]
+    fn legacy_group_tool_instructions_are_refreshed_without_replacing_the_session() {
+        let store = store();
+        let cfg = cfg("Reporter", "");
+        let legacy = format!("{}\n{LEGACY_GROUP_TOOL_BAN}.", render(&store, &cfg));
+        let old = adopt(&store, &cfg, "existing-session", legacy, String::new()).unwrap();
+        mark_prompted(&store, &cfg.id, &old).unwrap();
+        let refreshed = resolve(&store, &cfg, "existing-session").unwrap();
+        assert_eq!(refreshed.session, old.session);
+        assert_eq!(refreshed.epoch, old.epoch);
+        assert!(refreshed.unprompted);
+        assert!(!refreshed.system.contains(LEGACY_GROUP_TOOL_BAN));
+        assert!(refreshed.system.contains("results stay in the source group"));
+        mark_prompted(&store, &cfg.id, &refreshed).unwrap();
+        let stable = resolve(&store, &cfg, "existing-session").unwrap();
+        assert!(!stable.unprompted);
+        assert_eq!(stable.system, refreshed.system);
     }
 
     #[test]

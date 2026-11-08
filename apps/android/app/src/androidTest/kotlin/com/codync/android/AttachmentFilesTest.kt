@@ -30,12 +30,15 @@ class AttachmentFilesTest {
         assertFalse(File(outgoing.path).exists())
     }
 
-    @Test fun oversizedProviderFilesAreRejectedBeforeCopying() = runBlocking {
-        val source = File(shared, "too-large.bin")
+    /** provider 的视频超过旧限制仍完整复制，草稿后续不依赖临时授权。 */
+    @Test fun providerVideosLargerThanTheOldLimitAreCopiedCompletely() = runBlocking {
+        val source = File(shared, "large-video.mp4")
         RandomAccessFile(source, "rw").use { it.setLength(MAX_FILE_BYTES + 1) }
-        try { files.import(uri(source)); fail("Expected size validation") }
-        catch (_: IllegalArgumentException) { }
-        assertTrue(File(root, "outgoing").listFiles().orEmpty().isEmpty())
+        val outgoing = files.import(uri(source))
+        assertEquals(MAX_FILE_BYTES + 1, outgoing.size)
+        assertEquals(source.length(), File(outgoing.path).length())
+        files.discard(outgoing)
+        assertFalse(File(outgoing.path).exists())
     }
 
     @Test fun supportedNonPortableImagesBecomeBoundedJpegFiles() = runBlocking {

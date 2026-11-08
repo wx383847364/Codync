@@ -140,9 +140,10 @@ fn pick<'a>(options: &'a [Value], wanted: &str) -> Option<&'a Value> {
     })
 }
 
+/// 通话内停止群时先持久取消投递，再停止相关成员执行。
 fn stop(hub: &Arc<Hub>, cfg: &BotConfig) -> Result<Value> {
     if cfg.is_group() {
-        hub.groups.stop(hub, &cfg.id);
+        crate::chat::group::stop(hub, &cfg.id)?;
     } else {
         hub.send_cmd(&cfg.id, Cmd::Stop)?;
     }

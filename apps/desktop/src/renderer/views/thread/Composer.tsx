@@ -1,8 +1,9 @@
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { groupFastMode } from '@shared/fast-mode'
 import { artifactDraftKey, artifactQuote, type Artifact } from '@shared/artifacts'
-import { isGroup, isWorkingIn, quoteOf, type Bot, type Entry } from '@shared/models'
+import { isGroup, isWorkingIn, quoteOf, type Entry } from '@shared/models'
 import type { PickedFile } from '@shared/ipc'
+import { useMentionMenu } from './MentionMenu'
 import { Icon } from '../../components/Icon'
 import { IconButton } from '../../components/Controls'
 import { RecordingPill } from '../../components/RecordingPill'
@@ -12,7 +13,7 @@ import { HStack, VStack } from '../../components/Stack'
 import { useModel } from '../../lib/observable'
 import { useTr } from '../../lib/use-language'
 import { useStore } from '../../store/context'
-import { MAX_FILE_SIZE, type OutgoingFile } from '../../store/outgoing-files'
+import { type OutgoingFile } from '../../store/bot-store'
 import { pluginsFor } from '../marketplace/plugins'
 import { pastedFiles, readPicked } from './composer-files'
 import { composerEnter } from './composer-keyboard'
@@ -21,7 +22,6 @@ import { ComposerAttachment } from './ComposerAttachment'
 import { QuoteRow } from './ChatRows'
 import { useDictation } from './dictation-platform'
 import { DictationEngineMenu } from './DictationEngineMenu'
-import { mentionSuggestions, returnMentions, withMention } from './mentions'
 import { builtInCommand, returnRuns, slashCommands, slashQuery, type SlashCommand } from './slash-commands'
 import { useVoiceShortcut } from './voice-shortcut-keys'
 
@@ -49,6 +49,7 @@ export function Composer({ botId, reply = null, about = null, cancelReply, onCal
     botId={botId} reply={reply} about={about} cancelReply={cancelReply} onCall={onCall} onInterrupt={onInterrupt} />
 }
 
+/** 管理单一目标编辑器，选人和发送共享同一草稿身份。 */
 function DestinationComposer({ botId, reply, about, cancelReply, onCall, onInterrupt }: {
   botId: string; reply: Entry | null; about: Artifact | null; cancelReply?: () => void; onCall?: (() => void) | null; onInterrupt?: (() => void) | null
 }) {
@@ -59,21 +60,26 @@ function DestinationComposer({ botId, reply, about, cancelReply, onCall, onInter
   const drafts = store.composerDrafts
   const draftKey = about ? artifactDraftKey(about) : botId
   const draft = useSyncExternalStore(drafts.subscribe, () => drafts.get(draftKey))
-  const setDraft = (text: string) => drafts.set(draftKey, text)
+  /** 提交一次原生编辑范围，正文和绑定同时更新。 */
+  const setDraft = (text: string, replacement?: { start: number; end: number }) => drafts.set(draftKey, text, replacement)
+  const [submitting, setSubmitting] = useState(false)
   const [files, setFiles] = useState<OutgoingFile[]>([])
   const [voiceSettings, setVoiceSettings] = useState(false)
   const dictation = useDictation((change) => drafts.set(draftKey, change(drafts.get(draftKey))), () => setVoiceSettings(true))
   const field = useRef<HTMLTextAreaElement>(null)
   const measure = useRef<HTMLDivElement>(null)
   const composing = useRef(false)
+  const replacement = useRef<{ start: number; end: number } | undefined>(undefined)
   /** Text pasted into this draft since the last send. */
   const pasted = useRef<string[]>([])
   const working = !!bot && isWorkingIn(bot, botId)
   const empty = !draft.trim() && !files.length
-  const canSend = !empty && (store.connection.kind === 'online' || (store.canQueue && !files.length))
+  const canSend = !submitting && !empty && (store.connection.kind === 'online' || (store.canQueue && !files.length))
   const canAttach = !!bot
 
   const members = bot && isGroup(bot) ? store.members(bot) : []
+  // 来源群显示每个成员的内存保存故障，重试直接指向实际持有结果的 actor。
+  const storageFailures = (bot && isGroup(bot) ? members.filter((member) => member.workingChat === botId) : bot ? [bot] : []).filter((member) => member.storageError)
 
   const name = bot?.name ?? ''
   const placeholder = about
@@ -110,16 +116,26 @@ function DestinationComposer({ botId, reply, about, cancelReply, onCall, onInter
     return () => observer.disconnect()
   }, [])
 
-  const suggestions = mentionSuggestions(draft, members)
-  const mention = (member: Bot) => {
-    setDraft(withMention(draft, member))
-    field.current?.focus()
-  }
-  const mentionMenu = useComposerMenu(draft, suggestions, mention, returnMentions)
+  // 在原光标范围内插入，保留前后正文及选中成员身份。
+  const mentionMenu = useMentionMenu(draft, members, (member, start, end) => {
+    const token = `@${member.name}`
+    const next = `${draft.slice(0, start)}${token} ${draft.slice(end)}`
+    drafts.selectMention(draftKey, next, { botId: member.id, start, end: start + token.length }, { start, end })
+    const caret = start + token.length + 1
+    // 选择只插入草稿，下一帧恢复原输入焦点并把光标放在成员片段后。
+    requestAnimationFrame(() => {
+      // 上次选择的帧回调不得覆盖用户随后输入的新草稿或移动其光标。
+      if (drafts.get(draftKey) !== next) return
+      field.current?.focus()
+      field.current?.setSelectionRange(caret, caret)
+      mentionMenu.selection({ start: caret, end: caret })
+    })
+  })
 
   const slash = slashQuery(draft)
   const commands = slash === null ? [] : slashCommands(bot, slash, plugins.installedSkills, members)
 
+  /** 执行快捷命令，群会话切换按成员意图交给 host。 */
   const run = (command: SlashCommand) => {
     if (!bot) return
     switch (command.action.kind) {
@@ -133,6 +149,10 @@ function DestinationComposer({ botId, reply, about, cancelReply, onCall, onInter
         }
         setDraft('')
         break
+      case 'session':
+        void store.switchSession(botId, command.action.mode)
+        setDraft('')
+        break
       case 'skill':
         setDraft(`/${command.action.id} `)
         break
@@ -141,30 +161,34 @@ function DestinationComposer({ botId, reply, about, cancelReply, onCall, onInter
   }
   const commandMenu = useComposerMenu(draft, commands, run, returnRuns)
 
+  /** 接收所选附件，不按总大小拒绝；发送仍由既有分片协议完成。 */
   const append = (incoming: PickedFile[]) => {
     if (!canAttach) return
     const accepted: OutgoingFile[] = []
     for (const f of incoming) {
-      if (f.data.length > MAX_FILE_SIZE) {
-        store.setError(tr('{name} is larger than 100 MB.').replaceAll('{name}', () => f.name))
-        continue
-      }
       accepted.push({ id: crypto.randomUUID(), name: f.name, data: f.data })
     }
     setFiles((list) => [...list, ...accepted])
   }
 
-  const submit = () => {
+  // host 拒绝提及时保留草稿，确认受理后才清空当前文本。
+  const submit = async () => {
     const command = files.length ? null : builtInCommand(bot, draft, members)
     if (!command && !canSend) return
     // Words still on their way would land in the emptied box (and the shortcut's tap would send them again).
     dictation.cancel()
     if (command) return run(command)
-    store.send(draft, botId, { files, pasted: pasted.current, replyTo: reply ? quoteOf(reply) : about && artifactQuote(about) })
+    setSubmitting(true)
+    const sentMentions = drafts.mentions(draftKey)
+    const sentFiles = new Set(files.map((file) => file.id))
+    const accepted = await store.send(draft, botId, { files, mentions: sentMentions, pasted: pasted.current, replyTo: reply ? quoteOf(reply) : about && artifactQuote(about) })
+    setSubmitting(false)
+    if (!accepted) return
     cancelReply?.()
     pasted.current = []
-    setDraft('')
-    setFiles([])
+    // 上传期间新加的附件和重新选择的同名成员仍属于下一份草稿。
+    if (drafts.get(draftKey) === draft && JSON.stringify(drafts.mentions(draftKey)) === JSON.stringify(sentMentions)) setDraft('')
+    setFiles((current) => current.filter((file) => !sentFiles.has(file.id)))
     field.current?.focus()
   }
   useVoiceShortcut(dictation, draft, submit, () => field.current?.focus())
@@ -180,6 +204,11 @@ function DestinationComposer({ botId, reply, about, cancelReply, onCall, onInter
 
   return (
     <VStack>
+      {storageFailures.map((member) => <HStack key={member.id} gap={8}><span>{member.name}: {member.storageError}</span>
+        {/* 故障入口不依赖尚未写出的投递卡片，使用成员身份恢复保存。 */}
+        <button className="press" onClick={() => store.retryDeliverySave(member.id)}>重试保存</button>
+      </HStack>)}
+      {bot?.pendingNewSession ? <span>将在当前任务结束后新建会话；成员主会话与群共享。输入 /new-cancel 取消切换。</span> : null}
       <div
         className="composer"
         onDragOver={(e) => {
@@ -192,8 +221,8 @@ function DestinationComposer({ botId, reply, about, cancelReply, onCall, onInter
         }}
       >
         <div className="composer-surface">
+          <MentionMenu menu={{ ...mentionMenu, pick: mentionMenu.choose }} />
           <CommandMenu menu={commandMenu} />
-          <MentionMenu menu={mentionMenu} />
           <ComposerReveal open={!!reply}>
             {reply ? (
               <HStack gap={4} className="composer-reply">
@@ -228,14 +257,22 @@ function DestinationComposer({ botId, reply, about, cancelReply, onCall, onInter
                 aria-keyshortcuts="Enter Shift+Enter"
                 onCompositionStart={() => { composing.current = true }}
                 onCompositionEnd={() => { composing.current = false }}
+                // 光标变化也刷新候选，支持正文中间插入。
+                onSelect={(e) => mentionMenu.selection({ start: e.currentTarget.selectionStart, end: e.currentTarget.selectionEnd })}
+                // 保存真实替换选区，整段粘贴与重复字符编辑都解除被触及的绑定。
+                onBeforeInput={(event) => { replacement.current = { start: event.currentTarget.selectionStart, end: event.currentTarget.selectionEnd } }}
+                // 原生替换范围随一次正文更新消费，后续编辑不能复用旧范围。
                 onChange={(e) => {
-                  setDraft(e.target.value)
+                  mentionMenu.selection({ start: e.target.selectionStart, end: e.target.selectionEnd })
+                  setDraft(e.target.value, replacement.current)
+                  replacement.current = undefined
                   // Starting a command: list the computer's skills again.
                   if (bot && e.target.value === '/') void plugins.refresh()
                 }}
+                // 候选和组合输入先处理确认键，之后才允许执行发送快捷键。
                 onKeyDown={(e) => {
-                  const inInputMethod = composing.current || e.nativeEvent.isComposing || e.keyCode === 229
-                  if (commandMenu.onKey(e, inInputMethod) || mentionMenu.onKey(e, inInputMethod)) return
+                  if (mentionMenu.onKey(e, composing.current || e.nativeEvent.isComposing || e.keyCode === 229)) return
+                  if (commandMenu.onKey(e, composing.current || e.nativeEvent.isComposing || e.keyCode === 229)) return
                   if (e.key === 'Escape' && reply) {
                     e.preventDefault()
                     cancelReply?.()

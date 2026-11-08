@@ -273,195 +273,142 @@ async fn message_ping_pong_stops_at_the_hop_limit_and_a_new_user_turn_can_delega
     }
 }
 
-/// 验证长回复正文交付与重启后的 MCP 分页、检索和批量范围，不因取证重新执行委派。
-#[tokio::test]
-async fn completed_local_reply_is_readable_through_mcp_after_restart() {
-    let mut host = Host::start().await;
-    let lead = host.bot("lead").await;
-    let reviewer = host.bot("reviewer").await;
-    host.call("send", json!({"botId": lead, "text": format!("DELEGATE {reviewer} LONG_REPLY")})).await;
-    // 完成通知与来源一起保存后才能读取，而非依据流式文本提前取回。
-    let notice = host
-        .wait_for(&lead, |entry| entry["data"]["status"] == "completed" && entry["data"]["delegationId"].is_string())
-        .await;
-    host.wait_finished().await;
-    let request = notice["data"]["delegationId"].as_str().unwrap();
-    let before = host.fixture_log("reviewer", "prompts.jsonl");
-    let expected =
-        format!("结论：已完成\n{}\n中间证据\n{}\n未验证：真实提供方费用", "甲🙂".repeat(2200), "乙".repeat(2200));
-    // 这段正文超过旧预览阈值但未到原传递上限，必须一次交付全部中间证据。
-    let delivered = host.fixture_log("lead", "prompts.jsonl");
-    assert!(delivered.iter().any(|prompt| prompt.as_str().is_some_and(|text| text.contains(&expected))));
-    let mut offset = 0;
-    let mut body = String::new();
-    loop {
-        let result = host.call("teamCall", json!({"botId": lead, "name": "read_bot_reply", "arguments": {"requestId": request, "offset": offset, "limit": 1000}})).await;
-        assert_eq!(result["source"], "trace");
-        assert_eq!(result["complete"], true);
-        body.push_str(result["text"].as_str().unwrap());
-        let Some(next) = result["nextOffset"].as_u64() else { break };
-        offset = next;
-    }
-    assert_eq!(body, expected);
-    let log = std::fs::read_to_string(host.home.join("host-stdout.log")).unwrap();
-    assert!(log.contains("request_execution"));
-    assert!(log.contains("provider_reported"));
-    assert!(log.contains("outputTokens"));
-    assert!(log.contains("shared_coordinator"));
-    assert!(log.contains("unavailable"));
-    common::stop(&mut host.child);
-    let (child, base) = common::serve_with(&host.home, &[("RUST_LOG", std::ffi::OsStr::new("codync_host=info"))]).await;
+#[path = "team_e2e/replies.rs"]
+mod replies;
+
+/// 真正杀掉 host 子进程并用原数据目录重启，不能用丢弃 Hub 模拟崩溃。
+async fn restart_group_host(host: &mut Host) {
+    host.child.kill().unwrap();
+    host.child.wait().unwrap();
+    let (child, base) = common::serve(&host.home).await;
     host.child = child;
     host.base = base;
-    host.call("send", json!({"botId": lead, "text": format!("READ_REPLY {}", json!({"requestId": request, "offset": 4000, "limit": 1000}))})).await;
-    // 假执行器把真正 MCP content 文本作为最终回复，核对模型可见的分页。
-    let entry = host
-        .wait_for(&lead, |entry| {
-            entry["kind"] == "agent"
-                && entry["data"]["final"] == true
-                && entry["data"]["text"].as_str().is_some_and(|text| text.contains("totalCharacters"))
-        })
-        .await;
-    let page: Value = serde_json::from_str(entry["data"]["text"].as_str().unwrap()).unwrap();
-    assert_eq!(page["text"], expected.chars().skip(4000).take(1000).collect::<String>());
-    assert_eq!(page["complete"], true);
-    host.call(
-        "send",
-        json!({"botId": lead, "text": format!("READ_REPLY {}", json!({"requestId": request, "query": "中间证据"}))}),
+}
+
+/// 查询来源事件的聚合卡，避免按 UUID 或当前显示名猜测投递身份。
+async fn group_card(host: &Host, room: &str, source: &str, status: &str) -> Value {
+    host.wait_for(room, |e| {
+        e["id"] == format!("delivery-card-{source}-1")
+            && e["data"]["deliveryRows"].as_array().is_some_and(|rows| rows.iter().all(|row| row["status"] == status))
+    })
+    .await
+}
+
+/// 同名成员选人、UTF-16裁剪、后续改名与两个忙碌请求共用真实agent流程。
+#[tokio::test]
+async fn selected_group_identity_and_two_busy_requests_survive_rename() {
+    let host = Host::start().await;
+    let a = host.bot("A").await;
+    let b = host.bot("B").await;
+    for id in [&a, &b] {
+        host.call("updateBot", json!({"id":id,"name":"Twin"})).await;
+    }
+    let room = host.call("createBot", json!({"kind":"group","name":"Room","members":[a,b]})).await["bot"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    host.call("send", json!({"botId":a,"text":"BLOCK private"})).await;
+    host.wait_for(&a, |e| e["kind"] == "user" && e["data"]["status"] == "sent").await;
+    let mut sources = Vec::new();
+    for text in ["  😀 @Twin first original  ", "  😀 @Twin second original  "] {
+        let sent =
+            host.call("send", json!({"botId":room,"text":text,"mentions":[{"botId":a,"start":5,"end":10}]})).await;
+        assert_eq!(sent["entry"]["data"]["mentions"], json!([{"botId":a,"start":3,"end":8}]));
+        let source = sent["entry"]["id"].as_str().unwrap().to_owned();
+        let card = group_card(&host, &room, &source, "queued").await;
+        assert_eq!(card["data"]["deliveryRows"][0]["targetBotId"], a);
+        sources.push(source);
+    }
+    host.call("updateBot", json!({"id":a,"name":"Renamed"})).await;
+    std::fs::write(host.home.join("A/release"), "").unwrap();
+    for source in &sources {
+        group_card(&host, &room, source, "completed").await;
+    }
+    let prompts = host.fixture_log("A", "prompts.jsonl");
+    assert!(prompts.iter().any(|p| p.as_str().unwrap_or_default().contains("first original")));
+    assert!(prompts.iter().any(|p| p.as_str().unwrap_or_default().contains("second original")));
+    let private = host.call("history", json!({"botId":a})).await;
+    assert!(finals(&private).iter().all(|t| !t.contains("original")), "group results never enter private chat");
+}
+
+/// queued和claimed在子进程重启后恢复，started/prompt之后只标中断，不自动重放。
+#[tokio::test]
+async fn group_crash_requeues_claimed_and_never_replays_started() {
+    let mut host = Host::start().await;
+    let a = host.bot("Held").await;
+    std::fs::write(host.home.join("Held/hold-session"), "").unwrap();
+    let room = host.call("createBot", json!({"kind":"group","name":"Crash room","members":[a]})).await["bot"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let sent = host.call("send", json!({"botId":room,"text":"first after claim"})).await;
+    let source = sent["entry"]["id"].as_str().unwrap().to_owned();
+    group_card(&host, &room, &source, "claimed").await;
+    // 会话尚在准备，投递已claimed但prompt绝未发送。
+    assert!(!host.home.join("Held/prompts.jsonl").exists());
+    host.child.kill().unwrap();
+    host.child.wait().unwrap();
+    std::fs::remove_file(host.home.join("Held/hold-session")).unwrap();
+    let (child, base) = common::serve(&host.home).await;
+    host.child = child;
+    host.base = base;
+    group_card(&host, &room, &source, "completed").await;
+    let sent = host.call("send", json!({"botId":room,"text":"BLOCK uncertain"})).await;
+    let source = sent["entry"]["id"].as_str().unwrap().to_owned();
+    group_card(&host, &room, &source, "started").await;
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while host.fixture_log("Held", "prompts.jsonl").len() < 2 {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap();
+    restart_group_host(&mut host).await;
+    let interrupted = group_card(&host, &room, &source, "interrupted").await;
+    assert!(interrupted["data"]["deliveryRows"][0]["detail"].as_str().unwrap().contains("不确定"));
+    tokio::time::sleep(Duration::from_secs(4)).await;
+    assert_eq!(host.fixture_log("Held", "prompts.jsonl").len(), 2, "started is never automatically replayed");
+    let id = interrupted["data"]["deliveryRows"][0]["deliveryId"].as_str().unwrap();
+    let retry = host.call("retryDelivery", json!({"deliveryId":id})).await;
+    assert_eq!(retry["delivery"]["attempt"], 2);
+    assert_ne!(retry["delivery"]["id"], id);
+    host.call("stop", json!({"botId":room})).await;
+}
+
+/// 三个真实ACP子进程经MCP在同群接力，工具正文不进入任何发送者私聊。
+#[tokio::test]
+async fn group_tools_relay_through_three_members_without_display_mentions_duplicating_work() {
+    let host = Host::start().await;
+    let a = host.bot("Lead").await;
+    let b = host.bot("Reviewer").await;
+    let c = host.bot("Verifier").await;
+    std::fs::write(host.home.join("Lead/group-script.json"),json!({"tasks":[{"botId":b,"message":"review exact task body","idempotencyKey":"review-1"},{"botId":b,"message":"review exact task body","idempotencyKey":"review-1"}],"reply":"@Reviewer please review"}).to_string()).unwrap();
+    std::fs::write(
+        host.home.join("Reviewer/group-script.json"),
+        json!({"tasks":[{"botId":c,"message":"verify the result"}],"reply":"@Verifier please verify"}).to_string(),
     )
-    .await;
-    // 检索结果来自真正的 MCP 调用，且不把筛选结果当作完整正文。
-    let entry = host
-        .wait_for(&lead, |entry| {
-            entry["data"]["final"] == true
-                && entry["data"]["text"].as_str().is_some_and(|text| text.contains("\"matches\""))
-        })
-        .await;
-    let matched: Value = serde_json::from_str(entry["data"]["text"].as_str().unwrap()).unwrap();
-    assert_eq!(matched["matches"][0]["text"], "中间证据\n");
-    let offset = "结论：已完成\n".chars().count() + 4401;
-    host.call("send", json!({"botId": lead, "text": format!("READ_REPLY {}", json!({"requestId": request, "ranges": [{"offset": 0, "limit": 2}, {"offset": offset, "limit": 4}]}))})).await;
-    // 同一次模型可见返回包含两个分离范围，不传递其间的填充正文。
-    let entry = host
-        .wait_for(&lead, |entry| {
-            entry["data"]["final"] == true
-                && entry["data"]["text"].as_str().is_some_and(|text| text.contains("\"slices\""))
-        })
-        .await;
-    let batched: Value = serde_json::from_str(entry["data"]["text"].as_str().unwrap()).unwrap();
-    assert_eq!(batched["slices"][0]["text"], "结论");
-    assert_eq!(batched["slices"][1]["text"], "中间证据");
-    assert_eq!(host.fixture_log("reviewer", "prompts.jsonl"), before, "reading never replays the worker");
-}
-
-/// 执行中重配不改变旧模型归属，取消只记一次且不会伪造零消费。
-#[tokio::test]
-async fn usage_keeps_running_model_and_records_cancellation_once() {
-    let host = Host::start().await;
-    let bot = host.bot("usage-model").await;
-    host.call("updateBot", json!({"id": bot, "model": "old"})).await;
-    host.call("send", json!({"botId": bot, "text": "BLOCK snapshot"})).await;
-    // 等待旧模型真实开始执行，再修改未来回合使用的配置。
-    common::eventually("old model running", Duration::from_secs(20), async || {
-        host.home.join("usage-model/prompts.jsonl").exists()
-    })
-    .await;
-    host.call("updateBot", json!({"id": bot, "model": "new"})).await;
-    std::fs::write(host.home.join("usage-model/release"), "").unwrap();
-    host.wait_for(&bot, |e| e["data"]["final"] == true && e["data"]["text"] == "reply: BLOCK snapshot").await;
-    host.call("send", json!({"botId": bot, "text": "next"})).await;
-    host.wait_for(&bot, |e| e["data"]["final"] == true && e["data"]["text"] == "reply: next").await;
-    std::fs::remove_file(host.home.join("usage-model/release")).unwrap();
-    host.call("send", json!({"botId": bot, "text": "BLOCK cancel"})).await;
-    // 第二次阻塞开始后取消，不能仅观察上一回合的已完成记录。
-    common::eventually("third prompt running", Duration::from_secs(20), async || {
-        host.fixture_log("usage-model", "prompts.jsonl").len() == 3
-    })
-    .await;
-    host.call("stop", json!({"botId": bot})).await;
-    // 等待取消尝试记录到磁盘，再核对每个 attempt 仅出现一次。
-    common::eventually("cancel usage", Duration::from_secs(20), async || {
-        common::turn_usage(&host.home)
-            .iter()
-            .any(|r| r.get("bot") == Some(&bot) && r.get("outcome").is_some_and(|v| v == "cancelled"))
-    })
-    .await;
-    let rows: Vec<_> = common::turn_usage(&host.home).into_iter().filter(|r| r.get("bot") == Some(&bot)).collect();
-    assert_eq!(rows.len(), 3, "{rows:?}");
-    assert_eq!(rows[0]["model"], "Some(\"old\")");
-    assert_eq!(rows[1]["model"], "Some(\"new\")");
-    assert_eq!(rows[2]["outcome"], "cancelled");
-    let attempts: std::collections::BTreeSet<_> = rows.iter().map(|r| &r["attempt"]).collect();
-    assert_eq!(attempts.len(), 3);
-    assert!(rows.iter().all(|r| r["usage"].contains("unavailable")));
-}
-
-/// 失败与回退成功属于两个不同尝试，启动失败也留下明确的未知消费。
-#[tokio::test]
-async fn usage_records_failed_fallback_and_start_failure() {
-    let host = Host::start().await;
-    let bot = host.bot("usage-fallback").await;
-    let script = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/relay_agent.py");
-    let command = common::python_agent(&script);
-    host.call("updateBot", json!({"id": bot, "command": format!("{command} primary"), "fallbacks": [{"backend": "codex", "command": format!("{command} standin")}]})).await;
-    std::fs::write(host.home.join("usage-fallback/primary.limit"), "").unwrap();
-    host.call("send", json!({"botId": bot, "text": "fallback"})).await;
-    // 最终答复完成时，前一个失败尝试已在切换身份前记录。
-    host.wait_for(&bot, |e| e["data"]["final"] == true && e["data"]["text"] == "standin answered").await;
-    let rows: Vec<_> = common::turn_usage(&host.home).into_iter().filter(|r| r.get("bot") == Some(&bot)).collect();
-    assert_eq!(rows.len(), 2, "{rows:?}");
-    assert_eq!(rows[0]["agent"], "custom");
-    assert_eq!(rows[0]["outcome"], "failed");
-    assert_eq!(rows[1]["agent"], "codex");
-    assert_eq!(rows[1]["outcome"], "completed");
-    assert_ne!(rows[0]["attempt"], rows[1]["attempt"]);
-    let broken = host.bot("usage-start-failure").await;
-    host.call("updateBot", json!({"id": broken, "command": "codync-test-command-does-not-exist"})).await;
-    host.call("send", json!({"botId": broken, "text": "start"})).await;
-    host.wait_for(&broken, |e| e["data"]["style"] == "error").await;
-    let rows: Vec<_> = common::turn_usage(&host.home).into_iter().filter(|r| r.get("bot") == Some(&broken)).collect();
-    assert_eq!(rows.len(), 1, "{rows:?}");
-    assert_eq!(rows[0]["outcome"], "failed");
-    assert!(rows[0]["usage"].contains("unavailable"));
-}
-
-/// 两个回复汇入一个主脑回合时保留整组请求标识，不拆成虚假的逐任务消费。
-#[tokio::test]
-async fn usage_keeps_batched_reply_associations_together() {
-    let host = Host::start().await;
-    let lead = host.bot("usage-lead").await;
-    let one = host.bot("usage-one").await;
-    let two = host.bot("usage-two").await;
-    host.call("send", json!({"botId": lead, "text": "BLOCK coordinator"})).await;
-    // 主脑先保持工作，使两条回复确定性地排进同一后续回合。
-    common::eventually("coordinator blocked", Duration::from_secs(20), async || {
-        host.home.join("usage-lead/prompts.jsonl").exists()
-    })
-    .await;
-    let first = host
-        .call("teamCall", json!({"botId": lead, "name": "message_bot", "arguments": {"botId": one, "message": "one"}}))
-        .await;
-    let second = host
-        .call("teamCall", json!({"botId": lead, "name": "message_bot", "arguments": {"botId": two, "message": "two"}}))
-        .await;
-    // 两个执行者都完成后才释放主脑，避免调度时间影响批量归属断言。
-    host.wait_for(&lead, |e| e["data"]["delegationId"] == first["requestId"] && e["data"]["status"] == "completed")
-        .await;
-    host.wait_for(&lead, |e| e["data"]["delegationId"] == second["requestId"] && e["data"]["status"] == "completed")
-        .await;
-    std::fs::write(host.home.join("usage-lead/release"), "").unwrap();
-    host.wait_for(&lead, |e| {
-        e["data"]["final"] == true
-            && e["data"]["text"].as_str().is_some_and(|s| s.contains("reply: one") && s.contains("reply: two"))
-    })
-    .await;
-    let rows: Vec<_> = common::turn_usage(&host.home)
-        .into_iter()
-        .filter(|r| r.get("bot") == Some(&lead) && r.get("scope").is_some_and(|s| s == "shared_coordinator"))
-        .collect();
-    assert_eq!(rows.len(), 1, "{rows:?}");
-    let ids: Vec<String> = serde_json::from_str(&rows[0]["request_ids"]).unwrap();
-    assert_eq!(ids.len(), 2);
-    assert!(ids.contains(&first["requestId"].as_str().unwrap().to_owned()));
-    assert!(ids.contains(&second["requestId"].as_str().unwrap().to_owned()));
+    .unwrap();
+    std::fs::write(
+        host.home.join("Verifier/group-script.json"),
+        json!({"tasks":[],"reply":"Verified in the source group"}).to_string(),
+    )
+    .unwrap();
+    host.call("updateBot", json!({"id":b,"hidden":true})).await;
+    let room = host.call("createBot", json!({"kind":"group","name":"Relay","members":[a,b,c]})).await["bot"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    host.call("send", json!({"botId":room,"text":"@Lead begin relay"})).await;
+    host.wait_for(&room, |e| e["kind"] == "agent" && e["data"]["author"] == c && e["data"]["final"] == true).await;
+    assert_eq!(
+        host.fixture_log("Reviewer", "prompts.jsonl").len(),
+        1,
+        "key retransmit and display @ do not duplicate work"
+    );
+    assert_eq!(host.fixture_log("Verifier", "prompts.jsonl").len(), 1);
+    let reviewer = host.fixture_log("Reviewer", "prompts.jsonl");
+    assert!(reviewer[0].as_str().unwrap().contains("review exact task body"));
+    for id in [&a, &b, &c] {
+        assert!(finals(&host.call("history", json!({"botId":id})).await).is_empty(), "all results stay in group");
+    }
 }

@@ -150,13 +150,64 @@ impl Entry {
             .collect()
     }
 
-    /// A notice's line; a voice call gets its length ("Voice chat · 00:16").
+    /// 派工卡默认仅显示聚合中文状态；其他通知沿用原文案和通话时长。
     pub fn notice_text(&self) -> String {
+        if let Some(summary) = self.delivery_summary() {
+            return summary;
+        }
         let text = super::super::l10n::tr(self.text());
         match self.data["callSeconds"].as_u64() {
             Some(s) => format!("{text} · {:02}:{:02}", s / 60, s % 60),
             None => text.into_owned(),
         }
+    }
+
+    /// 原始协议状态转为中文，未知值不直接进入用户界面。
+    pub fn delivery_status(status: &str) -> &'static str {
+        match status {
+            "queued" => "等待执行",
+            "claimed" => "准备执行",
+            "started" => "执行中",
+            "completed" => "已完成",
+            "failed" => "失败",
+            "interrupted" => "已中断",
+            "noReply" => "未回复",
+            "cancelled" => "已停止",
+            _ => "状态待更新",
+        }
+    }
+
+    /// 只聚合结构化目标行；全部因同一保护规则停止时才显示对应停止原因。
+    fn delivery_summary(&self) -> Option<String> {
+        let rows = self.data["deliveryRows"].as_array()?;
+        let Some(first) = rows.first() else { return Some("群内派工状态待更新".into()) };
+        if rows.iter().all(|row| row["status"] == "cancelled" && row["detail"] == first["detail"]) {
+            let reason = match first["detail"].as_str() {
+                Some("对话轮次上限") => Some("自动接力已达 3 轮，已停止继续派工"),
+                Some("群派工链深上限") => Some("自动接力已达链深上限，已停止继续派工"),
+                Some("房间发言上限") => Some("本轮发言已达上限，已停止继续派工"),
+                _ => None,
+            };
+            if let Some(reason) = reason {
+                return Some(reason.into());
+            }
+        }
+        let mut counts: Vec<(&str, usize)> = Vec::new();
+        for row in rows {
+            let label = Self::delivery_status(row["status"].as_str().unwrap_or_default());
+            if let Some((_, count)) = counts.iter_mut().find(|(text, _)| *text == label) {
+                *count += 1;
+            } else {
+                counts.push((label, 1));
+            }
+        }
+        if counts.len() == 1 {
+            return Some(format!("群内派工{}", counts[0].0));
+        }
+        Some(format!(
+            "群内派工：{}",
+            counts.iter().map(|(label, count)| format!("{count} 项{label}")).collect::<Vec<_>>().join("，")
+        ))
     }
 
     pub fn is_final(&self) -> bool {
@@ -195,9 +246,10 @@ impl Entry {
         if self.is_final() { self.data["artifact"]["id"].as_str() } else { None }
     }
 
-    /// A line that folds away a longer text: a handoff, or a voice call's conversation (`o` shows it).
+    /// 派工详情、交接正文与通话记录均通过既有 o 键展开，默认保持折叠。
     pub fn unfolds(&self) -> bool {
-        crate::tui::view::unfoldable(self).is_some() || (self.kind == Kind::Notice && self.call().is_some())
+        crate::tui::view::unfoldable(self).is_some()
+            || (self.kind == Kind::Notice && (self.call().is_some() || self.data["deliveryRows"].is_array()))
     }
 
     /// The voice call this was said in, or that this line ends (`chat::calls`).
@@ -258,6 +310,25 @@ impl Entry {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// 混合状态不能误报全体停止，未知状态及空卡片保留中文兜底。
+    #[test]
+    fn delivery_summaries_preserve_mixed_target_states() {
+        let mut e = Entry {
+            id: "d".into(),
+            seq: 1,
+            turn: 1,
+            kind: Kind::Notice,
+            created_at: 0,
+            data: json!({"deliveryRows":[
+                {"status":"cancelled","detail":"对话轮次上限"},{"status":"started"}
+            ]}),
+        };
+        assert_eq!(e.notice_text(), "群内派工：1 项已停止，1 项执行中");
+        e.data = json!({"deliveryRows":[]});
+        assert_eq!(e.notice_text(), "群内派工状态待更新");
+        assert_eq!(Entry::delivery_status("future"), "状态待更新");
+    }
 
     #[test]
     fn permission_options_follow_app_order() {

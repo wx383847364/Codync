@@ -108,9 +108,8 @@ test('typing @ in a group lists its members one per row, and the keyboard or the
     await field.fill('see @')
     await expect(rows).toHaveCount(2)
     await field.press('Home')
-    await field.press('Escape')
+    // 候选跟随光标所在片段；离开查询后已关闭，Esc 处理当前引用。
     await expect(list).toHaveCount(0)
-    await expect(quote).toBeVisible()
     await field.press('Escape')
     await expect(quote).toHaveCount(0)
 

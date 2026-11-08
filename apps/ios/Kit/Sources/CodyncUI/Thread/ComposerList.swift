@@ -77,17 +77,26 @@ struct CommandList: View {
 /// The `@` list in a group: each member's face, name and description; a tap mentions it.
 struct MentionList: View {
     let members: [Bot]
+    var selected = 0
     let pick: (Bot) -> Void
 
+    /// 复用统一列表的行与滚动容器，键盘候选保留同名 ID 区分。
     var body: some View {
-        ComposerList {
-            ForEach(members) { member in
-                ComposerListRow(title: member.name, detail: member.description) {
-                    pick(member)
-                } icon: {
-                    CharacterAvatar(bot: member, size: 18, animated: false)
+        ScrollViewReader { proxy in
+            ComposerList {
+                ForEach(Array(members.enumerated()), id: \.element.id) { index, member in
+                    ComposerListRow(title: member.name, detail: "\(member.id.prefix(8)) · \(member.description)") {
+                        // 选中稳定成员身份，正文替换由编辑器执行。
+                        pick(member)
+                    } icon: {
+                        CharacterAvatar(bot: member, size: 18, animated: false)
+                    }
+                    .background(index == selected ? Palette.surface : .clear, in: RoundedRectangle(cornerRadius: 10))
+                    .id(index)
                 }
             }
+            // 循环高亮时滚入可见区，输入焦点仍留在编辑器。
+            .onChange(of: selected) { _, index in withAnimation(Motion.layout) { proxy.scrollTo(index) } }
         }
     }
 }
