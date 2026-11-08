@@ -148,6 +148,10 @@ request; `shared_coordinator` retains the whole batch of reply request IDs, with
 its cost. Other turns are labelled `other`. Start failures, fallback attempts and cancellation
 are recorded too. Identifiers stay local and are not sent to analytics.
 
+Reply request IDs are kept in memory. After a host restart, a resumed coordinator turn's
+usage is still recorded, but may be labelled `other` with no request IDs. That consumption
+cannot be attributed back to its original reply batch or divided among those requests.
+
 Input, output, cached read/write and thought tokens are recorded only when the harness returns
 nonnegative integer usage fields. Missing values are null, with source `unavailable` when none
 are reported. Context occupancy and account rate-limit windows are not task consumption or
