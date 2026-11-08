@@ -39,14 +39,14 @@ pub async fn shared_models(hub: &Hub, backend: &str) -> Result<Value> {
     hub.model_lists.get(backend, models(&hub.store, backend)).await
 }
 
-/// Discover the agent's advertised models in an isolated, prompt-free session.
+/// 在不发送提示词的隔离会话中查询模型；`WorkBuddy` 另外读取账号的云端目录。
 /// This uses the same credentials as actual bot sessions and never reads project files.
 pub async fn models(store: &Store, backend: &str) -> Result<Value> {
     let Started { acp, mut inbox, .. } = start(store, backend).await?;
     let result = tokio::time::timeout(Duration::from_mins(1), async {
         let request = acp.request("session/new", json!({"cwd": probe_dir(), "mcpServers": []}));
         tokio::pin!(request);
-        let session = loop {
+        let mut session = loop {
             tokio::select! {
                 result = &mut request => break result?,
                 incoming = inbox.recv() => match incoming {
@@ -58,6 +58,9 @@ pub async fn models(store: &Store, backend: &str) -> Result<Value> {
                 }
             }
         };
+        if backend == "workbuddy" {
+            super::workbuddy_models::refresh(&acp, &mut session, &super::launch_env(store, backend)?).await?;
+        }
         // Cursor lists each model's options (effort, fast…) only through its own method.
         let options = if backend == "cursor" {
             acp.request("cursor/list_available_models", json!({})).await.unwrap_or_default()

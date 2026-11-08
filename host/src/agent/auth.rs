@@ -31,6 +31,7 @@ use tokio::sync::mpsc;
 
 mod agent;
 mod models;
+mod workbuddy_models;
 pub use agent::authenticate;
 use agent::start;
 pub(crate) use agent::{Started, start_with};

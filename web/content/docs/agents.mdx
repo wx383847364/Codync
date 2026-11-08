@@ -122,6 +122,8 @@ In the bot's settings, under **Agent**:
 
 On desktop and iPhone, the collapsed Agent row summarizes the harness, model, effort and Fast mode. Expand it to access all settings. Click the harness or model to search; selecting a model closes only the search list. The refresh control is beside the search field. In the terminal, use the Agent, Model and model-option fields with the keyboard.
 
+WorkBuddy loads its model list from its official service for the account signed in through Codync. If model loading asks you to sign in, use WorkBuddy’s sign-in card in Codync; signing into the WorkBuddy desktop app alone may not sign in its CLI. Failed refreshes show an error rather than an old bundled model list.
+
 Changing the model or its options starts a new agent session; the chat history stays. Switching the bot to a different agent starts it on that agent's default model.
 
 ## The agent for a new bot
@@ -131,4 +133,3 @@ There's no separate default-agent setting. A new bot gets Claude Code when Claud
 ## When an agent runs out
 
 A bot can have fallback agents that carry on the same turn when its own agent is out of usage, rate limited, signed out or won't start. See [Agent fallbacks](/docs/agent-fallbacks).
-

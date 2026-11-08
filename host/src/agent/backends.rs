@@ -23,6 +23,7 @@ pub use sign_in::{
     SignInCheck, agent_checks_off, apply_prompt_refusal, clear_prompt_refused, cli_signed_in, note_prompt_refused,
     refresh_sign_in, set_signed_in, signed_in,
 };
+pub(crate) use workbuddy::product as workbuddy_product;
 pub use workbuddy::{apply_process_env, move_saved_session_aside, session_proves_sign_in};
 
 pub struct Harness {
