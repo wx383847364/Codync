@@ -257,7 +257,7 @@ async fn message_ping_pong_stops_at_the_hop_limit_and_a_new_user_turn_can_delega
     }
 }
 
-/// 验证长回复保留正文传递与重启后的 MCP 精确分页，不因读取重新执行委派。
+/// 验证长回复正文交付与重启后的 MCP 分页、检索和批量范围，不因取证重新执行委派。
 #[tokio::test]
 async fn completed_local_reply_is_readable_through_mcp_after_restart() {
     let mut host = Host::start().await;
@@ -272,7 +272,7 @@ async fn completed_local_reply_is_readable_through_mcp_after_restart() {
     let request = notice["data"]["delegationId"].as_str().unwrap();
     let before = host.fixture_log("reviewer", "prompts.jsonl");
     let expected =
-        format!("结论：已完成\n{}中间证据{}\n未验证：真实提供方费用", "甲🙂".repeat(2200), "乙".repeat(2200));
+        format!("结论：已完成\n{}\n中间证据\n{}\n未验证：真实提供方费用", "甲🙂".repeat(2200), "乙".repeat(2200));
     // 这段正文超过旧预览阈值但未到原传递上限，必须一次交付全部中间证据。
     let delivered = host.fixture_log("lead", "prompts.jsonl");
     assert!(delivered.iter().any(|prompt| prompt.as_str().is_some_and(|text| text.contains(&expected))));
@@ -309,6 +309,32 @@ async fn completed_local_reply_is_readable_through_mcp_after_restart() {
     let page: Value = serde_json::from_str(entry["data"]["text"].as_str().unwrap()).unwrap();
     assert_eq!(page["text"], expected.chars().skip(4000).take(1000).collect::<String>());
     assert_eq!(page["complete"], true);
+    host.call(
+        "send",
+        json!({"botId": lead, "text": format!("READ_REPLY {}", json!({"requestId": request, "query": "中间证据"}))}),
+    )
+    .await;
+    // 检索结果来自真正的 MCP 调用，且不把筛选结果当作完整正文。
+    let entry = host
+        .wait_for(&lead, |entry| {
+            entry["data"]["final"] == true
+                && entry["data"]["text"].as_str().is_some_and(|text| text.contains("\"matches\""))
+        })
+        .await;
+    let matched: Value = serde_json::from_str(entry["data"]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(matched["matches"][0]["text"], "中间证据\n");
+    let offset = "结论：已完成\n".chars().count() + 4401;
+    host.call("send", json!({"botId": lead, "text": format!("READ_REPLY {}", json!({"requestId": request, "ranges": [{"offset": 0, "limit": 2}, {"offset": offset, "limit": 4}]}))})).await;
+    // 同一次模型可见返回包含两个分离范围，不传递其间的填充正文。
+    let entry = host
+        .wait_for(&lead, |entry| {
+            entry["data"]["final"] == true
+                && entry["data"]["text"].as_str().is_some_and(|text| text.contains("\"slices\""))
+        })
+        .await;
+    let batched: Value = serde_json::from_str(entry["data"]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(batched["slices"][0]["text"], "结论");
+    assert_eq!(batched["slices"][1]["text"], "中间证据");
     assert_eq!(host.fixture_log("reviewer", "prompts.jsonl"), before, "reading never replays the worker");
 }
 

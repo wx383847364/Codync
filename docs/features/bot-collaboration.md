@@ -53,10 +53,31 @@ history paging is unaffected.
 
 ## Retrieving a local reply
 
-`read_bot_reply {requestId, offset?, limit?}` is a read-only `team` tool for the bot that sent
+`read_bot_reply {requestId, offset?, limit?, query?, ranges?}` is a read-only `team` tool for the bot that sent
 that request on this computer. Offsets count Unicode scalar values, not UTF-8 bytes or UTF-16
 code units. The default page is 2,000 characters, at most 4,000; `nextOffset` is null at the end.
 Unknown arguments, negative/fractional offsets and limits outside 1–4,000 are rejected.
+
+The existing page mode returns contiguous `text`. Two optional selectors use the same
+authorized reply and never start work:
+
+- `query` is a case-sensitive literal string, 1–200 Unicode characters without line breaks.
+  It returns at most 32 whole matching lines as `matches: [{offset, text}]`, with no duplicated `text`.
+  `offset` must be a line start (or the end of the source). All matched line text shares
+  `limit`; a matching line larger than that budget is rejected rather than silently cut.
+  The match count cap also bounds JSON metadata; `limit` measures evidence text, not protocol overhead.
+  `selectionComplete` indicates that all remaining matching lines were returned. Otherwise
+  `nextOffset` points to the first omitted matching line. No matches yields an empty array.
+- `ranges: [{offset, limit}]` batches 1–8 ordered, non-overlapping ranges as
+  `slices: [{offset, text}]`. All requested lengths together must be at most 4,000 characters;
+  the ranges cannot combine with top-level `offset`, `limit` or `query`. A range may end at
+  the source's end; an offset beyond the source is rejected. This avoids another model
+  decision between each known range without increasing the per-call text budget.
+
+Both selectors return `selection` and keep `text` empty. `complete` continues to describe
+the source, never whether excerpts constitute a complete review. Search matches must not
+substitute for an audit that requires the whole source; historical-summary matches remain
+incomplete. All authorization, deletion, source-integrity and restart rules are unchanged.
 
 It returns `status`, `source`, `complete`, `text`, `offset`, `nextOffset` and
 `totalCharacters`. `source` is `trace`, `summary`, `pending` or `unavailable`.
@@ -77,6 +98,13 @@ and produced an acceptance failure. The retrieval tool remains available when de
 text is insufficient; no persistent preview or model-routing switch is added.
 The recipient is asked to put conclusions, key evidence and unverified items first; these
 remain bot claims. Reading a reply never runs or wakes a bot and must not be used for polling.
+
+The sender should state delivery scope and acceptance criteria in the existing request:
+conclusions for a decision, exact relevant evidence for a targeted check, and necessary
+source material for a full review. The recipient follows that scope in its existing final
+reply, retaining required evidence and unverified items. There is no second summarization
+call, additional automatic truncation beyond the existing delivery cap, or model-routing policy. Shorter replies are useful only when
+they still satisfy acceptance; any retrieval and rework belongs in the measured workflow.
 
 ## Local usage observations
 

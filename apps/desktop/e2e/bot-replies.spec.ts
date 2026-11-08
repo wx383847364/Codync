@@ -11,8 +11,8 @@ async function history(page: Parameters<typeof api>[0], botId: string) {
   return (await api<{ entries: Entry[] }>(page, 'history', { botId })).entries
 }
 
-// 真实桌面验证长回复保留正文传递，并由假执行器经过真实 MCP 再取回中间证据。
-test('a bot receives a long local reply and can retrieve its middle', async () => {
+// 真实桌面验证正文交付，并由假执行器经过真实 MCP 一次检索或批量取回证据。
+test('a bot receives a long reply and queries or batches its evidence', async () => {
   const { browser, page } = await attach()
   const folder = mkdtempSync(join(tmpdir(), 'codync-reply-desktop-'))
   const bots: string[] = []
@@ -38,13 +38,19 @@ test('a bot receives a long local reply and can retrieve its middle', async () =
     const entries = await history(page, lead)
     const request = entries.find((e) => e.data.delegationId)?.data.delegationId
     expect(request).toBeTruthy()
-    const offset = '结论：已完成\n'.length + 4400
-    await typeMessage(page, `READ_REPLY ${JSON.stringify({ requestId: request, offset, limit: 4 })}`)
+    await typeMessage(page, `READ_REPLY ${JSON.stringify({ requestId: request, query: '中间证据' })}`)
     // 此文本必须来自模型可见的 MCP 返回，而非直接查询 SQLite。
     await expect.poll(async () => {
-      const result = (await history(page, lead)).find((e) => e.data.final && e.data.text?.includes('totalCharacters'))
-      return result?.data.text ? JSON.parse(result.data.text).text : null
-    }).toBe('中间证据')
+      const result = (await history(page, lead)).find((e) => e.data.final && e.data.text?.includes('"matches"'))
+      return result?.data.text ? JSON.parse(result.data.text).matches[0].text : null
+    }).toBe('中间证据\n')
+    const offset = '结论：已完成\n'.length + 4401
+    await typeMessage(page, `READ_REPLY ${JSON.stringify({ requestId: request, ranges: [{ offset: 0, limit: 2 }, { offset, limit: 4 }] })}`)
+    // 批量读取仍从真实工具返回验证，多个范围共用一次调用。
+    await expect.poll(async () => {
+      const result = (await history(page, lead)).find((e) => e.data.final && e.data.text?.includes('"slices"'))
+      return result?.data.text ? JSON.parse(result.data.text).slices.map((slice: { text: string }) => slice.text) : null
+    }).toEqual(['结论', '中间证据'])
     await expect(page.locator('.transcript')).toContainText('中间证据')
   } finally {
     for (const botId of bots) {

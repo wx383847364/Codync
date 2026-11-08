@@ -38,12 +38,21 @@ def mcp_call(server_name, tool, arguments):
         assert initialized["result"]["serverInfo"]["name"] == "codync-" + server_name
         tools = rpc(2, "tools/list", {})
         assert any(t["name"] == tool for t in tools["result"]["tools"])
+        next_id = 3
         if server_name == "team":
             assert {t["name"] for t in tools["result"]["tools"]} == {"list_bots", "message_bot", "read_bot_reply"}
             if tool == "message_bot":
-                roster = rpc(3, "tools/call", {"name": "list_bots", "arguments": {}})
-                assert any(b["id"] == arguments["botId"] for b in json.loads(roster["result"]["content"][0]["text"])["bots"])
-        response = rpc(4, "tools/call", {"name": tool, "arguments": arguments})
+                cursor = None
+                while True:
+                    # 实际沙箱可能超过默认二十个 bot，沿已有分页查找目标，不能假设第一页就是全集。
+                    roster = rpc(next_id, "tools/call", {"name": "list_bots", "arguments": {"cursor": cursor} if cursor else {}})
+                    next_id += 1
+                    page = json.loads(roster["result"]["content"][0]["text"])
+                    if any(b["id"] == arguments["botId"] for b in page["bots"]):
+                        break
+                    cursor = page.get("next")
+                    assert cursor is not None, "recipient absent from all roster pages"
+        response = rpc(next_id, "tools/call", {"name": tool, "arguments": arguments})
         mcp.stdin.close()
         return response["result"]
 
@@ -101,7 +110,7 @@ def prompt(request):
         send({"id": request["id"], "result": {"stopReason": "end_turn"}})
         return
     if text.split("\n\n")[-1] == "LONG_REPLY":
-        reply = "结论：已完成\n" + "甲🙂" * 2200 + "中间证据" + "乙" * 2200 + "\n未验证：真实提供方费用"
+        reply = "结论：已完成\n" + "甲🙂" * 2200 + "\n中间证据\n" + "乙" * 2200 + "\n未验证：真实提供方费用"
         update({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": reply}})
         send({"id": request["id"], "result": {"stopReason": "end_turn", "usage": {"inputTokens": 123, "outputTokens": 456, "cachedReadTokens": 0}}})
         return
