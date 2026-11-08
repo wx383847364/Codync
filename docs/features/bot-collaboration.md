@@ -125,6 +125,21 @@ These are model instructions, not Host-enforced JSON Schema validation. The Host
 rewrites replies nor converts an invalid object into a string. Callers still validate the
 original response against the task's acceptance criteria; `completed` is unchanged.
 
+For a pure extraction task whose source is already available, compare a deterministic
+program with model copying before adding delegation. `tools/team-reply-eval.py` provides
+an offline, task-specific evaluation entry: `--self-test` runs configuration/error-injection
+regressions, and `--source <report.jsonl> --report-id <id>` extracts the complete T025 record
+and the original four-field answer. It rejects ambiguous IDs and malformed sources. Its
+source reader is a local evaluation command, not a bot-accessible file-reading API. This
+baseline does not prove test execution, code-review conclusions or worker-generated data.
+
+For paid checks, the same evaluator's `create_checked_bot` uses the Host API's `description`
+field and verifies the returned settings before dispatch; MCP management tools may use
+`instructions`, which is a different interface. Failure aborts the evaluation and cleans up
+only its newly created bot. Offline injections guard the acceptance checker, not model
+compliance. Model-copying fidelity and schema shape remain separate checks; neither the
+shorter prompt nor these tests establishes guaranteed fidelity or token savings.
+
 ## Local usage observations
 
 `turn usage` structured logs identify the bot, agent, configured model, session, turn and

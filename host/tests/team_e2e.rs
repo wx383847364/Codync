@@ -51,6 +51,7 @@ impl Host {
         value
     }
 
+    /// 创建测试 bot 并核对真正持久化的 description，避免混用 MCP 的 instructions 参数。
     async fn bot(&self, name: &str) -> String {
         let cwd = self.home.join(name);
         std::fs::create_dir_all(&cwd).unwrap();
@@ -59,11 +60,13 @@ impl Host {
             .call(
                 "createBot",
                 json!({
-                    "name": name, "backend": "custom", "cwd": cwd, "permission": "ask", "notify": false,
+                    "name": name, "description": format!("Test bot {name}"),
+                    "backend": "custom", "cwd": cwd, "permission": "ask", "notify": false,
                     "command": common::python_agent(&agent),
                 }),
             )
             .await;
+        assert_eq!(result["bot"]["description"], format!("Test bot {name}"));
         result["bot"]["id"].as_str().unwrap().to_owned()
     }
 
@@ -116,6 +119,19 @@ fn finals(history: &Value) -> Vec<&str> {
         .filter(|e| e["kind"] == "agent" && e["data"]["final"] == true)
         .map(|e| e["data"]["text"].as_str().unwrap())
         .collect()
+}
+
+/// 将无模型验收回归接入现有 Cargo 入口，历史类型错误与漏词不能靠改评分器变成通过。
+#[test]
+fn offline_delivery_checks_reject_type_and_fidelity_errors() {
+    let script = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../tools/team-reply-eval.py");
+    let result = std::process::Command::new(common::python())
+        .args(["-X", "utf8"])
+        .arg(script)
+        .arg("--self-test")
+        .output()
+        .unwrap();
+    assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
 }
 
 #[tokio::test]
