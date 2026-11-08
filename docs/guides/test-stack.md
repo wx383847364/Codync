@@ -26,6 +26,8 @@ npm run dev -- --cdp   # the worktree's sandbox, DevTools on its port + 10000
 npm run e2e            # in a second shell: e2e/*.spec.ts against that sandbox
 ```
 
+For a signed-out run with no account creation or real agent checks, start the sandbox with `CODYNC_CLERK_SECRET_KEY= CODYNC_AGENT_CHECKS=off npm run dev -- --cdp`. The empty secret-key environment value disables automatic sandbox test-account sign-in, including when the shared env file has a key. The test connection restores English and chooses **Continue without an account** before each flow. Tests that require an existing signed-in account skip before enabling the cloud; the local signed-out pairing and welcome flows still run.
+
 `e2e/sandbox.ts` finds the sandbox from its `sandbox.json` and attaches to its main window; `e2e/smoke.spec.ts` checks the app renders and runs against the sandbox's own host. A spec reaches the main process only through the `window.codync` bridge, as the renderer does. One worker per worktree, since one app runs per sandbox; worktrees run in parallel with each other.
 
 ## Phones: Maestro
