@@ -27,17 +27,33 @@ pub fn sign_in_url(incoming: &Incoming) -> Option<String> {
     (matches!(url.scheme(), "https" | "http") && url.has_host()).then(|| url.into())
 }
 
-/// Whether an account is signed in (signed out, the answer has no `userInfo`). `None`: it didn't say. Nothing else
-/// of the answer is read: it carries the account's tokens.
+/// 核验 CLI 是否持有可用的访问令牌；只有账号名称的旧登录记录不能证明已登录。
 pub async fn signed_in(acp: &Acp) -> Option<bool> {
     let info = tokio::time::timeout(Duration::from_secs(15), acp.request("_codebuddy.ai/getUserInfo", json!({})));
-    info.await.ok()?.ok().map(|info| !info["userInfo"].is_null())
+    info.await.ok()?.ok().map(|info| access_token(&info).is_some())
+}
+
+/// 兼容新旧 CLI 的令牌字段，只借用内存中的值，不向日志或客户端输出。
+pub(crate) fn access_token(info: &Value) -> Option<&str> {
+    // 空的新字段可以回退到旧字段；账号名称本身不表示会话已完成解密。
+    ["accessToken", "token"]
+        .into_iter()
+        .find_map(|key| info["userInfo"][key].as_str().filter(|token| !token.is_empty()))
 }
 
 #[cfg(test)]
 mod tests {
     use super::super::{AUTH_REQUIRED, RpcError, needs_sign_in};
     use super::*;
+
+    /// 旧记录中的账号名称不能掩盖令牌缺失，并兼容两种有效令牌字段。
+    #[test]
+    fn account_name_without_access_token_is_signed_out() {
+        assert!(access_token(&json!({"userInfo": {"userId": "old"}})).is_none());
+        assert!(access_token(&json!({"userInfo": null})).is_none());
+        assert_eq!(access_token(&json!({"userInfo": {"accessToken": "new"}})), Some("new"));
+        assert_eq!(access_token(&json!({"userInfo": {"accessToken": "", "token": "legacy"}})), Some("legacy"));
+    }
 
     fn refusal(error: &str) -> Value {
         json!({"stopReason": "refusal", "_meta": {"codebuddy.ai/errorMessage": error}})

@@ -122,6 +122,21 @@ fn product_auth_id() -> Option<String> {
     auth_id_from_product(&text)
 }
 
+/// 读取实际选中的 `WorkBuddy` 安装配置，确保模型请求与 CLI 使用同一站点。
+pub(crate) fn product(environment: Option<&str>) -> anyhow::Result<serde_json::Value> {
+    use anyhow::Context;
+    let bin = find().context("WorkBuddy is not installed")?;
+    let name = match environment {
+        Some(name) if !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') => {
+            format!("product.{name}.json")
+        }
+        Some(_) => anyhow::bail!("invalid WorkBuddy environment"),
+        None => "product.json".to_owned(),
+    };
+    let path = bin.parent().and_then(Path::parent).context("invalid WorkBuddy CLI path")?.join(name);
+    Ok(serde_json::from_str(&std::fs::read_to_string(path).context("reading WorkBuddy product configuration")?)?)
+}
+
 fn auth_id_from_product(text: &str) -> Option<String> {
     let value: serde_json::Value = serde_json::from_str(text).ok()?;
     let id = value.get("authentication")?.get("id")?.as_str()?;

@@ -1,6 +1,6 @@
 import { test, expect, type Page } from '@playwright/test'
 import type { CloudStatus } from '../src/shared/models.ts'
-import { api, attach, openGeneralSettings } from './sandbox.ts'
+import { api, attach, hasAccount, openGeneralSettings } from './sandbox.ts'
 
 const status = (page: Page) => api<CloudStatus>(page, 'cloudStatus', {})
 const owner = async (page: Page) => (await status(page)).owner?.userId ?? null
@@ -19,10 +19,14 @@ async function openComputers(page: Page) {
   await page.getByRole('dialog').getByRole('button', { name: 'Computers', exact: true }).click()
 }
 
+// 加入账号的流程只使用已经登录的沙箱；无账号时不启用真实云端。
 test('turning on Reach from anywhere asks to add a computer in no account first', async () => {
   // Each relay restart keeps the old relay up for 10 seconds, and the status forgets the owner only after that.
   test.setTimeout(180_000)
   const { browser, page } = await attach()
+  const signedIn = await hasAccount(page)
+  if (!signedIn) await browser.close()
+  test.skip(!signedIn, 'Requires a sandbox already signed in; signed-out runs never enable the cloud.')
   const started = await status(page)
   const reach = page.getByRole('switch', { name: /Reach from anywhere/ })
   const dialog = page.getByRole('alertdialog')

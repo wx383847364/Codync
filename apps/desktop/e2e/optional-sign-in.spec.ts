@@ -1,7 +1,7 @@
 import { test, expect, type Page } from '@playwright/test'
 import type { CloudStatus } from '../src/shared/models.ts'
 import { pairAsSignedOutPhone } from './phone.ts'
-import { api, attach, freezeHost, openGeneralSettings, sandbox, setPref } from './sandbox.ts'
+import { api, attach, freezeHost, hasAccount, openGeneralSettings, sandbox, setPref } from './sandbox.ts'
 
 // docs/plans/optional-sign-in.md.
 
@@ -82,10 +82,14 @@ test('the welcome lets you go on without an account, and it stays that way', asy
   }
 })
 
+// 免登录沙箱在启用云端前跳过此流程，不为测试创建或登录账号。
 test('signed in, a computer in no account is asked about once, and Add to account asks again', async () => {
   // Leaving an account and joining one each wait on the dev cloud; a host that doesn't answer takes its 20 seconds.
   test.setTimeout(210_000)
   const { browser, page } = await attach()
+  const signedIn = await hasAccount(page)
+  if (!signedIn) await browser.close()
+  test.skip(!signedIn, 'Requires a sandbox already signed in; signed-out runs never enable the cloud.')
   const prompt = page.getByRole('alertdialog')
   const question = prompt.getByRole('heading', { name: 'Add this computer to your account?' })
   const add = prompt.getByRole('button', { name: 'Add to account' })

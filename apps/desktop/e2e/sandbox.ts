@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, join, resolve } from 'node:path'
 import { SANDBOX_PREFIX, sandboxName } from '../src/shared/dev-sandbox.ts'
-import type { HostSnapshot } from '../src/shared/ipc.ts'
+import type { CodyncBridge, HostSnapshot } from '../src/shared/ipc.ts'
 
 // Playwright loads specs as CommonJS here (the package has no "type": "module").
 const root = resolve(__dirname, '../../..')
@@ -31,7 +31,7 @@ export function freezeHost() {
   return () => process.kill(pid, 'SIGCONT')
 }
 
-/** Attaches to the sandbox app's main window over the DevTools protocol. */
+/** 连接沙箱主窗口；每项测试恢复英文，并从欢迎页选择免登录继续。 */
 export async function attach(): Promise<{ browser: Browser; page: Page }> {
   const { cdp } = sandbox()
   const browser = await chromium.connectOverCDP(`http://127.0.0.1:${cdp}`).catch(() => {
@@ -42,11 +42,23 @@ export async function attach(): Promise<{ browser: Browser; page: Page }> {
     .flatMap((context) => context.pages())
     .find((p) => !p.url().startsWith('devtools://'))
   if (!page) throw new Error('The sandbox app has no window open.')
+  // 英文定位器不应依赖系统语言，也不能继承上一项语言测试恢复的设置。
+  await setPref(page, 'appLanguage', 'en')
   await setPref(page, 'githubStarAsk', { kind: 'done' }) // Its sheet would cover what a test clicks.
+  const continueLocally = page.getByRole('button', { name: /^Continue (without an account|on this Mac|on this computer)/ })
+  // 等待账号恢复完成后再判断欢迎页，避免冷启动时只看到恢复中的占位内容。
+  await page.locator('.sidebar-account').or(continueLocally).first().waitFor({ state: 'visible' })
+  if (await continueLocally.isVisible()) await continueLocally.click()
   // So would the ask to add a computer in no account, on a signed-in `--cloud` sandbox.
   const notNow = page.getByRole('alertdialog').getByRole('button', { name: 'Not now' })
   if (await notNow.isVisible()) await notNow.click()
   return { browser, page }
+}
+
+/** 只读取沙箱已有的登录状态，供需要账号的测试在联网前检查前置条件。 */
+export async function hasAccount(page: Page): Promise<boolean> {
+  // 读取主进程已恢复的状态，不获取令牌或触发登录。
+  return page.evaluate(async () => (await (window as unknown as { codync: CodyncBridge }).codync.account.state()).user !== null)
 }
 
 /** Sets a `pref` in the running window, which hears it as if another window had written it. */
