@@ -2,6 +2,41 @@ use super::*;
 use crate::store::deliveries::Status;
 use futures::StreamExt;
 
+/// 最后一段 pass 不得覆盖工具结束后已写出的结果，也不能把后续工具前的进度当结果。
+#[tokio::test]
+async fn a_trailing_pass_keeps_the_reply_only_if_no_more_work_started() {
+    for (after_reply, status) in [
+        ("thought", "completed"),
+        ("tool", "noReply"),
+        ("toolUpdate", "noReply"),
+        ("duplicateToolUpdate", "completed"),
+        ("duringReply", "completed"),
+        ("duringReplyThenPass", "noReply"),
+    ] {
+        let room = Room::new();
+        let text = "Verification finished. @b review the result.";
+        std::fs::write(
+            room.dir.join("a/group-script.json"),
+            json!({"reply":text,"trailingPass":after_reply}).to_string(),
+        )
+        .unwrap();
+        std::fs::write(room.dir.join("b/group-script.json"), json!({"reply":"Result reviewed."}).to_string()).unwrap();
+        let source = room.send("@a run the verification", None).await;
+        room.settle().await;
+        let replies = room.replies(&Lane::main(&room.group));
+        let card = room.hub.store.entry(&format!("delivery-card-{}-1", source.id)).unwrap();
+        assert_eq!(card.data["deliveryRows"][0]["status"], status, "{after_reply}");
+        if status == "completed" {
+            // 发布真实结果，并让其中的 @ 按已有流程只派发一次。
+            assert_eq!(replies, [("a".to_owned(), text.to_owned()), ("b".to_owned(), "Result reviewed.".to_owned())]);
+        } else {
+            assert_eq!(replies, [] as [(String, String); 0]);
+            assert!(!room.dir.join("b/prompts.jsonl").exists());
+        }
+        room.shutdown().await;
+    }
+}
+
 /// 群内忙成员继续原任务，空闲成员先答；补做时以持久投递保留完整的 @all 原文。
 #[tokio::test]
 async fn a_new_group_message_reaches_idle_members_while_an_older_turn_is_busy() {

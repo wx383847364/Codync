@@ -1,19 +1,95 @@
 //! 投递 turn 的执行和结果保存。房间等待超时不丢弃在途结果。
 
-use super::{Actor, Done};
+use super::{Actor, Done, SegKind};
 use crate::store::Lane;
 use crate::store::deliveries::{Delivery, Status};
 use anyhow::{Result, ensure};
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, oneshot};
 
 pub(super) struct ActiveDelivery {
     pub delivery: Delivery,
-    pub output: Option<String>,
+    output: Option<String>,
     pub output_open: bool,
+    /// 最近一次工具之后、被思考片段分开的正文，供尾部 pass 时保留。
+    reply_before_pass: Option<String>,
+    /// 本段输出期间工具是否继续执行，避免把进度当成结果。
+    output_crossed_work: bool,
+    /// 仅保留尚未结束的工具。是否继续工作不能依赖工具记录落库成功。
+    pending_tools: HashMap<String, String>,
     /// 当前 prompt 确实展示的消息 ID；序号上界不能代表全部历史已读。
     pub shown_entries: Vec<String>,
     pub reply: oneshot::Sender<bool>,
+}
+
+impl ActiveDelivery {
+    /// 为新的模型尝试清空输出，避免失败模型的片段成为下一次尝试的结果。
+    pub(super) fn reset_output(&mut self) {
+        self.output = None;
+        self.output_open = false;
+        self.output_crossed_work = false;
+        self.reply_before_pass = None;
+        self.pending_tools.clear();
+    }
+
+    /// 在内存中按片段缓冲输出，即使数据库写入失败也保留完整内容。
+    pub(super) fn buffer_output(&mut self, kind: SegKind, text: &str) {
+        if kind == SegKind::Text {
+            if self.output_open {
+                self.output.get_or_insert_default().push_str(text);
+            } else {
+                self.output = Some(text.to_owned());
+                self.output_open = true;
+                self.output_crossed_work = false;
+            }
+        } else if self.output_open
+            && !self.output_crossed_work
+            && self.output.as_deref().is_some_and(|reply| !crate::chat::group::is_pass(reply))
+        {
+            // 思考不开始新工作，后面如果只剩 pass，刚才的正文仍可交付。
+            self.reply_before_pass.clone_from(&self.output);
+        }
+    }
+
+    /// 工具继续工作时作废回退正文，同时保留正在拼接的流文本。
+    pub(super) fn invalidate_reply_before_pass(&mut self) {
+        self.reply_before_pass = None;
+        self.output_crossed_work = true;
+    }
+
+    /// 最后一段只有 pass 时，回退到这次工作完成后已给出的正文。
+    pub(super) fn reply_text(&self) -> Option<String> {
+        let text = self.output.as_deref()?;
+        if crate::chat::group::is_pass(text)
+            && let Some(reply) = &self.reply_before_pass
+        {
+            return Some(reply.clone());
+        }
+        Some(text.to_owned())
+    }
+
+    /// 登记尚未结束的工具，以识别它后续真正的状态变化。
+    pub(super) fn note_tool(&mut self, id: &str, status: &str) {
+        if matches!(status, "pending" | "in_progress") {
+            self.pending_tools.insert(id.to_owned(), status.to_owned());
+        } else {
+            self.pending_tools.remove(id);
+        }
+    }
+
+    /// 返回工具是否继续执行或首次结束。重复、迟到和仅含内容的更新不会清除正文。
+    pub(super) fn tool_advanced(&mut self, id: &str, status: &str) -> bool {
+        let Some(previous) = self.pending_tools.get_mut(id) else { return false };
+        match status {
+            "in_progress" if previous == "pending" => status.clone_into(previous),
+            "completed" | "failed" => {
+                self.pending_tools.remove(id);
+            }
+            _ => return false,
+        }
+        true
+    }
 }
 
 pub(super) struct PendingCompletion {
@@ -27,6 +103,14 @@ pub(super) struct PendingCompletion {
 }
 
 impl Actor {
+    /// 新工具或审批之后出现 pass 时，不能把此前的进度提升为结果。
+    pub(super) fn close_seg_for_work(&mut self) {
+        self.close_seg();
+        if let Some(active) = self.active_delivery.as_mut() {
+            active.invalidate_reply_before_pass();
+        }
+    }
+
     /// 只执行 runner 指定的 ID；忙时拒绝领取，原投递保持 queued。
     pub(super) async fn begin_delivery(
         &mut self,
@@ -96,6 +180,9 @@ impl Actor {
                     reply,
                     output: None,
                     output_open: false,
+                    reply_before_pass: None,
+                    output_crossed_work: false,
+                    pending_tools: HashMap::new(),
                     shown_entries: Vec::new(),
                 });
                 match prepared {

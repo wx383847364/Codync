@@ -336,7 +336,7 @@ async fn image_info_accepts_only_known_files_and_paths_stay_text() {
     assert_eq!(info, json!({"width":6000,"height":2}));
 }
 
-/// 文件名不是派工正文：只发文件也正常完成，@all、成员名和普通文件都不派生任务或重复摘要。
+/// 文件名和发文件前的进度都不派生任务或重复摘要，只发文件也正常完成。
 #[tokio::test]
 async fn group_file_names_never_route_mentions_or_duplicate_final_messages() {
     for (name, mode) in [
@@ -344,6 +344,7 @@ async fn group_file_names_never_route_mentions_or_duplicate_final_messages() {
         ("@Observer.txt", "files-only"),
         ("report.pdf", "files-only"),
         ("sentinel.txt", "files-pass"),
+        ("progress.txt", "files-pass-with-progress"),
         ("blank.txt", "files-blank"),
     ] {
         let host = Host::start().await;
