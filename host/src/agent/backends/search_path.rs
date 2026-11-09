@@ -8,6 +8,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 static SEARCH_PATH: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
+// 保留最近一次读成功的 Agent 变量，刷新失败时继续用它们。
+static LOGIN_ENV: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new());
 
 /// `…/v22.1.0` → `[22, 1, 0]` (unparseable parts count as 0).
 fn node_version(dir: &Path) -> Vec<u32> {
@@ -66,14 +68,15 @@ fn well_known_dirs_for(home: &Path, data_local: Option<&Path>) -> Vec<PathBuf> {
     dirs
 }
 
-/// Re-detects the search path and exports it as this process's PATH, so every
-/// agent we spawn (and the `npx`/`node` they need) resolves the same way.
+/// 刷新 Host 搜索路径，同时缓存只供 Agent 使用的登录 Shell 变量。
 pub fn hydrate_path() {
     let mut seen = HashSet::new();
     let mut path: Vec<PathBuf> = vec![];
     let current = std::env::var("PATH").unwrap_or_default();
-    let login = shell::user_path().unwrap_or_default();
-    for p in std::env::split_paths(&current).chain(std::env::split_paths(&login)).chain(well_known_dirs()) {
+    let login = shell::user_env();
+    // 用原有搜索顺序合并 PATH，保证新安装的 CLI 能被找到。
+    let login_path = login.iter().flatten().find(|(key, _)| key == "PATH").map_or("", |(_, value)| value.as_str());
+    for p in std::env::split_paths(&current).chain(std::env::split_paths(login_path)).chain(well_known_dirs()) {
         if p.as_os_str().is_empty() || !p.is_dir() {
             continue;
         }
@@ -93,6 +96,24 @@ pub fn hydrate_path() {
         unsafe { std::env::set_var("PATH", joined) };
     }
     *SEARCH_PATH.locked() = path;
+    if let Some(mut login) = login {
+        // PATH 已单独合并。Codync 配置和 Shell 维护的变量不能从登录环境注入子进程。
+        login.retain(|(key, _)| {
+            !key.starts_with("CODYNC_") && !matches!(key.as_str(), "PATH" | "PWD" | "OLDPWD" | "SHLVL" | "_")
+        });
+        *LOGIN_ENV.locked() = login;
+    }
+}
+
+/// 给 Agent 补齐登录 Shell 变量，已保存的 Agent 配置和 Host 自己继承的值优先。
+pub(crate) fn with_login_env(mut env: Vec<(String, String)>) -> Vec<(String, String)> {
+    // 只向子进程传递缺少的变量，避免改变 Host 的连接环境或覆盖已有 Agent 配置。
+    for (key, value) in LOGIN_ENV.locked().iter() {
+        if std::env::var_os(key).is_none() && !env.iter().any(|(existing, _)| existing == key) {
+            env.push((key.clone(), value.clone()));
+        }
+    }
+    env
 }
 
 pub fn which(bin: &str) -> Option<PathBuf> {

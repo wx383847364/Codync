@@ -37,13 +37,13 @@ impl Actor {
         format!("cache.life.{}", self.cfg.id)
     }
 
-    /// How long the provider keeps this bot's prompts cached: learned from its turns, or guessed from its sign-in
-    /// (Claude keeps an hour on a subscription, five minutes on an API key).
+    /// 优先使用回合记录的缓存时长。Claude 使用 API Key 时按五分钟估算，订阅按一小时估算。
     fn cache_life(&self) -> CacheLife {
         if let Some(life) = self.hub.store.kv_get(&self.cache_life_key()).and_then(|v| serde_json::from_str(&v).ok()) {
             return life;
         }
-        let api_key = crate::agent::auth::env(&self.hub.store, &self.cfg.backend)
+        // 登录 Shell 补充的密钥也会交给 Agent，估算时要和真实启动环境一致。
+        let api_key = crate::agent::auth::launch_env(&self.hub.store, &self.cfg.backend)
             .unwrap_or_default()
             .iter()
             .any(|(k, _)| k == "ANTHROPIC_API_KEY")

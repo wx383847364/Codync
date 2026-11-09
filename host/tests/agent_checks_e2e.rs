@@ -39,6 +39,50 @@ fn alive(pid: &str) -> bool {
     std::process::Command::new("kill").args(["-0", pid]).stderr(std::process::Stdio::null()).status().unwrap().success()
 }
 
+/// 从真实 Host 启动 ACP 进程，确认登录 Shell 的导出值可用且 Host 自带值优先。
+#[tokio::test]
+async fn an_agent_receives_login_shell_exports_with_noclobber() {
+    if common::python_missing() {
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("codync-agent-env-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir(&dir).unwrap();
+    let shell = dir.join("login-shell");
+    std::fs::write(
+        &shell,
+        "#!/bin/sh\nset -C\nexport LOGIN_AGENT_TEST_KEY='test\nvalue=two' LOGIN_AGENT_TEST_PRIORITY=shell CODYNC_AGENT_TEST_INTERNAL=private\neval \"$2\"\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&shell, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let host =
+        common::host::Host::start_with(&[("SHELL", shell.as_os_str()), ("LOGIN_AGENT_TEST_PRIORITY", "host".as_ref())])
+            .await;
+    let result = dir.join("agent-env-result");
+    let agent = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/team_agent.py");
+    // 只记录断言结果，夹具照常完成 ACP 回合以便基线快速报出失败。
+    let launcher = dir.join("agent-launch");
+    let script = format!(
+        "#!/bin/sh\nif [ \"$LOGIN_AGENT_TEST_KEY\" = 'test\nvalue=two' ] && [ \"$LOGIN_AGENT_TEST_PRIORITY\" = host ] && [ -z \"${{CODYNC_AGENT_TEST_INTERNAL+x}}\" ]; then echo yes; else echo no; fi > '{}'\nexec {}\n",
+        result.display(),
+        common::python_agent(&agent),
+    );
+    std::fs::write(&launcher, script).unwrap();
+    std::fs::set_permissions(&launcher, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let bot = host
+        .call(
+            "createBot",
+            serde_json::json!({
+                "name": "Login environment", "backend": "custom", "command": format!("'{}'", launcher.display()), "connectors": [], "notify": false,
+            }),
+        )
+        .await;
+    host.reply(bot["bot"]["id"].as_str().unwrap(), "environment check").await;
+    let observed = std::fs::read_to_string(result).unwrap();
+    drop(host);
+    std::fs::remove_dir_all(dir).unwrap();
+    assert_eq!(observed.trim(), "yes");
+}
+
 #[tokio::test]
 async fn a_stopped_host_ends_the_checks_it_was_running() {
     let home = std::env::temp_dir().join(format!("codync-agent-checks-{}", uuid::Uuid::new_v4()));

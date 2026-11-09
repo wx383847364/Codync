@@ -102,11 +102,11 @@ pub fn env(store: &Store, backend: &str) -> Result<Vec<(String, String)>> {
     Ok(values.into_iter().collect())
 }
 
-/// The environment `backend`'s process starts with: the saved keys, and what the harness needs to start.
+/// 组装 Agent 启动环境，已保存的密钥和适配器配置优先于登录 Shell 的补充值。
 pub fn launch_env(store: &Store, backend: &str) -> Result<Vec<(String, String)>> {
     let mut env = env(store, backend)?;
     backends::apply_process_env(backend, &mut env);
-    Ok(env)
+    Ok(backends::with_login_env(env))
 }
 
 /// Names of the saved keys (values never leave the host).
@@ -131,6 +131,7 @@ pub async fn check(store: &Store, backend: &str) -> Result<Value> {
     Ok(v)
 }
 
+/// 检查 Agent 登录状态，回退到 CLI 探测时使用与 Agent 启动相同的环境。
 async fn probe(store: &Store, backend: &str) -> Result<Status> {
     if backends::agent_checks_off() {
         return Ok(Status::default());
@@ -138,7 +139,7 @@ async fn probe(store: &Store, backend: &str) -> Result<Status> {
     let Started { acp, mut inbox, init, cmd } = start(store, backend).await?;
     let methods = methods(backend, &init, &cmd);
     if let ControlFlow::Break(signed_in) =
-        login_without_session(&init, &mut inbox, backend, &env(store, backend)?).await
+        login_without_session(&init, &mut inbox, backend, &launch_env(store, backend)?).await
     {
         acp.kill().await;
         return Ok(Status { signed_in, detail: None, methods });

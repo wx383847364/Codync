@@ -74,11 +74,13 @@ pub fn set_signed_in(id: &str, state: Option<bool>) {
     }
 }
 
-/// Re-checks every installed harness that can report its sign-in state.
+/// 刷新已安装 Agent 的登录状态，CLI 检查也需要登录 Shell 提供的凭据。
 pub async fn refresh_sign_in() {
     let installed = HARNESSES.iter().filter(|h| h.signed_in.is_some() && h.bins.iter().any(|b| on_path(b)));
+    let env = &super::with_login_env(Vec::new());
+    // 批量检查共用同一份 Shell 环境，避免刷新过程中各 Agent 看到不同快照。
     let results =
-        futures::future::join_all(installed.map(|h| async move { (h.id, cli_signed_in(h, &[]).await) })).await;
+        futures::future::join_all(installed.map(|h| async move { (h.id, cli_signed_in(h, env).await) })).await;
     for (id, ok) in results {
         set_signed_in(id, apply_prompt_refusal(id, ok));
     }

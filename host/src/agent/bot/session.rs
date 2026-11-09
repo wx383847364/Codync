@@ -83,13 +83,14 @@ impl Actor {
         self.conn.as_ref().zip(sid).and_then(|(c, sid)| c.renamed.get(sid)).unwrap_or(&NONE)
     }
 
-    /// A folder saved for the bot's agent (`setAgentEnv`) as `key`, such as where its own config is (`CODEX_HOME`).
-    fn saved_env(&self, key: &str) -> Option<std::path::PathBuf> {
-        let saved = crate::agent::auth::env(&self.hub.store, &self.cfg.backend).unwrap_or_else(|e| {
-            tracing::warn!(error = format!("{e:#}"), "couldn't read the agent's saved environment");
+    /// 读取 Agent 启动配置目录，检查 MCP 重名时也识别登录 Shell 导出的目录。
+    fn agent_config_path(&self, key: &str) -> Option<std::path::PathBuf> {
+        // 读取失败时由各适配器继续查 Host 自己的环境和默认目录。
+        let env = crate::agent::auth::launch_env(&self.hub.store, &self.cfg.backend).unwrap_or_else(|e| {
+            tracing::warn!(error = format!("{e:#}"), "couldn't read the agent's launch environment");
             Vec::new()
         });
-        saved.into_iter().find(|(k, _)| k == key).map(|(_, v)| v.into())
+        env.into_iter().find(|(k, _)| k == key).map(|(_, v)| v.into())
     }
 
     /// 组装当前成员的 MCP 定义，所有 connector 绑定成员身份，便于整理期间阻止新的工作工具。
@@ -173,7 +174,7 @@ impl Actor {
         // pi gets its servers when it starts (`pi_tools`), so they take pi's names before that.
         let pi = self.cfg.backend == "pi";
         let mut renamed = if pi {
-            pi_tools::avoid_clashes(&mut servers, &self.cfg.cwd, self.saved_env("PI_CODING_AGENT_DIR")).await
+            pi_tools::avoid_clashes(&mut servers, &self.cfg.cwd, self.agent_config_path("PI_CODING_AGENT_DIR")).await
         } else {
             codex_names::Renamed::new()
         };
@@ -213,7 +214,8 @@ impl Actor {
             }
         }
         if self.conn.as_ref().is_some_and(|c| c.adapter == Adapter::Codex) {
-            renamed = codex_names::avoid_clashes(&mut servers, &self.cfg.cwd, self.saved_env("CODEX_HOME")).await;
+            renamed =
+                codex_names::avoid_clashes(&mut servers, &self.cfg.cwd, self.agent_config_path("CODEX_HOME")).await;
         }
         let instructions = self.conn.as_ref().map_or(Instructions::FirstMessage, Conn::instructions);
         // Claude gets the frozen instructions as its system prompt. When a compaction

@@ -52,43 +52,57 @@ pub fn exec(command: &str) -> Shell {
     if cfg!(windows) { line(command) } else { line(&format!("exec {command}")) }
 }
 
-/// The PATH a fresh login would get, for finding CLIs installed after this process started.
-/// Unix: the login shell's, via `$SHELL -ilc` with a timeout (nvm/conda can make shells
-/// slow); the shell writes it to a file, since a background job started by an rc file can hold
-/// a stdout pipe open long after the shell exits.
+/// 从登录 Shell 读取 PATH 和导出的变量，供本机 Agent 启动使用。
 #[cfg(unix)]
-pub fn user_path() -> Option<String> {
+pub fn user_env() -> Option<Vec<(String, String)>> {
+    use std::os::unix::fs::DirBuilderExt as _;
     use std::time::{Duration, Instant};
-    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
-    let file = std::env::temp_dir().join(format!("codync-path-{}", uuid::Uuid::new_v4()));
-    let target = file.to_string_lossy().replace('\'', r"'\''");
-    let mut child = std::process::Command::new(shell)
-        .args(["-ilc", &format!("printf '%s' \"$PATH\" > '{target}'")])
+    let shell = std::env::var_os("SHELL").unwrap_or_else(|| "/bin/zsh".into());
+    // 环境可能含密钥，用私有目录隔离。让 Shell 创建文件，使 noclobber 和后台任务都不妨碍读取。
+    let dir = std::env::temp_dir().join(format!("codync-env-{}", uuid::Uuid::new_v4()));
+    std::fs::DirBuilder::new().mode(0o700).create(&dir).ok()?;
+    let file = dir.join("env");
+    let child = std::process::Command::new(shell)
+        .args(["-ilc", &format!("command env -0 > {}", quote(&file.to_string_lossy()))])
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
-        .spawn()
-        .ok()?;
+        .spawn();
+    let Ok(mut child) = child else {
+        let _ = std::fs::remove_dir_all(&dir);
+        return None;
+    };
     let deadline = Instant::now() + Duration::from_secs(8);
     let exited = loop {
         match child.try_wait() {
-            Ok(Some(_)) => break true,
+            Ok(Some(status)) => break status.success(),
             Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(50)),
             _ => {
-                let _ = child.kill();
+                // 超时后终止 Shell，避免刷新被初始化脚本拖住。
+                if child.kill().is_ok() {
+                    let _ = child.wait();
+                }
                 break false;
             }
         }
     };
-    let path = std::fs::read_to_string(&file).ok().filter(|p| exited && !p.is_empty());
-    let _ = std::fs::remove_file(&file);
-    path
+    let dump = if exited { std::fs::read(&file).ok() } else { None };
+    let _ = std::fs::remove_dir_all(&dir);
+    // NUL 分隔条目，等号只拆一次，保留值里的换行、等号和空字符串。
+    let env = dump
+        .filter(|bytes| !bytes.is_empty())?
+        .split(|b| *b == 0)
+        .filter_map(|entry| std::str::from_utf8(entry).ok()?.split_once('='))
+        .filter(|(key, _)| !key.is_empty())
+        .map(|(key, value)| (key.to_owned(), value.to_owned()))
+        .collect();
+    Some(env)
 }
 
 /// Windows: the user's and the machine's PATH from the registry. A running process keeps the
 /// PATH it started with, so a CLI whose installer just added its folder is only seen there.
 #[cfg(windows)]
-pub fn user_path() -> Option<String> {
+pub fn user_env() -> Option<Vec<(String, String)>> {
     use std::os::windows::process::CommandExt as _;
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
     let read = "[Environment]::GetEnvironmentVariable('Path','User') + ';' + [Environment]::GetEnvironmentVariable('Path','Machine')";
@@ -100,7 +114,7 @@ pub fn user_path() -> Option<String> {
         .output()
         .ok()?;
     let path = String::from_utf8_lossy(&out.stdout).trim().to_owned();
-    (out.status.success() && !path.is_empty()).then_some(path)
+    (out.status.success() && !path.is_empty()).then_some(vec![("PATH".to_owned(), path)])
 }
 
 /// Quotes one word for [`line`].

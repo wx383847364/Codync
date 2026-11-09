@@ -79,6 +79,8 @@ To run an agent that isn't listed, open the bot's settings, set **Agent** to **C
 
 The host looks for each agent's command on the same `PATH` your login shell uses, plus the usual install folders (Homebrew, `~/.local/bin`, nvm, bun, volta, asdf, mise, pnpm and others). When an installed agent has its own ACP mode, Codync runs it directly. Otherwise it runs the agent's ACP adapter from the registry.
 
+On macOS and Linux, newly started agents also receive variables exported by your login shell. For example, a custom provider can use an API key you export in `~/.zshrc`. Keys saved in Codync take priority. Reopen **Extensions** to refresh the values, then restart any agent that is already running.
+
 Opening **Extensions** checks again, so an agent you installed or signed in to outside Codync shows up without restarting anything.
 
 ## Extensions: install and set up agents
