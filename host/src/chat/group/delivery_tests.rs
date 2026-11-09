@@ -2,6 +2,68 @@ use super::*;
 use crate::store::deliveries::Status;
 use futures::StreamExt;
 
+/// 群内忙成员继续原任务，空闲成员先答；补做时以持久投递保留完整的 @all 原文。
+#[tokio::test]
+async fn a_new_group_message_reaches_idle_members_while_an_older_turn_is_busy() {
+    let room = Room::new();
+    let old = room.send("@a BLOCK earlier assignment", None).await;
+    let old_id = delivery_in_state(&room, &old.id, "started").await;
+    std::fs::write(room.dir.join("b/release"), "").unwrap();
+    let original = "@all verify the complete original assignment 𠀀🙂";
+    let source = room.send(original, None).await;
+    let card_id = format!("delivery-card-{}-1", source.id);
+    let delivery_ids: Vec<_> = room.hub.store.entry(&card_id).unwrap().data["deliveryRows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| row["deliveryId"].as_str().unwrap().to_owned())
+        .collect();
+    let main = Lane::main(&room.group);
+    // 在释放 A 之前观察 B 的最终回复，确认进度来自新调度而非旧任务结束。
+    tokio::time::timeout(WAIT, async {
+        while room.replies(&main).is_empty() {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("b replies while a is still working in the same group");
+    assert_eq!(room.replies(&main), [("b".to_owned(), "reply: group".to_owned())]);
+    assert_eq!(room.hub.store.delivery(&old_id).unwrap().unwrap().status, Status::Started);
+    assert_eq!(room.hub.store.delivery(&delivery_ids[0]).unwrap().unwrap().status, Status::Queued);
+
+    std::fs::write(room.dir.join("a/release"), "").unwrap();
+    room.settle().await;
+    for id in delivery_ids {
+        assert_eq!(room.hub.store.delivery(&id).unwrap().unwrap().status, Status::Completed);
+    }
+    assert_eq!(room.replies(&main).iter().map(|(bot, _)| bot.as_str()).collect::<Vec<_>>(), ["b", "a", "a"]);
+    let prompts = std::fs::read_to_string(room.dir.join("a/prompts.jsonl")).unwrap();
+    assert_eq!(prompts.lines().count(), 2);
+    let prompt: String = serde_json::from_str(prompts.lines().last().unwrap()).unwrap();
+    assert!(prompt.contains(&format!("Request (complete original):\nUser: {original}")));
+    room.shutdown().await;
+}
+
+/// 不同消息重叠时，群的待审批状态不能被名单中更靠前的工作成员遮住。
+#[tokio::test]
+async fn group_status_prioritizes_a_member_waiting_for_approval() {
+    let room = Room::new();
+    let lane = Lane::main(&room.group);
+    // 模拟 A 在同群处理旧消息时，B 在新消息的执行中进入待审批。
+    room.hub.set_runtime("a", |r| {
+        r.status = BotStatus::Working;
+        r.lane = Some(lane.clone());
+    });
+    room.hub.set_runtime("b", |r| {
+        r.status = BotStatus::NeedsInput;
+        r.lane = Some(lane);
+    });
+    let group = room.hub.bot_value_for_test(&room.group);
+    assert_eq!(group["status"], "needsInput");
+    assert_eq!(group["activity"], "b");
+    room.shutdown().await;
+}
+
 /// 首个流chunk之前失去写权限也保留完整结果；故障可重连查看且不领取下一项。
 #[tokio::test]
 async fn readonly_completion_retains_full_text_and_manual_save_resumes_the_actor() {

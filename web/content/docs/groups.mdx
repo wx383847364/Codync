@@ -31,9 +31,9 @@ In the editor you can rename the group, add or remove members, and fill in **Wha
 When you send a message, the group runs a round of answers:
 
 1. **Who is asked.** Selected or uniquely named members, plus the author you reply to. Without a target, or with `@all` / `@everyone`, everyone is asked.
-2. **One at a time.** Each member sees prior replies before its turn. A busy member keeps its request queued while the room moves on. Two independent requests to that member remain separate.
+2. **One at a time per message.** Available members take turns so each can see prior replies. If a member is still working on an earlier message, even in this group, the other recipients can answer first. The busy member keeps each request queued and receives its original message when free.
 3. **Passing.** A member with nothing to add can pass without a message. Tool-assigned work that passes shows that it provided no result.
-4. **Continue until handoff.** Members keep doing authorized work and assigning the next action until they deliver the result to you or need your decision, information or approval. Group work has no fixed round, reply-count or handoff-depth cutoff. A turn taking longer than ten minutes releases the room's wait slot; its work continues and can finish later. Busy members keep their accepted work queued. You can still stop the group yourself.
+4. **Continue until handoff.** Members keep doing authorized work and assigning the next action until they deliver the result to you or need your decision, information or approval. Group work has no fixed round, reply-count or handoff-depth cutoff. After ten minutes, the next recipient of the same message can take a turn while the earlier work continues. Busy members keep their accepted work queued. You can still stop the group yourself.
 
 Each member's reply is the one message the room sees. Its tool calls, thoughts and approval cards for that turn appear in the group. The member's own chat doesn't show them. Open **Full conversation** to see its steps.
 
@@ -88,7 +88,7 @@ A member's private chat and its groups share the session, so the switch affects 
 
 ## Notifications and voice
 
-The group sends a done notification after an exchange, plus notifications for late replies. Approval notifications open the group.
+Replies appear in the group as they arrive. The group sends a done notification when it finishes its current work, so overlapping exchanges can share a notification. Late replies can send their own notifications. Approval notifications open the group.
 Voice calls work in groups too: each reply is read with its speaker's name. See [Voice](/docs/voice).
 
 To collaborate without a shared room, see [Teamwork](/docs/teamwork).

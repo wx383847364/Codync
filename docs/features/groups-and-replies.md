@@ -18,8 +18,8 @@ quotes itself.
 
 - Bot: `kind` (`agent` | `group`), `members` (group: one or more distinct agent bot IDs on the
   same computer; no nested groups), `workingChat` (where the running turn talks). A group's
-  `status` / `activity` are its busy member's (`"Alice: Writing a reply…"`); its `lastMessage`
-  names who spoke (`"Alice: …"`).
+  `status` / `activity` are its busy member's (`"Alice: Writing a reply…"`). A member who
+  needs approval takes priority. Its `lastMessage` names who spoke (`"Alice: …"`).
 - Entry: `data.author` (the bot that wrote it; every agent-made entry has one); on a reply,
   `data.replyTo = {id, author, text}`: the answered message, who wrote it (`"user"` or a bot
   id) and its text (or its files' names when it has none), at most 500 bytes. The host builds
@@ -61,9 +61,12 @@ indented code, quote lines, email and URLs do not dispatch. `@all` / `@everyone`
 current members; quote replies include their author's target. A message without any
 assignment expression asks everyone. Stored history is never parsed again after renames.
 
-Both `speak` and tool-created `task` deliveries occupy the room's wait slot, up to ten
-minutes. Timeout only releases that slot; it does not stop the execution or change its
-state. Late completion uses a conditional update and cannot revive cancelled work.
+Both `speak` and tool-created `task` deliveries share one wait slot per original user
+message, up to ten minutes. While a member works on an earlier message in the same group,
+the runner can deliver a newer message to its idle recipients in order. The busy member's
+delivery stays queued under its original source. Timeout only releases that batch's slot;
+the execution continues and its state is kept. Late completion uses a conditional update
+and cannot revive cancelled work.
 Every turn protects the complete original user task, current source (or exact tool body),
 attachments, structured mention IDs and UTF-16 ranges, direct quotes, later user messages,
 and saved open plans. Entries are deduplicated by ID, never by matching text. Later user

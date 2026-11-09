@@ -1,11 +1,71 @@
 import { test, expect } from '@playwright/test'
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { DatabaseSync } from 'node:sqlite'
 import { join } from 'node:path'
 import { homedir, tmpdir } from 'node:os'
-import { api, attach, sandbox, steerBot } from './sandbox.ts'
+import { api, attach, sandbox, steerBot, typeMessage } from './sandbox.ts'
 
 type History = { entries: { kind: string; data: { final?: boolean; text?: string; mentions?: { botId: string; start: number; end: number }[] } }[] }
+
+/** 用真实群聊窗口验证同群忙成员排队，空闲成员按顺序先答，且晚接到的仍是原消息。 */
+test('idle group members answer a new message in order while a member finishes earlier work', async () => {
+  const { browser, page } = await attach()
+  const suffix = Date.now()
+  const workspace = join(tmpdir(), `codync-group-busy-${suffix}`)
+  const names = [`BusyA${suffix}`, `BusyB${suffix}`, `BusyC${suffix}`]
+  const original = '@all BLOCK review this exact original 𠀀🙂'
+  const firstReply = 'B received the group message'
+  const secondReply = 'C received it after B'
+  const lateReply = 'A received the original after finishing'
+  const ids: string[] = []
+  let group: string | undefined
+  try {
+    for (const [i, name] of names.entries()) {
+      const cwd = join(workspace, `${i}`)
+      mkdirSync(cwd, { recursive: true })
+      ids.push((await api<{ bot: { id: string } }>(page, 'createBot', {
+        name, backend: 'custom', cwd, command: `python3 -u '${join(__dirname, '../../../host/tests/fixtures/team_agent.py')}'`, connectors: [], skills: [], notify: false,
+      })).bot.id)
+    }
+    writeFileSync(join(workspace, '0', 'group-script.json'), JSON.stringify({ steps: [{ reply: 'A finished earlier work' }, { reply: lateReply }] }))
+    writeFileSync(join(workspace, '1', 'group-script.json'), JSON.stringify({ steps: [{ reply: firstReply }, { reply: '(pass)' }] }))
+    writeFileSync(join(workspace, '2', 'group-script.json'), JSON.stringify({ reply: secondReply }))
+    writeFileSync(join(workspace, '2', 'release'), '')
+
+    const name = `Busy delivery room ${suffix}`
+    group = (await api<{ bot: { id: string } }>(page, 'createBot', { name, kind: 'group', members: ids })).bot.id
+    await page.locator('.roster-row', { hasText: name }).click()
+    const aPrompts = join(workspace, '0', 'prompts.jsonl')
+    const bPrompts = join(workspace, '1', 'prompts.jsonl')
+    const cPrompts = join(workspace, '2', 'prompts.jsonl')
+    await typeMessage(page, `@${names[0]} @${names[1]} BLOCK finish the earlier assignment`)
+    // 夹具写下 ACP 入参后才算开始，避免把群消息刚入库误判为成员已收到。
+    await expect.poll(() => existsSync(aPrompts) && readFileSync(aPrompts, 'utf8').includes('finish the earlier assignment')).toBe(true)
+    expect(existsSync(bPrompts)).toBe(false)
+    await typeMessage(page, original)
+    // B 已收到本轮正文但尚未回复，C 应仍在等待。
+    await expect.poll(() => existsSync(bPrompts) && readFileSync(bPrompts, 'utf8').includes('review this exact original')).toBe(true)
+    expect(existsSync(cPrompts)).toBe(false)
+    writeFileSync(join(workspace, '1', 'release'), '')
+    await expect(page.getByText(firstReply, { exact: true })).toBeVisible()
+    await expect(page.getByText(secondReply, { exact: true })).toBeVisible()
+    // C 的实际 ACP 入参包含 B 刚提交的回复，A 的旧任务此时仍被夹具阻塞。
+    expect(readFileSync(cPrompts, 'utf8')).toContain(firstReply)
+    await expect(page.getByText('A finished earlier work', { exact: true })).toHaveCount(0)
+
+    writeFileSync(join(workspace, '0', 'release'), '')
+    await expect(page.getByText(lateReply, { exact: true })).toBeVisible()
+    const prompts = readFileSync(aPrompts, 'utf8').trim().split('\n')
+    expect(prompts).toHaveLength(2)
+    expect(JSON.parse(prompts[1])).toContain(`Request (complete original):\nUser: ${original}`)
+  } finally {
+    // 某项断言失败时也清理本用例的群和成员，让后续用例继续使用同一沙箱。
+    if (group) await api(page, 'deleteBot', { botId: group }).catch(() => {})
+    for (const id of ids) await api(page, 'deleteBot', { botId: id }).catch(() => {})
+    rmSync(workspace, { recursive: true, force: true })
+    await browser.close()
+  }
+})
 
 /** 超过旧轮次、发言与深度上限后交付给用户，状态仍折叠且不重复来源正文。 */
 test('relay compacts bounded background past fixed limits while preserving originals and open work', async () => {

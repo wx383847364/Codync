@@ -11,11 +11,19 @@ impl Hub {
     pub fn group_runtime(&self, group: &BotConfig) -> Runtime {
         let busy = {
             let runtime = self.runtime.locked();
-            group.members.iter().find_map(|m| {
-                let r = runtime.get(m)?;
-                (r.status != BotStatus::Idle && r.lane.as_ref().is_some_and(|l| l.chat == group.id))
-                    .then(|| (m.clone(), r.clone()))
-            })
+            group
+                .members
+                .iter()
+                // 只投影正在本群执行的成员，别处的工作与审批留在原聊天。
+                .filter_map(|m| {
+                    let r = runtime.get(m)?;
+                    (r.status != BotStatus::Idle && r.lane.as_ref().is_some_and(|l| l.chat == group.id))
+                        .then_some((m, r))
+                })
+                // 不同消息可同时执行，优先展示待审批成员，同等状态仍选名单中第一位。
+                .min_by_key(|(_, r)| r.status != BotStatus::NeedsInput)
+                // 仅复制选中成员的状态，后续格式化可以在锁外完成。
+                .map(|(member, r)| (member, r.clone()))
         };
         let Some((member, mut r)) = busy else {
             // runner 在成员之间交接时仍是工作中，避免短暂 idle 使客户端误判整轮结束。
@@ -28,7 +36,7 @@ impl Hub {
             }
             return Runtime::default();
         };
-        let name = self.bot_name(&member);
+        let name = self.bot_name(member);
         r.activity = if r.activity.is_empty() { name } else { format!("{name}: {}", r.activity) };
         r
     }

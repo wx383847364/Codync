@@ -1,5 +1,6 @@
 //! 群聊的唯一房间调度器。投递表决定谁执行，忙成员保持 queued。
-//! speak/task 共用十分钟等待位；等待超时不终止执行，已接受请求不被新消息覆盖。
+//! 同一用户消息的 speak/task 共用十分钟等待位，其他消息可交给空闲成员。
+//! 等待超时不终止执行，已接受请求不被新消息覆盖。
 //! 持续执行有效派工，交付或需要用户输入时自然等待；累计轮次与链深不终止协作。
 
 use crate::LockExt;
@@ -8,11 +9,12 @@ use crate::hub::{BotStatus, Hub};
 
 use crate::store::{BotConfig, BotKind, Entry, EntryKind, Lane, Store};
 use anyhow::{Result, bail};
+use futures::{StreamExt, stream::FuturesUnordered};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tokio::sync::oneshot;
+use tokio::sync::{oneshot, watch};
 
 mod context;
 pub(crate) mod history;
@@ -23,15 +25,14 @@ pub(crate) fn background_budget() -> usize {
     context::BACKGROUND_TOKENS
 }
 
-/// 十分钟只释放房间等待位，不把在途投递视为 pass 或失败。
+/// 十分钟只释放本批等待位，不把在途投递视为 pass 或失败。
 const MEMBER_TIMEOUT: Duration = Duration::from_mins(10);
 
 const PASS: &str = "(pass)";
 
-/// 每房间一个 runner；值只表示队列有更新，不决定投递生死。
+/// 每房间一个 runner，通知只表示队列有更新，不决定投递生死。
 pub struct Rooms {
-    /// 已注册 runner 的 dirty 标记。
-    running: Mutex<HashMap<String, bool>>,
+    running: Mutex<HashMap<String, watch::Sender<()>>>,
     /// How long the room waits on a member: [`MEMBER_TIMEOUT`] in milliseconds.
     member_timeout: AtomicU64,
 }
@@ -102,17 +103,19 @@ pub fn start(hub: &Arc<Hub>, group: &BotConfig, _lane: Lane) {
     ensure_runner(hub, &group.id);
 }
 
-/// 幂等唤醒：已有 runner 时只置 dirty，避免退出窗口漏掉提交后通知。
+/// 幂等唤醒：已有 runner 等待成员时也能收到通知，退出检查和注册共用一把锁。
 pub fn ensure_runner(hub: &Arc<Hub>, room: &str) {
     let mut running = hub.groups.running.locked();
-    if let Some(dirty) = running.get_mut(room) {
-        *dirty = true;
+    if let Some(changes) = running.get(room) {
+        changes.send_replace(());
         return;
     }
-    running.insert(room.to_owned(), false);
+    let (changes, updates) = watch::channel(());
+    running.insert(room.to_owned(), changes);
     let (hub, room) = (hub.clone(), room.to_owned());
+    // 退出或出错后释放注册，让后续投递可以再唤醒房间。
     tokio::spawn(async move {
-        if let Err(error) = run(&hub, &room).await {
+        if let Err(error) = run(&hub, &room, updates).await {
             tracing::error!(%room, %error, "delivery runner paused");
             hub.groups.running.locked().remove(&room);
             hub.emit_bot(&room);
@@ -132,40 +135,92 @@ pub fn wake(hub: &Arc<Hub>, target: Option<&str>) {
     }
 }
 
-/// 单 runner 按 `room_seq` 推进，忙成员本轮跳过；task 与 speak 都占房间等待位。
-async fn run(hub: &Arc<Hub>, room: &str) -> Result<()> {
+/// 按 `room_seq` 调度可执行的投递，每个成员和每条用户消息的批次各有一个等待位。
+async fn run(hub: &Arc<Hub>, room: &str, mut updates: watch::Receiver<()>) -> Result<()> {
     let lane = Lane::main(room);
     let visible_before = hub.store.messages_after(&lane, 0, 1)?.last().map_or(0, |entry| entry.seq);
     let mut deferred = std::collections::HashSet::new();
+    let mut waiting = FuturesUnordered::new();
+    let mut active = HashMap::new();
     loop {
-        let candidates = hub.store.queued_deliveries(room)?;
-        let next = candidates.into_iter().find(|d| !deferred.contains(&d.id));
-        let Some(delivery) = next else {
-            let mut running = hub.groups.running.locked();
-            if running.get(room) == Some(&true) {
-                running.insert(room.to_owned(), false);
-                deferred.clear();
+        match dispatch_next(hub, room, &active, &mut deferred) {
+            Ok(Some((delivery, answer))) => {
+                active.insert(delivery.target_bot_id.clone(), delivery.batch_root_id);
+                let answer = tokio::time::timeout(hub.groups.member_timeout(), answer);
+                // 等待结果落库后放行同批下一位；拒绝或超时只影响调度，不能改变投递记录。
+                waiting
+                    .push(async move { (delivery.id, delivery.target_bot_id, !matches!(answer.await, Ok(Ok(true)))) });
                 continue;
             }
-            // 在同一锁内移除，随后到达的通知会建立新的 runner。
-            running.remove(room);
-            drop(running);
-            // 成员最后的 idle 事件可能先于 runner 退出，必须再发布一次真实房间状态。
-            hub.emit_bot(room);
-            // 退出后的通知是尽力操作，失败不能让旧runner清掉后来者的注册标记。
-            match hub.store.messages_after(&lane, 0, 1) {
-                Ok(entries) => {
-                    if let Some(entry) =
-                        entries.last().filter(|e| e.seq > visible_before && e.kind == EntryKind::Agent.as_str())
-                        && let Err(error) = notify(hub, room, entry)
-                    {
-                        tracing::warn!(%error,"group notification failed");
+            Ok(None) => {}
+            Err(error) if waiting.is_empty() => return Err(error),
+            // 读库暂时失败时保留在途等待位，以免重建 runner 后同批成员提前接话。
+            Err(error) => tracing::warn!(%room, %error, "delivery scan failed while waiting for a member"),
+        }
+        if !waiting.is_empty() {
+            tokio::select! {
+                biased;
+                Some((id, target, should_defer)) = waiting.next() => {
+                    active.remove(&target);
+                    if should_defer {
+                        deferred.insert(id);
                     }
                 }
-                Err(error) => tracing::warn!(%error,"group notification lookup failed after runner exit"),
+                result = updates.changed() => {
+                    result?;
+                    deferred.clear();
+                }
             }
-            return Ok(());
-        };
+            continue;
+        }
+        let mut running = hub.groups.running.locked();
+        if updates.has_changed()? {
+            updates.borrow_and_update();
+            deferred.clear();
+            continue;
+        }
+        // 在同一锁内移除，随后到达的通知会建立新的 runner。
+        running.remove(room);
+        drop(running);
+        // 成员最后的 idle 事件可能先于 runner 退出，必须再发布一次真实房间状态。
+        hub.emit_bot(room);
+        // 退出后的通知是尽力操作，失败不能让旧 runner 清掉后来者的注册标记。
+        match hub.store.messages_after(&lane, 0, 1) {
+            Ok(entries) => {
+                if let Some(entry) =
+                    entries.last().filter(|e| e.seq > visible_before && e.kind == EntryKind::Agent.as_str())
+                    && let Err(error) = notify(hub, room, entry)
+                {
+                    tracing::warn!(%error,"group notification failed");
+                }
+            }
+            Err(error) => tracing::warn!(%error,"group notification lookup failed after runner exit"),
+        }
+        return Ok(());
+    }
+}
+
+/// 找到最早可执行的投递并通知目标 actor；在途成员与同批后继继续等待。
+fn dispatch_next(
+    hub: &Hub,
+    room: &str,
+    active: &HashMap<String, Option<String>>,
+    deferred: &mut std::collections::HashSet<String>,
+) -> Result<Option<(crate::store::deliveries::Delivery, oneshot::Receiver<bool>)>> {
+    loop {
+        // 同一成员在旧批次排队等别人回复时，仍可接新消息。
+        let next = hub.store.queued_deliveries(room)?.into_iter().find(|delivery| {
+            if deferred.contains(&delivery.id)
+                || active.contains_key(&delivery.target_bot_id)
+                || active.values().any(|batch| batch == &delivery.batch_root_id)
+            {
+                return false;
+            }
+            let runtime = hub.runtime(&delivery.target_bot_id);
+            !matches!(runtime.status, BotStatus::Working | BotStatus::NeedsInput) && runtime.storage_error.is_none()
+        });
+        let Some(delivery) = next else { return Ok(None) };
+        // 执行前重读群成员，清理已离开成员的旧投递。
         let valid = hub
             .store
             .bot(room)?
@@ -175,20 +230,12 @@ async fn run(hub: &Arc<Hub>, room: &str) -> Result<()> {
             hub.cancel_deliveries(room, Some(&delivery.target_bot_id), "已不在群内")?;
             continue;
         }
-        let runtime = hub.runtime(&delivery.target_bot_id);
-        if matches!(runtime.status, BotStatus::Working | BotStatus::NeedsInput) || runtime.storage_error.is_some() {
-            deferred.insert(delivery.id);
-            continue;
-        }
         let (reply, answer) = oneshot::channel();
         if hub.send_cmd(&delivery.target_bot_id, Cmd::Delivery { id: delivery.id.clone(), reply }).is_err() {
             deferred.insert(delivery.id);
             continue;
         }
-        // 信号仅结束等待；超时和接收端关闭都不决定持久投递的生死。
-        if let Ok(Ok(false) | Err(_)) = tokio::time::timeout(hub.groups.member_timeout(), answer).await {
-            deferred.insert(delivery.id);
-        }
+        return Ok(Some((delivery, answer)));
     }
 }
 
