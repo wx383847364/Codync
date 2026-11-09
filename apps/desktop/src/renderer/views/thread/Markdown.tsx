@@ -13,7 +13,7 @@ import './markdown.css'
 // 先匹配代码片段或完整链接，带反引号的文件名仍可成为链接标签。
 const pattern = /(?<!`)(?<ticks>`+)(?!`)(?<code>[^\n]*?)(?<!`)\k<ticks>(?!`)|(?<!\\)(?<image>!?)\[(?<label>[^\[\]\n]+)\]\((?:<(?<wrapped>[^<>\n]+)>|(?<raw>(?:[^()\s]|\([^()\s]*\))+))\)|\*\*(?<bold>[^*]+)\*\*|__(?<strong>[^_]+)__|~~(?<strike>[^~]+)~~|\*(?<italic>[^*\n]+)\*|(?<![\w])_(?<em>[^_\n]+)_(?![\w])/
 
-/** 渲染内联 Markdown，只有对话正文提供本地文件操作，代码中的路径始终按文本渲染。 */
+/** 渲染内联 Markdown，只有对话正文提供本地文件操作，代码块继续按文本渲染。 */
 function inline(text: string, fileLinks: boolean, key = 'i'): ReactNode[] {
   const out: ReactNode[] = []
   let rest = text
@@ -27,8 +27,21 @@ function inline(text: string, fileLinks: boolean, key = 'i'): ReactNode[] {
     if (match.index > 0) out.push(rest.slice(0, match.index))
     const k = `${key}${n++}`
     const { code, image, label, wrapped, raw, bold, strong, strike, italic, em } = match.groups!
-    if (code !== undefined) out.push(<code key={k} className="md-code-span">{code}</code>)
-    else if (label !== undefined) {
+    if (code !== undefined) {
+      // 单独的绝对路径在历史回复中也可点击，保留行内代码的字样。
+      const precedingBackslashes = /\\+$/.exec(rest.slice(0, match.index))?.[0].length ?? 0
+      if (precedingBackslashes % 2 !== 0) {
+        // 只消费被转义的一个反引号，后面的反引号仍可开启代码片段。
+        out.push(match[0][0])
+        rest = rest.slice(match.index + 1)
+        continue
+      }
+      // CommonMark 去掉成对的一层边缘空格。
+      const literal = code.startsWith(' ') && code.endsWith(' ') ? code.slice(1, -1) : code
+      const path = fileLinks ? fileLinkPath(literal, true) : null
+      const label = <code key={k} className="md-code-span">{code}</code>
+      out.push(path ? <FileLink key={k} path={path}>{label}</FileLink> : label)
+    } else if (label !== undefined) {
       const target = (wrapped ?? raw)!
       const children = inline(label, false, `${k}-`)
       const path = fileLinks ? fileLinkPath(target) : null

@@ -140,13 +140,13 @@ private val localFileUrl = Regex("""^file://(?:localhost)?(?=/)""", RegexOption.
 private val invalidPercent = Regex("""%(?![0-9a-fA-F]{2})""")
 
 /** 解码电脑的文件链接，接受 POSIX 或 Windows 绝对路径。 */
-internal fun fileLinkPath(target: String): String? {
-    val fileUrl = localFileUrl.find(target)
+internal fun fileLinkPath(target: String, literal: Boolean = false): String? {
+    val fileUrl = if (literal) null else localFileUrl.find(target)
     val encoded = if (fileUrl == null) target else target.substring(fileUrl.value.length)
     // 普通绝对路径的字面百分号是文件名的一部分。
     val malformed = invalidPercent.containsMatchIn(encoded)
     if (fileUrl != null && malformed) return null
-    var path = if (malformed) encoded else Uri.decode(encoded)
+    var path = if (literal || malformed) encoded else Uri.decode(encoded)
     if (fileUrl != null && path.startsWith("/") && windowsPath.containsMatchIn(path.drop(1))) path = path.drop(1)
     if (path.length > 32768 || path.any { it.code < 32 || it.code == 127 }) return null
     return path.takeIf { (it.startsWith("/") && !it.startsWith("//") && !it.startsWith("/\\")) || windowsPath.containsMatchIn(it) }
@@ -157,7 +157,7 @@ internal fun inline(source: String, codeTint: Color, selectPath: ((String) -> Un
     // Inline only: indentation would otherwise read as a code block.
     val document = inlineParser.parse(source.lines().joinToString("\n") { it.trimStart() })
     return buildAnnotatedString {
-        // 只解析 Markdown 链接节点，代码和图像标签不会触发文件动作。
+        // 显式链接与独立的行内路径共用文件动作，图像替代文字保持原样。
         fun visit(node: Node) {
             val style = when (node) {
                 is StrongEmphasis -> SpanStyle(fontWeight = FontWeight.SemiBold)
@@ -168,7 +168,12 @@ internal fun inline(source: String, codeTint: Color, selectPath: ((String) -> Un
             }
             if (style != null) pushStyle(style)
             val target = (node as? Link)?.destination
-            val path = if (selectPath != null && target != null) fileLinkPath(target) else null
+            val path = if (selectPath == null) null else when {
+                target != null -> fileLinkPath(target)
+                node is Code && generateSequence(node.parent) { it.parent }.none { it is Link || it is Image } ->
+                    fileLinkPath(node.literal, literal = true)
+                else -> null
+            }
             val styles = TextLinkStyles(SpanStyle(textDecoration = TextDecoration.Underline))
             val link = when {
                 path != null && selectPath != null -> LinkAnnotation.Clickable(path, styles) {

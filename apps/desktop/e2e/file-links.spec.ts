@@ -11,15 +11,16 @@ test('chat file links open their own menu and report a missing original', async 
   const { browser, page } = await attach()
   const folder = mkdtempSync(join(tmpdir(), 'codync-file-link-'))
   const bundle = join(folder, 'Example App.app')
-  const missing = join(folder, 'Moved page.HTM')
+  const missing = join(folder, 'Moved %20 page.HTM')
   let botId: string | undefined
   const missingDialog = page.getByRole('alertdialog').filter({ hasText: 'This file could not be found on this computer.' })
   try {
     mkdirSync(bundle)
     writeFileSync(join(folder, 'file-links.md'), [
-      `See [\`Example App.app\`](${pathToFileURL(bundle).href}) and [Local HTML page](${pathToFileURL(missing).href}).`,
+      `See [\`Example App.app\`](${pathToFileURL(bundle).href}) and ${String.fromCharCode(92, 96)} then \` ${missing} \`.`,
       'A [web link](https://example.com) and `[example](/tmp/not-a-link.txt)`. ![Inline image](/tmp/not-a-link.png)',
       '/tmp/plain-path.png',
+      'Escaped \\`/tmp/escaped.html\\`.',
       '~~~md\n[fenced example](/tmp/not-a-link.txt)\n~~~',
     ].join('\n\n'))
     const agent = resolve(__dirname, '../../../host/tests/fixtures/file_agent.py')
@@ -57,8 +58,12 @@ test('chat file links open their own menu and report a missing original', async 
     await page.keyboard.press('Escape')
     await expect(page.getByRole('menu')).toHaveCount(0)
 
+    // 重新加载持久化聊天记录，字面的百分号仍属于实际文件名。
+    await page.reload()
+    await page.locator('.roster-row', { hasText: name }).click()
+    const html = page.getByRole('button', { name: missing, exact: true })
+    await expect(html).toHaveAttribute('title', missing)
     // 右键 HTML 保留文件菜单，普通点击直接发起浏览器操作。
-    const html = page.getByRole('button', { name: 'Local HTML page' })
     await html.click({ button: 'right' })
     await expect(page.getByRole('menuitem', { name: 'Open in browser' })).toBeVisible()
     await page.keyboard.press('Escape')

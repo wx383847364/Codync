@@ -36,11 +36,21 @@ impl Entry {
                 let (prefix, token) = line.split_at(index);
                 line = &token[1..];
                 if token.starts_with('`') {
-                    // 代码片段内的链接只是文字。未闭合的反引号保留为普通字符。
+                    // 转义反引号是正文，只有真正的代码片段能参与复制。
+                    if prefix.bytes().rev().take_while(|&b| b == b'\\').count() % 2 != 0 {
+                        continue;
+                    }
                     let width = token.bytes().take_while(|&c| c == b'`').count();
                     line = &token[width..];
-                    if let Some(rest) = after_code_span(line, width) {
+                    if let Some((code, rest)) = after_code_span(line, width) {
                         line = rest;
+                        // CommonMark 对成对的边缘空格各去掉一个。
+                        let literal = code.strip_prefix(' ').and_then(|text| text.strip_suffix(' ')).unwrap_or(code);
+                        if let Some(path) = absolute_path(literal.to_owned())
+                            && !paths.contains(&path)
+                        {
+                            paths.push(path);
+                        }
                     }
                 } else if !prefix.ends_with('\\')
                     && let Some(end) = line.find(['[', ']'])
@@ -64,13 +74,14 @@ impl Entry {
 }
 
 /// 返回同样长度的结束反引号之后的文字，更长或更短的反引号属于代码。
-fn after_code_span(mut text: &str, width: usize) -> Option<&str> {
+fn after_code_span(mut text: &str, width: usize) -> Option<(&str, &str)> {
+    let source = text;
     while let Some(index) = text.find('`') {
         let suffix = &text[index..];
         let count = suffix.bytes().take_while(|&byte| byte == b'`').count();
         text = &suffix[count..];
         if count == width {
-            return Some(text);
+            return Some((&source[..source.len() - suffix.len()], text));
         }
     }
     None
@@ -112,6 +123,11 @@ fn file_path(target: &str) -> Option<String> {
     if file_url && path.starts_with('/') && windows_path(&path[1..]) {
         path.remove(0);
     }
+    absolute_path(path)
+}
+
+/// 校验字面路径，不解码行内代码里的百分号。
+fn absolute_path(path: String) -> Option<String> {
     if path.len() > 32_768 || path.bytes().any(|b| b < 32 || b == 127) {
         return None;
     }
@@ -151,8 +167,8 @@ mod tests {
     fn copies_only_file_link_targets_from_chat_replies() {
         let (_, entry) = Entry::parse(&json!({
             "botId": "b", "id": "e", "seq": 1, "kind": "agent",
-            "data": {"text": "`[example](/tmp/no)` [`App`](</tmp/My App.app>) [same](/tmp/My%20App.app) [win](file:///C:/work/a%2Bb.png) [remote](file://remote/a) [web](https://example.com) ![inline](/tmp/no.png)\n```\n[demo](/tmp/no)\n```"}
+            "data": {"text": "`[example](/tmp/no)` [`App`](</tmp/My App.app>) [same](/tmp/My%20App.app) ` /tmp/Report %20.html ` [win](file:///C:/work/a%2Bb.png) [remote](file://remote/a) [web](https://example.com) ![inline](/tmp/no.png)\nEscaped \\`/tmp/no.html\\`\n```\n[demo](/tmp/no)\n```"}
         })).expect("agent entry");
-        assert_eq!(entry.file_link_paths(), ["/tmp/My App.app", "C:/work/a+b.png"]);
+        assert_eq!(entry.file_link_paths(), ["/tmp/My App.app", "/tmp/Report %20.html", "C:/work/a+b.png"]);
     }
 }
