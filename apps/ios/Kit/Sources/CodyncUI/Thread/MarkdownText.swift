@@ -28,7 +28,7 @@ public struct MarkdownText: View, Equatable {
         VStack(alignment: .leading, spacing: 8) {
             ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
                 // 段落、列表和表格共用同一套链接动作。
-                MarkdownBlock(block: block)
+                MarkdownBlock(block: block, fileLinks: fileLinks)
             }
         }
         .textSelection(.enabled)
@@ -78,14 +78,26 @@ public struct MarkdownText: View, Equatable {
         return path.range(of: #"^[A-Za-z]:[/\\]"#, options: .regularExpression) == nil ? nil : path
     }
 
-    /// Underlines keep links distinct in the monochrome theme; inline code gets a soft tint.
-    static func inline(_ s: String) -> AttributedString {
+    /// 行内路径按原字面值编码成 URL，保留空格和百分号。
+    static func inlinePathURL(_ path: String) -> URL? {
+        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "/:"))
+        guard let encoded = path.addingPercentEncoding(withAllowedCharacters: allowed),
+              let url = URL(string: encoded), filePath(url) == path else { return nil }
+        return url
+    }
+
+    /// 保留代码底色，独立的绝对路径复用回复的文件操作。
+    static func inline(_ s: String, fileLinks: Bool = false) -> AttributedString {
         guard var text = try? AttributedString(markdown: s, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))
         else { return AttributedString(s) }
         for run in text.runs where run.link != nil {
             text[run.range].underlineStyle = .single
         }
         for run in text.runs where run.inlinePresentationIntent?.contains(.code) == true {
+            if fileLinks, run.link == nil, let url = inlinePathURL(String(text[run.range].characters)) {
+                text[run.range].link = url
+                text[run.range].underlineStyle = .single
+            }
             text[run.range].backgroundColor = Palette.text.opacity(0.08)
         }
         return text
@@ -95,30 +107,32 @@ public struct MarkdownText: View, Equatable {
 /// One block of a reply.
 private struct MarkdownBlock: View {
     let block: MarkdownBlocks.Block
+    let fileLinks: Bool
 
+    /// 将回复的链接作用域传给各个块。
     @ViewBuilder var body: some View {
         switch block {
         case let .paragraph(t):
-            Text(MarkdownText.inline(t))
+            Text(MarkdownText.inline(t, fileLinks: fileLinks))
                 .font(.body)
                 .foregroundStyle(Palette.text)
         case let .heading(t, level):
-            Text(MarkdownText.inline(t))
+            Text(MarkdownText.inline(t, fileLinks: fileLinks))
                 .font(level == 1 ? .title3.bold() : level == 2 ? .headline : .subheadline.bold())
                 .foregroundStyle(Palette.text)
         case let .bullet(t, marker, depth):
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Text(marker).foregroundStyle(Palette.secondary).monospacedDigit()
-                Text(MarkdownText.inline(t)).foregroundStyle(Palette.text)
+                Text(MarkdownText.inline(t, fileLinks: fileLinks)).foregroundStyle(Palette.text)
             }
             .font(.body)
             .padding(.leading, CGFloat(depth) * 16)
         case .rule:
             Rectangle().fill(Palette.border).frame(height: 1).padding(.vertical, 4)
         case let .table(header, rows):
-            MarkdownTable(header: header, rows: rows)
+            MarkdownTable(header: header, rows: rows, fileLinks: fileLinks)
         case let .quote(t):
-            Text(MarkdownText.inline(t))
+            Text(MarkdownText.inline(t, fileLinks: fileLinks))
                 .font(.body)
                 .foregroundStyle(Palette.secondary)
                 .padding(.leading, 10)
@@ -139,21 +153,23 @@ private struct MarkdownBlock: View {
 private struct MarkdownTable: View {
     let header: [String]
     let rows: [[String]]
+    let fileLinks: Bool
 
+    /// 表格单元格继承消息的文件链接能力。
     var body: some View {
         let columns = max(header.count, rows.map(\.count).max() ?? 0)
         ScrollView(.horizontal, showsIndicators: false) {
             Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 7) {
                 GridRow {
                     ForEach(0 ..< columns, id: \.self) { i in
-                        Text(MarkdownText.inline(i < header.count ? header[i] : "")).fontWeight(.semibold)
+                        Text(MarkdownText.inline(i < header.count ? header[i] : "", fileLinks: fileLinks)).fontWeight(.semibold)
                     }
                 }
                 ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
                     Rectangle().fill(Palette.border).frame(height: 1).gridCellUnsizedAxes(.horizontal)
                     GridRow {
                         ForEach(0 ..< columns, id: \.self) { i in
-                            Text(MarkdownText.inline(i < row.count ? row[i] : ""))
+                            Text(MarkdownText.inline(i < row.count ? row[i] : "", fileLinks: fileLinks))
                         }
                     }
                 }

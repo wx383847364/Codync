@@ -2,12 +2,12 @@ export type FileLinkEditor = 'cursor' | 'vscode'
 export type FileLinkAction = 'open' | 'reveal' | 'save' | 'copy_contents' | FileLinkEditor
 export type FileLinkResult = 'ok' | 'cancelled' | 'missing' | 'unsupported' | 'failed'
 
-/** 将 Markdown 目标解码为原电脑的绝对路径。相对路径、网络共享和控制字符不能成为本地操作目标。 */
-export function fileLinkPath(destination: string): string | null {
-  const fileURL = /^file:\/\/(?:localhost)?(?=\/)/i.exec(destination)
+/** 将 Markdown 目标还原为绝对路径。行内代码中的百分号按原样保留。 */
+export function fileLinkPath(destination: string, literal = false): string | null {
+  const fileURL = !literal && /^file:\/\/(?:localhost)?(?=\/)/i.exec(destination)
   const encoded = fileURL ? destination.slice(fileURL[0].length) : destination
   let path: string
-  try { path = decodeURIComponent(encoded) } catch {
+  try { path = literal ? encoded : decodeURIComponent(encoded) } catch {
     if (fileURL) return null
     path = encoded
   }
