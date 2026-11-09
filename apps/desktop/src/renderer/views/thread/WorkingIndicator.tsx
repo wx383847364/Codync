@@ -9,18 +9,27 @@ import { prefs, usePref } from '../../lib/prefs'
 import { useTr } from '../../lib/use-language'
 import { useFollowEnd } from './follow-end'
 import { TraceRow } from './TraceView'
+import { workingSteps } from './trace-turns'
 
-/** The bot's current activity and elapsed time; with thinking details on (Settings), a click unfolds the turn's steps. */
-export function WorkingIndicator({ bot, steps }: { bot: Bot; steps: Entry[] }) {
+/** 展示当前活动和用时，开启思考详情时可展开这次执行的步骤。 */
+export function WorkingIndicator({ bot, entries, group }: { bot: Bot; entries: Entry[]; group: boolean }) {
   const tr = useTr()
   const [details] = usePref(prefs.thinkingDetails)
   const waiting = needsInput(bot)
   const [expanded, setExpanded] = useState(false)
   const open = details && expanded
+  const activity = tr(bot.activity || 'Working…')
+  const member = group && bot.kind !== 'group'
+  const tone = waiting ? 'attention' : 'secondary'
   const status = (
     <HStack as="span" gap={8}>
       <ThinkingOrb state={waiting ? 'listening' : 'working'} size={16} color={waiting ? 'var(--warning)' : 'var(--secondary)'} />
-      <Text size="subheadline" tone={waiting ? 'attention' : 'secondary'} truncate grow>{tr(bot.activity || 'Working…')}</Text>
+      {member ? (
+        <HStack as="span" grow className="working-label">
+          <Text size="subheadline" tone={tone} truncate>{bot.name}:&nbsp;</Text>
+          <Text size="subheadline" tone={tone} truncate>{activity}</Text>
+        </HStack>
+      ) : <Text size="subheadline" tone={tone} truncate grow>{activity}</Text>}
       {bot.startedAt ? <Timer since={bot.startedAt} /> : null}
       {details ? (
         <span className={`disclosure-chevron${open ? ' open' : ''}`}>
@@ -30,7 +39,7 @@ export function WorkingIndicator({ bot, steps }: { bot: Bot; steps: Entry[] }) {
     </HStack>
   )
   return (
-    <VStack align="flex-start" className="agent-inset">
+    <VStack align="flex-start" className={group ? 'group-working-member' : 'agent-inset'}>
       <div className={open ? 'working expanded' : 'working'}>
         {details ? (
           <button className="working-toggle" onClick={() => setExpanded((x) => !x)} aria-expanded={open} title={tr(open ? 'Hide steps' : 'Show steps')}>
@@ -40,18 +49,21 @@ export function WorkingIndicator({ bot, steps }: { bot: Bot; steps: Entry[] }) {
           status
         )}
         <Reveal show={open}>
-          <WorkingSteps steps={steps} />
+          <WorkingSteps entries={entries} member={member ? bot : undefined} />
         </Reveal>
       </div>
     </VStack>
   )
 }
 
-/** The turn's thinking, narration, tool calls and plan in a bounded box that follows new steps until the reader scrolls
- * up. A turn can have none yet: Claude's thinking text arrives as its thinking ends. */
-function WorkingSteps({ steps }: { steps: Entry[] }) {
+/** 展开时读取并跟随当前回合的步骤。群回合只读取该成员本次执行的记录。 */
+function WorkingSteps({ entries, member }: { entries: Entry[]; member?: Bot }) {
   const tr = useTr()
   const follow = useFollowEnd()
+  const steps = workingSteps(member ? entries.filter(
+    // 同群旧回合和其他成员的内容留在完整会话。
+    (entry) => entry.data.author === member.id && entry.createdAt >= (member.startedAt ?? Infinity),
+  ) : entries)
   return (
     <div ref={follow.ref} className="working-steps" onScroll={follow.onScroll}>
       <VStack gap={10}>

@@ -10,6 +10,7 @@ else a generic "Bug fixes and improvements" line. Delete old sections.
 ## 2.43.0
 
 ### zh-Hant
+- 群組可同時顯示多位 Bot 的工作狀態和用時。
 - 點一下對話中的檔案連結，即可複製電腦上的路徑。
 - 圖片可切換原始像素、縮放和平移，並限制快取與讀取資源。
 - Bot 可在目前群組明確分享檔案；文字路徑不會自動分享。
@@ -20,6 +21,7 @@ else a generic "Bug fixes and improvements" line. Delete old sections.
 - 不登入也能用 Wi-Fi 或 Tailscale；帳號可啟用中繼。重試保留附件，儲存故障可重試保存。
 
 ### en-US
+- See each active group member’s status and elapsed time.
 - Tap file links in chats to copy the computer’s path.
 - Original image pixels with zoom/pan and bounded caching.
 - Explicit group file sharing.

@@ -373,8 +373,8 @@ internal val Entry.botReactions: Map<String, List<String>> get() =
     }
 }
 
-/** The bot's current activity and elapsed time; with thinking `details` on (Settings), a tap unfolds the turn's steps. */
-@Composable internal fun WorkingIndicator(bot: Bot, steps: List<Entry>, details: Boolean) {
+/** 展示成员当前的活动和用时，开启思考详情时可展开本次执行的步骤。 */
+@Composable internal fun WorkingIndicator(bot: Bot, entries: List<Entry>, details: Boolean, chatId: String) {
     val needs = bot.status == "needsInput"
     // Each turn starts folded.
     var expanded by remember(bot.startedAt) { mutableStateOf(false) }
@@ -384,19 +384,37 @@ internal val Entry.botReactions: Map<String, List<String>> get() =
     val state = tr(if (open) "Expanded" else "Collapsed")
     val toggle = if (!details) Modifier
         else Modifier.clickable(role = Role.Button, onClickLabel = action) { expanded = !expanded }.semantics { stateDescription = state }
-    Column(Modifier.fillMaxWidth().padding(top = 6.dp, end = 40.dp)) {
-        Column(Modifier.then(if (open) Modifier.fillMaxWidth() else Modifier).animateContentSize(Motion.layoutSize)
-            .clip(RoundedRectangle(18.dp)).background(Palette.bubbleAgent).padding(horizontal = 16.dp, vertical = 12.dp)) {
-            Row(Modifier.then(if (open) Modifier.fillMaxWidth() else Modifier).then(toggle),
-                verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                ThinkingOrb(if (needs) ThinkingOrbState.Listening else ThinkingOrbState.Working, 16.dp, if (needs) Palette.warning else Palette.secondary)
-                Text(tr(bot.activity.ifEmpty { "Working…" }), Modifier.weight(1f, fill = open), style = Type.subheadline,
-                    color = if (needs) Palette.warning else Palette.secondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                bot.startedAt?.let { Elapsed(it) }
-                if (details) Symbol("chevron.right", Modifier.rotate(turn), size = 13.dp, tint = Palette.tertiary)
+    val activity = tr(bot.activity.ifEmpty { "Working…" })
+    val member = bot.id != chatId
+    val color = if (needs) Palette.warning else Palette.secondary
+    // 折叠时按标签内容取宽，展开时独占一行以容纳步骤。
+    Column(Modifier.then(if (open) Modifier.fillMaxWidth() else Modifier).animateContentSize(Motion.layoutSize)
+        .clip(RoundedRectangle(18.dp)).background(Palette.bubbleAgent).padding(horizontal = 16.dp, vertical = 12.dp)) {
+        Row(Modifier.then(if (open) Modifier.fillMaxWidth() else Modifier).then(toggle),
+            verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            ThinkingOrb(if (needs) ThinkingOrbState.Listening else ThinkingOrbState.Working, 16.dp, if (needs) Palette.warning else Palette.secondary)
+            if (member) {
+                // 各自截断名称和状态，避免长成员名吃掉整个状态文本。
+                Row(Modifier.weight(1f, fill = open), horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+                    Text("${bot.name}:", Modifier.weight(1f, fill = false), style = Type.subheadline,
+                        color = color, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(activity, Modifier.weight(1f, fill = false), style = Type.subheadline,
+                        color = color, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+            } else {
+                Text(activity, Modifier.weight(1f, fill = open), style = Type.subheadline,
+                    color = color, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
-            AnimatedVisibility(open, enter = fadeIn(Motion.fade()) + expandVertically(Motion.layoutSize),
-                exit = fadeOut(Motion.fade()) + shrinkVertically(Motion.layoutSize)) { WorkingSteps(steps) }
+            bot.startedAt?.let { Elapsed(it) }
+            if (details) Symbol("chevron.right", Modifier.rotate(turn), size = 13.dp, tint = Palette.tertiary)
+        }
+        AnimatedVisibility(open, enter = fadeIn(Motion.fade()) + expandVertically(Motion.layoutSize),
+            exit = fadeOut(Motion.fade()) + shrinkVertically(Motion.layoutSize)) {
+            // 保留收起动画中的步骤，只读当前会话及该成员本次执行。
+            val source = entries.filter {
+                it.botId == chatId && (!member || (it.data.text("author") == bot.id && it.createdAt >= (bot.startedAt ?: Long.MAX_VALUE)))
+            }
+            WorkingSteps(workingSteps(source))
         }
     }
 }

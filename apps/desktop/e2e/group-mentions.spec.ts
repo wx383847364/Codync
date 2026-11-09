@@ -7,7 +7,7 @@ import { api, attach, sandbox, steerBot, typeMessage } from './sandbox.ts'
 
 type History = { entries: { kind: string; data: { final?: boolean; text?: string; mentions?: { botId: string; start: number; end: number }[] } }[] }
 
-/** 用真实群聊窗口验证同群忙成员排队，空闲成员按顺序先答，且晚接到的仍是原消息。 */
+/** 用真实群聊验证同时显示工作的成员，且忙成员排队后仍收到原消息。 */
 test('idle group members answer a new message in order while a member finishes earlier work', async () => {
   const { browser, page } = await attach()
   const suffix = Date.now()
@@ -31,6 +31,7 @@ test('idle group members answer a new message in order while a member finishes e
     writeFileSync(join(workspace, '1', 'group-script.json'), JSON.stringify({ steps: [{ reply: firstReply }, { reply: '(pass)' }] }))
     writeFileSync(join(workspace, '2', 'group-script.json'), JSON.stringify({ reply: secondReply }))
     writeFileSync(join(workspace, '2', 'release'), '')
+    writeFileSync(join(workspace, '0', 'block-thought.txt'), 'A is thinking about the earlier assignment')
 
     const name = `Busy delivery room ${suffix}`
     group = (await api<{ bot: { id: string } }>(page, 'createBot', { name, kind: 'group', members: ids })).bot.id
@@ -46,12 +47,42 @@ test('idle group members answer a new message in order while a member finishes e
     // B 已收到本轮正文但尚未回复，C 应仍在等待。
     await expect.poll(() => existsSync(bPrompts) && readFileSync(bPrompts, 'utf8').includes('review this exact original')).toBe(true)
     expect(existsSync(cPrompts)).toBe(false)
+    // A 与 B 同时在工作，C 此时还在等本轮顺序。
+    const indicators = page.locator('.group-working-member')
+    const aActivity = indicators.filter({ hasText: names[0] })
+    const bActivity = indicators.filter({ hasText: names[1] })
+    await expect(aActivity).toContainText(`${names[0]}: Thinking…`)
+    await expect(bActivity).toBeVisible()
+    await expect(indicators.filter({ hasText: names[2] })).toHaveCount(0)
+    await expect(aActivity.getByText(/^\d+:\d{2}$/)).toBeVisible()
+    await expect(bActivity.getByText(/^\d+:\d{2}$/)).toBeVisible()
+    const aBounds = await aActivity.boundingBox()
+    const bBounds = await bActivity.boundingBox()
+    expect(bBounds!.x).toBeGreaterThan(aBounds!.x)
+    expect(bBounds!.y).toBe(aBounds!.y)
+    // 只收窄活动区验证换行，避免改变共用 Electron 沙箱的窗口设置。
+    const activityRow = page.locator('.group-working')
+    await activityRow.evaluate((row) => {
+      // 模拟窄会话可分配的空间。
+      row.style.maxWidth = '220px'
+    })
+    try {
+      expect((await bActivity.boundingBox())!.y).toBeGreaterThan((await aActivity.boundingBox())!.y)
+    } finally {
+      await activityRow.evaluate((row) => {
+        // 复原活动区，继续验证派工行为。
+        row.style.removeProperty('max-width')
+      })
+    }
     writeFileSync(join(workspace, '1', 'release'), '')
     await expect(page.getByText(firstReply, { exact: true })).toBeVisible()
     await expect(page.getByText(secondReply, { exact: true })).toBeVisible()
     // C 的实际 ACP 入参包含 B 刚提交的回复，A 的旧任务此时仍被夹具阻塞。
     expect(readFileSync(cPrompts, 'utf8')).toContain(firstReply)
     await expect(page.getByText('A finished earlier work', { exact: true })).toHaveCount(0)
+    // B 结束后只移除 B 的标签，A 仍在处理原来的任务。
+    await expect(bActivity).toHaveCount(0)
+    await expect(aActivity).toBeVisible()
 
     writeFileSync(join(workspace, '0', 'release'), '')
     await expect(page.getByText(lateReply, { exact: true })).toBeVisible()

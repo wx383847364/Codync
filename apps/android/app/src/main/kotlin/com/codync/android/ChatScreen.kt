@@ -15,6 +15,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
@@ -216,7 +217,7 @@ import com.kyant.shapes.Capsule
 /** [bot]'s chat. What voice calls carried shows in each call's conversation instead. */
 private fun AppState.chatEntries(bot: Bot) = entries.filter { it.botId == bot.id && it.isChat }.hidingCalls()
 
-/** The messages: all this phone has, earlier ones from the computer near the top, following the newest. */
+/** 呈现会话消息与实时活动，向上滚动时加载更早的消息。 */
 @Composable private fun Transcript(bot: Bot, state: AppState, store: AppStore, connect: ConnectionRequestActions, padding: PaddingValues,
     indicatorTop: Dp, openRoutine: (String) -> Unit, reply: (Entry) -> Unit, addFallback: (Bot) -> Unit, openArtifact: (OpenArtifact) -> Unit,
     openCall: (String) -> Unit, openPeer: (String) -> Unit) {
@@ -225,11 +226,23 @@ private fun AppState.chatEntries(bot: Bot) = entries.filter { it.botId == bot.id
     val pending = state.pending.filter { it.botId == bot.id && (it.call == null || it.status == SendStatus.Failed) }
     // Messages waiting behind the bot's work show above the composer instead.
     val items = chatItems(entries, pending, busy = bot.isWorking)
-    val working = bot.isWorking(bot.id) && state.connection is LinkState.Ready
+    // 群成员各自同步，交接期间没有成员在执行时才显示群组汇总。
+    val group = bot.kind == "group"
+    val members = if (group) bot.memberBots(state.bots).filter {
+        // 私聊与其他群的执行状态不进入本群。
+        it.isWorking(bot.id)
+    } else emptyList()
+    val active = when {
+        state.connection !is LinkState.Ready -> emptyList()
+        members.isNotEmpty() -> members
+        // 只显示没有来源 lane 的调度汇总，忽略刚结束成员的旧投影。
+        bot.isWorking(bot.id) && (!group || bot.workingChat == null) -> listOf(bot)
+        else -> emptyList()
+    }
     val more = bot.id !in state.historyComplete
     val details by ThinkingDetails.enabled.collectAsStateWithLifecycle()
     // Pull to refresh reconnects, like Reconnect in the roster's computer menu, until the link is back.
-    ConversationList(items.lastOrNull()?.id, entries.lastOrNull()?.rev, working, padding, store::refreshConnection, indicatorTop) {
+    ConversationList(items.lastOrNull()?.id, entries.lastOrNull()?.rev, active.isNotEmpty(), padding, store::refreshConnection, indicatorTop) {
         if (more) item("earlier") {
             Box(Modifier.fillMaxWidth().padding(vertical = 14.dp).clearAndSetSemantics { contentDescription = "Loading earlier messages" },
                 contentAlignment = Alignment.Center) { Spinner(14.dp) }
@@ -257,6 +270,15 @@ private fun AppState.chatEntries(bot: Bot) = entries.filter { it.botId == bot.id
                 is ChatItem.Exchanges -> BotMessageRow(item.group, state) { openPeer(item.group.peerId) }
             }
         }
-        if (working) item("working") { WorkingIndicator(bot, workingSteps(state.entries.filter { it.botId == bot.id }), details) }
+        if (active.isNotEmpty()) item("working") {
+            // 群标签按成员顺序排列，宽度不足时换行；私聊仍显示单个标签。
+            FlowRow(Modifier.fillMaxWidth().padding(top = 6.dp, end = 40.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                for (actor in active) key(actor.id) {
+                    // 展开时才扫描记录，折叠标签只读取状态和用时。
+                    WorkingIndicator(actor, state.entries, details, chatId = bot.id)
+                }
+            }
+        }
     }
 }

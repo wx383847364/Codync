@@ -28,7 +28,6 @@ import { outsideQueue } from './queued-messages'
 import { ChatSidePanel } from './ChatSidePanel'
 import { DetailsPanel, type DetailsTab } from './DetailsPanel'
 import { TraceView } from './TraceView'
-import { workingSteps } from './trace-turns'
 import { useReading } from './reading'
 import { GroupEditorView } from '../bots/GroupEditorView'
 import { BotTemplateView } from '../bots/BotTemplateView'
@@ -294,18 +293,27 @@ function ConnectionSubtitle() {
 /** The messages: every loaded message, brought to the newest as it changes while the reader is at the bottom. */
 const PAGE = 40
 
+// 呈现当前会话的消息、工作状态和滚动位置。
 const Transcript = memo(function Transcript({ botId, openTrace, onReply, openRoutine, openAgent, openBotChat, openArtifact, openCall }: { botId: string; openTrace: () => void; onReply?: (e: Entry) => void; openRoutine: (id: string | null) => void; openAgent: (botId: string) => void; openBotChat: (peerId: string) => void; openArtifact: (artifactId: string) => void; openCall: (lineId: string) => void }) {
   const store = useStore()
   const tr = useTr()
   const bot = store.bots.get(botId) ?? null
-  const live = !!bot && isWorkingIn(bot, botId) && !store.isOffline
+  // 成员事件和群汇总分别到达，实时标签直接跟随本群成员的工作状态。
+  const activeMembers = bot && isGroup(bot)
+    ? store.members(bot).filter(
+      // 私聊和其他群的工作不占用本群的状态栏。
+      (member) => isWorkingIn(member, botId),
+    )
+    : []
+  // 群汇总若还有来源 lane，可能是成员刚结束后的旧投影。
+  const showFallback = bot && isWorkingIn(bot, botId) && (!isGroup(bot) || bot.workingChat == null)
+  const active = store.isOffline ? [] : (activeMembers.length > 0 || !showFallback ? activeMembers : [bot])
   // Rebuilt only when this chat changes: the store replaces a chat's list on every change.
   const entries = store.allEntries(botId)
   // What voice calls carried shows in each call's conversation, not in the chat; what waits for the bot, in the queue.
   const working = !!bot && isWorking(bot)
   const chatOf = useCallback((list: Entry[]) => buildChat(outsideQueue(hidingCalls(list), working)), [working])
   const all = useMemo(() => chatOf(entries), [chatOf, entries])
-  const steps = useMemo(() => workingSteps(entries), [entries])
   // The newest 40 items first; older pages come in near the top.
   const [firstShown, setFirstShown] = useState<string | null>(null)
   const [loadingEarlier, setLoadingEarlier] = useState(false)
@@ -407,7 +415,7 @@ const Transcript = memo(function Transcript({ botId, openTrace, onReply, openRou
               <Row item={item} chat={bot} openTrace={openTrace} onReply={onReply} openRoutine={openRoutine} openAgent={openAgent} openBotChat={openBotChat} openArtifact={openArtifact} openCall={openCall} />
             </div>
           ))}
-          {bot ? <WorkingTransition bot={bot} visible={live} steps={steps} /> : null}
+          {bot ? <WorkingTransition bots={active} group={isGroup(bot)} entries={entries} /> : null}
           <div className="chat-end" />
         </div>
       </div>

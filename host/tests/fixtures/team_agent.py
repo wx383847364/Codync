@@ -247,6 +247,10 @@ def prompt(request):
         }})
         while not cancel.is_set() and not permission.wait(0.01):
             pass
+    # 可选地在被阻塞期间发送真实 ACP 思考事件，便于观察群聊的并发状态。
+    thought = pathlib.Path("block-thought.txt")
+    if "BLOCK" in text and thought.exists() and not pathlib.Path("release").exists():
+        update({"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": thought.read_text()}})
     while "BLOCK" in text and not pathlib.Path("release").exists() and not cancel.wait(0.01):
         pass
     # 新任务包以稳定 delivery 标识区分群回合，仍按完整来源而非最后一段指令取请求。

@@ -75,6 +75,10 @@ reads as **Typing…** (`activity()` in `agent/bot/tool_entry.rs`). The activity
 animated orb, a short status and elapsed time, in a pill no wider than an agent bubble whose status
 truncates to one line. Replies arrive as complete messages.
 
+In a group, active members have separate labels at the end of the chat. Each label shows the
+member's name, activity and time. On desktop and phones, opening a label shows that member's
+current steps. The terminal has a separate group-level control for the latest turn's steps.
+
 **Show thinking details** (Settings › Chat; each device's own choice, off by default) decides whether the pill
 unfolds; off, it stays a plain status line. On, the pill ends in a chevron, and a tap (click) unfolds the running
 turn's steps inside it:

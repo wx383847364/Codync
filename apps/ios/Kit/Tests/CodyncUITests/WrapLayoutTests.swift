@@ -9,3 +9,8 @@ import Testing
     #expect(WrapLayout.split(Array(repeating: 48, count: 3), spacing: 6, width: 362) == [0..<3])
     #expect(WrapLayout.split([], spacing: 6, width: 362).isEmpty)
 }
+
+/// 长短不一的群活动标签按宽度顺序换行，避免把前两个长标签硬塞到一行。
+@Test func mixedWidthActivityLabelsWrapBeforeTheyOverflow() {
+    #expect(WrapLayout.split([180, 180, 80], spacing: 8, width: 300, balanced: false) == [0..<1, 1..<3])
+}

@@ -14,9 +14,20 @@ pub(in crate::tui) fn working_steps<'a>(entries: &[&'a Entry]) -> Vec<&'a Entry>
 }
 
 impl App {
-    /// Whether `bot`'s chat shows the working line: a turn in flight in this chat, while connected.
+    /// 按群成员顺序读取本群正在执行或等待审批的成员。
+    pub(in crate::tui) fn working_group_members<'a>(&'a self, group: &'a Bot) -> impl Iterator<Item = &'a Bot> {
+        group.members.iter().filter_map(|id| {
+            // 成员可能正在私聊或其他群工作。
+            let bot = self.bots.get(id)?;
+            (bot.busy() && bot.working_chat.as_deref() == Some(&group.id)).then_some(bot)
+        })
+    }
+
+    /// 仅在线时呈现实时活动，成员事件可以先于群组汇总到达。
     pub(in crate::tui) fn shows_activity(&self, bot: &Bot) -> bool {
-        self.online && bot.busy() && bot.works_here()
+        self.online
+            && ((bot.busy() && bot.works_here() && (!bot.group || bot.working_chat.is_none()))
+                || (bot.group && self.working_group_members(bot).next().is_some()))
     }
 
     /// `>` or a click on the working line: unfolds or folds the selected bot's steps for this turn, once thinking

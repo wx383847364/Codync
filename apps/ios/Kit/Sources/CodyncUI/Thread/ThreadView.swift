@@ -337,13 +337,22 @@ extension ThreadView {
             .tracked(.screenViewed(.chat))
     }
 
-    private var working: Bool { bot?.isWorking(in: botId) == true && !model.isOffline }
+    /// 优先使用成员自己的实时状态，群组在投递交接时可显示汇总状态。
+    private var activeBots: [Bot] {
+        guard !model.isOffline, let bot else { return [] }
+        if bot.isGroup {
+            // 仅显示正在本群工作的成员，私聊和其他群的活动留在原聊天。
+            let members = model.members(of: bot).filter { $0.isWorking(in: botId) }
+            if !members.isEmpty { return members }
+            // 带来源 lane 的汇总可能还没跟上成员的结束事件。
+            if bot.workingChat != nil { return [] }
+        }
+        return bot.isWorking(in: botId) ? [bot] : []
+    }
     /// The bot works anywhere (a room, a routine): the user's messages here wait above the composer.
     private var busy: Bool { bot?.isWorking == true }
 
-    /// iPhone's messages: all this device has, earlier ones from the computer as the reader
-    /// scrolls up; the chat follows the newest message until they scroll away, and a reply is
-    /// revealed steadily as it's written.
+    /// 呈现当前聊天的消息和实时活动，向上滚动时加载更早的消息。
     var transcript: some View {
         // What voice calls carried shows in each call's conversation, not in the chat.
         // Messages waiting behind the bot's work show above the composer instead.
@@ -365,12 +374,11 @@ extension ThreadView {
             })
         }
         rows += items.map { item in ConversationRow(item.id, isUserMessage: item.isUserMessage) { row(item) } }
-        // Offline, "working" is only what the computer last said; don't show it as live.
-        if let bot, working {
+        let active = activeBots
+        if !active.isEmpty {
+            // 聊天末尾保留同一活动行，成员各自开始和结束。
             rows.append(ConversationRow("working") {
-                // Each turn starts folded.
-                WorkingIndicator(bot: bot, steps: Entry.workingSteps(model.chat(botId)))
-                    .id(bot.startedAt)
+                WorkingIndicators(bots: active, entries: model.chat(botId), group: bot?.isGroup == true)
                     .padding(.top, 6)
             })
         }

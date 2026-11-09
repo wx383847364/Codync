@@ -1,10 +1,8 @@
-import type { Bot } from '../../../shared/models.ts'
-
 /** Matches --working-duration in thread.css. */
 export const workingExitMs = 420
 
-/** Preserve the last live bot through exit, until its animation has finished. */
-export function workingTransition(current: Bot, previous: Bot, visible: boolean, mounted: boolean) {
+/** 保留最近的活动快照，直到退出动画结束。 */
+export function workingTransition<T>(current: T, previous: T, visible: boolean, mounted: boolean) {
   const active = visible ? current : previous
   return { active, indicator: mounted ? active : null }
 }

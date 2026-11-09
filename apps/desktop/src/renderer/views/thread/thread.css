@@ -350,6 +350,26 @@
 .chat-working.shown .chat-working-content {
   transform: none;
 }
+/* 同一群的活动标签按成员顺序并排，窄窗口自然换行。 */
+.group-working {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 6px 8px;
+  padding-right: 40px;
+}
+.group-working-member {
+  min-width: 0;
+  max-width: 100%;
+}
+.group-working-member:has(.working.expanded) {
+  flex-basis: 100%;
+}
+/* 长名称和长状态各自截断，名称再长也能看到活动。 */
+.working-label > :last-child {
+  flex-shrink: 0;
+  max-width: 65%;
+}
 .working {
   display: flex;
   /* A column stretches the row to the pill's width, so a long activity truncates. */

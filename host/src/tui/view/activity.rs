@@ -3,38 +3,63 @@
 
 use ratatui::text::{Line, Span};
 
-use super::super::app::{App, Bot, Click, Entry, running_turn, working_steps};
+use super::super::app::{App, Bot, Click, Entry, Status, running_turn, working_steps};
 use super::super::l10n::tr;
 use super::super::md::truncate;
 use super::buffer::u;
 use super::style::{spin, theme};
+use super::time::elapsed;
 use super::trace::push_step;
 use super::transcript::{Built, gap, name_style};
 
 /// The most lines the unfolded steps take; earlier ones stay in Full conversation.
 const STEP_LINES: usize = 14;
 
-/// `details`: this terminal's thinking details choice (`super::super::details`).
+/// 在会话底部显示正在本群工作的成员，保留终端原有的回合详情入口。
 pub(super) fn activity(out: &mut Built, app: &App, bot: &Bot, entries: &[&Entry], width: usize, details: bool) {
     let t = theme();
     gap(out);
-    out.lines.push(Line::from(Span::styled(format!(" {}", bot.name), name_style(&bot.color))));
+    let members: Vec<_> = if bot.group { app.working_group_members(bot).collect() } else { vec![] };
+    if members.is_empty() {
+        out.lines.push(Line::from(Span::styled(format!(" {}", bot.name), name_style(&bot.color))));
+    }
     let steps = working_steps(entries);
     let open = details
         && app.steps_open.as_ref().is_some_and(|(id, turn)| id == &bot.id && Some(*turn) == running_turn(entries));
-    let text = if bot.activity.is_empty() { tr("Working…") } else { tr(&bot.activity) };
-    let mut row = vec![
-        Span::styled(format!(" {} ", spin(app)), t.secondary),
-        Span::styled(truncate(text.as_ref(), width.saturating_sub(8)), t.secondary),
-    ];
-    let hint = if details {
-        out.buttons.push((out.lines.len(), 0, u(width), Click::Steps));
-        row.push(Span::styled(if open { "  v" } else { "  >" }, t.dim));
-        format!("   {} steps so far · > {} · t full conversation", steps.len(), if open { "hide" } else { "show" })
+    // 成员标签按终端列宽排列，长标签自然换行。
+    let mut row = Line::default();
+    for member in &members {
+        let label = Line::from(activity_label(app, member, width, true));
+        if !row.spans.is_empty() {
+            if row.width() + label.width() + 2 > width {
+                out.lines.push(std::mem::take(&mut row));
+            } else {
+                row.spans.push(Span::raw("  "));
+            }
+        }
+        row.spans.extend(label.spans);
+    }
+    if members.is_empty() {
+        row = Line::from(activity_label(app, bot, width, false));
+    }
+    if details {
+        // 终端详情按群回合展开，入口移到成员标签下方的群提示行。
+        let line = out.lines.len() + usize::from(!members.is_empty());
+        out.buttons.push((line, 0, u(width), Click::Steps));
+        if members.is_empty() {
+            row.spans.push(Span::styled(if open { "  v" } else { "  >" }, t.dim));
+        }
+    }
+    out.lines.push(row);
+    let scope = if members.is_empty() { String::new() } else { format!("{} · ", truncate(&bot.name, width / 3)) };
+    let disclosure = if !details {
+        ""
+    } else if open {
+        " · > hide"
     } else {
-        format!("   {} steps so far · t full conversation", steps.len())
+        " · > show"
     };
-    out.lines.push(Line::from(row));
+    let hint = format!("   {scope}{} steps so far{disclosure} · t full conversation", steps.len());
     out.lines.push(Line::from(Span::styled(hint, t.dim)));
     if open {
         // Claude's thinking text arrives as its thinking ends, so a turn can have no steps yet.
@@ -51,6 +76,29 @@ pub(super) fn activity(out: &mut Built, app: &App, bot: &Bot, entries: &[&Entry]
         }
         out.lines.extend(lines.into_iter().skip(earlier));
     }
+}
+
+/// 生成一行活动标签，为状态和用时预留空间，长名称优先截断。
+fn activity_label(app: &App, bot: &Bot, width: usize, member: bool) -> Vec<Span<'static>> {
+    let t = theme();
+    let text = if bot.activity.is_empty() { tr("Working…") } else { tr(&bot.activity) };
+    if !member {
+        return vec![
+            Span::styled(format!(" {} ", spin(app)), t.secondary),
+            Span::styled(truncate(text.as_ref(), width.saturating_sub(8)), t.secondary),
+        ];
+    }
+    let timer = elapsed(bot.started_at);
+    let room = width.saturating_sub(11 + timer.len());
+    let name = truncate(&bot.name, room / 2);
+    let text = truncate(text.as_ref(), room.saturating_sub(super::super::md::width(&name)));
+    let (mark, style) = if bot.status == Status::NeedsInput { ("◆", t.amber) } else { (spin(app), t.secondary) };
+    vec![
+        Span::styled(format!(" {mark} "), style),
+        Span::styled(format!("{name}: "), name_style(&bot.color)),
+        Span::styled(text, style),
+        Span::styled(format!(" {timer}"), t.dim),
+    ]
 }
 
 #[cfg(test)]
@@ -70,6 +118,34 @@ mod tests {
         let mut out = Built { lines: vec![], buttons: vec![], messages: vec![] };
         activity(&mut out, app, &app.bots["bot"], &entries.iter().collect::<Vec<_>>(), 80, details);
         (out.lines.iter().map(ToString::to_string).collect::<Vec<_>>().join("\n"), out.buttons.len())
+    }
+
+    /// 同时显示在本群思考和等审批的成员，排除仍在私聊工作的成员。
+    #[test]
+    fn group_activity_shows_each_working_member_in_roster_order() {
+        let (tx, _) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(Client::new("http://127.0.0.1:1", None), tx, String::new());
+        app.online = true;
+        for bot in [
+            json!({"id": "bot", "name": "Team", "kind": "group", "members": ["a", "b", "c"]}),
+            json!({"id": "a", "name": "Ada", "status": "working", "workingChat": "bot", "activity": "Thinking…"}),
+            json!({"id": "b", "name": "Ben", "status": "needsInput", "workingChat": "bot", "activity": "Approval"}),
+            json!({"id": "c", "name": "Cal", "status": "working", "workingChat": "c", "activity": "Thinking…"}),
+        ] {
+            app.on_msg(Msg::Event(json!({"type": "bot", "bot": bot})));
+        }
+        assert!(app.shows_activity(&app.bots["bot"]));
+        let (text, buttons) = render(&app, &[]);
+        let members = text.lines().next().unwrap();
+        assert!(members.find("Ada:").unwrap() < members.find("Ben:").unwrap());
+        assert!(!text.contains("Cal"));
+        assert!(text.lines().nth(1).unwrap().contains("Team · 0 steps so far · > show"));
+        assert_eq!(buttons, 1);
+
+        let mut out = Built { lines: vec![], buttons: vec![], messages: vec![] };
+        activity(&mut out, &app, &app.bots["bot"], &[], 25, false);
+        assert!(out.lines[0].to_string().contains("Ada:"));
+        assert!(out.lines[1].to_string().contains("Ben:"));
     }
 
     #[test]

@@ -264,16 +264,53 @@ struct NoticeRow: View {
     }
 }
 
-/// The bot's current activity and elapsed time; with thinking details on (Settings), a tap unfolds the turn's steps.
-struct WorkingIndicator: View {
+/// 同一群的成员共用一行活动区，标签放不下时换行。
+struct WorkingIndicators: View {
+    let bots: [Bot]
+    let entries: [Entry]
+    let group: Bool
+
+    /// 私聊延续原有的单标签布局。
+    var body: some View {
+        if group {
+            WrapLayout(spacing: 8, leading: true) {
+                // 按成员身份保留状态，每次执行独立折叠。
+                ForEach(bots) { bot in indicator(bot) }
+            }
+            .padding(.trailing, 40)
+        } else if let bot = bots.first {
+            indicator(bot)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.trailing, 40)
+        }
+    }
+
+    /// 每位成员的标签在新回合开始时重新折叠。
+    private func indicator(_ bot: Bot) -> some View {
+        WorkingIndicator(bot: bot, entries: entries, member: group && !bot.isGroup)
+            .id(bot.startedAt)
+    }
+}
+
+/// 呈现一次执行的状态和用时，思考详情可单独展开。
+private struct WorkingIndicator: View {
     let bot: Bot
-    let steps: [Entry]
+    let entries: [Entry]
+    let member: Bool
     @AppStorage(ThinkingDetails.storageKey) private var details = false
     @State private var expanded = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var open: Bool { details && expanded }
 
+    /// 详情展开时读取本回合。群聊历史可能包含其他成员和该成员的旧回合。
+    private var steps: [Entry] {
+        Entry.workingSteps(member ? entries.filter {
+            $0.data.author == bot.id && $0.createdAt >= (bot.startedAt ?? Int64.max)
+        } : entries)
+    }
+
+    /// 标签展开后与当前回合的步骤共用同一张卡片。
     var body: some View {
         let shape = RoundedRectangle(cornerRadius: 18, style: .continuous)
         VStack(alignment: .leading, spacing: 0) {
@@ -301,18 +338,22 @@ struct WorkingIndicator: View {
         .background(Palette.bubbleAgent, in: shape)
         // Folding steps never cross the pill's edge.
         .clipShape(shape)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.trailing, 40)
     }
 
+    /// 先本地化活动文字，再加上群成员的名字。
     private var status: some View {
-        HStack(spacing: 8) {
+        let activity = L10n.tr(bot.activity.isEmpty ? "Working…" : bot.activity)
+        return HStack(spacing: 8) {
             ThinkingOrb(state: bot.needsInput ? .listening : .working, size: 16, color: bot.needsInput ? Palette.warning : Palette.secondary)
-            Text(L10n.tr(bot.activity.isEmpty ? "Working…" : bot.activity))
-                .font(.subheadline)
-                .foregroundStyle(bot.needsInput ? Palette.warning : Palette.secondary)
-                .lineLimit(1)
-                .frame(maxWidth: open ? .infinity : nil, alignment: .leading)
+            HStack(spacing: 0) {
+                if member { Text("\(bot.name): ") }
+                // 空间紧张时先缩短成员名，给活动留出位置。
+                Text(activity).layoutPriority(1)
+            }
+            .font(.subheadline)
+            .foregroundStyle(bot.needsInput ? Palette.warning : Palette.secondary)
+            .lineLimit(1)
+            .frame(maxWidth: open ? .infinity : nil, alignment: .leading)
             if let started = bot.startedAt {
                 Text(Date(milliseconds: started), style: .timer)
                     .font(.footnote.monospacedDigit())

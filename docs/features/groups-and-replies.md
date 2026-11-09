@@ -148,6 +148,10 @@ quote as the user's words: it stays in `data.replyTo`, apart from `data.text`.
 
 ## Client checklist
 
+At the end of the group transcript, clients show one activity label per busy member whose
+`workingChat` matches the group, in roster order. The group projection can show the scheduling
+status between deliveries.
+
 Roster row for groups (member avatars), a trace per turn, author label on group replies,
 **Reply** on user messages and final replies (desktop: the hover footer beside the time, with
 quick reactions and copy, never on the bubble, and the context menu; iPhone and Android:
