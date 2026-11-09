@@ -39,6 +39,10 @@ pub enum Reported {
     AttachmentPreview {
         outcome: AttachmentPreviewOutcome,
     },
+    FileLinkAction {
+        action: FileLinkAction,
+        outcome: FileLinkOutcome,
+    },
     DevServerAction {
         action: DevServerAction,
     },
@@ -104,6 +108,34 @@ pub enum Reported {
     JoinOfferAnswered {
         outcome: JoinOutcome,
     },
+}
+
+/// 文件链接只上报用户选择的动作类别，不接收路径或编辑器参数。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FileLinkAction {
+    Open,
+    Reveal,
+    Save,
+    CopyPath,
+    CopyContents,
+    Cursor,
+    Vscode,
+    #[serde(other)]
+    Other,
+}
+
+/// 文件操作仅记录固定结果类别，不发送系统错误消息。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FileLinkOutcome {
+    Ok,
+    Cancelled,
+    Missing,
+    Unsupported,
+    Failed,
+    #[serde(other)]
+    Other,
 }
 
 /// 图片查看只接受固定结果类别，不接收自由文本。

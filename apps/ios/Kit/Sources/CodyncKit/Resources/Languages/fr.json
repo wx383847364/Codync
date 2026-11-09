@@ -1882,5 +1882,20 @@
   "Sign in there with {email} and add it to your account, and it shows up here.": "Connectez-vous-y avec {email} et ajoutez-le à votre compte : il apparaîtra ici.",
   "Scan with the Codync app or the iPhone Camera.": "Scannez avec l'app Codync ou l'appareil photo de l'iPhone.",
   "Phones paired without this account lose access and must pair again.": "Les téléphones jumelés sans ce compte perdent l'accès et devront être jumelés à nouveau.",
-  "This message's files aren't on this device anymore. Delete it and attach them again.": "Les fichiers de ce message ne sont plus sur cet appareil. Supprimez-le et joignez-les à nouveau."
+  "This message's files aren't on this device anymore. Delete it and attach them again.": "Les fichiers de ce message ne sont plus sur cet appareil. Supprimez-le et joignez-les à nouveau.",
+  "Open with…": "Ouvrir avec…",
+  "Open with default app": "Ouvrir avec l’app par défaut",
+  "Open in Cursor": "Ouvrir dans Cursor",
+  "Open in Visual Studio Code": "Ouvrir dans Visual Studio Code",
+  "Save as…": "Enregistrer sous…",
+  "Copy path": "Copier le chemin",
+  "Copy file contents": "Copier le contenu du fichier",
+  "Show in Finder": "Afficher dans le Finder",
+  "Show in file manager": "Afficher dans le gestionnaire de fichiers",
+  "This file could not be found on this computer.": "Ce fichier est introuvable sur cet ordinateur.",
+  "This action is unavailable for this file.": "Cette action est indisponible pour ce fichier.",
+  "Could not complete the file action.": "Impossible de terminer l’action sur le fichier.",
+  "Copy file contents supports UTF-8 text files up to 1 MiB.": "Le contenu des fichiers texte UTF-8 de 1 Mio maximum peut être copié.",
+  "File on the host computer": "Fichier sur l’ordinateur hôte",
+  "Couldn't copy the path.": "Impossible de copier le chemin."
 }

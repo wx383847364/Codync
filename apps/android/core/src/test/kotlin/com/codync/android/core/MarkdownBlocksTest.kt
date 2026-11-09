@@ -17,4 +17,10 @@ class MarkdownBlocksTest {
         assertEquals(listOf(Block.Heading("Plan", 2), Block.Bullet("read", "1.", 0), Block.Quote("note"),
             Block.Code("val x = 1", "kotlin"), Block.Paragraph("text\nmore")), blocks)
     }
+    /** 围栏内的文件链接只是示例文字，较短围栏不会提前闭合。 */
+    @Test fun `file link examples stay inside tilde and longer backtick fences`() {
+        val example = "[file](/tmp/example.png)"
+        val source = listOf("~~~md", example, "~~~", "````md", "```", example, "```", "````").joinToString("\n")
+        assertEquals(listOf(Block.Code(example, "md"), Block.Code("```\n$example\n```", "md")), MarkdownBlocks.parse(source))
+    }
 }

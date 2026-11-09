@@ -174,6 +174,7 @@ function UserStatus({ entry, hovering }: { entry: Entry; hovering: boolean }) {
   }
 }
 
+/** 渲染机器人回复，正文中的文件链接使用当前会话的电脑。 */
 export function AgentBubble({ entry, openTrace, reply, openArtifact }: { entry: Entry; openTrace: () => void; reply?: () => void; openArtifact?: (artifactId: string) => void }) {
   const store = useStore()
   const [hovering, setHovering] = useState(false)
@@ -195,7 +196,7 @@ export function AgentBubble({ entry, openTrace, reply, openArtifact }: { entry: 
           ) : entry.data.files?.length ? (
             <div className="file-message-cards">{entry.data.files.map((file) => <FileDownloadCard key={file.id} entry={entry} file={file} />)}</div>
           ) : (
-            <MarkdownText text={entry.data.text ?? ''} />
+            <MarkdownText text={entry.data.text ?? ''} fileLinks />
           )}
         </Bubble>
         <MessageActions className="trailing" visible={hovering} reactions={reactionPick(store, entry)} reply={reply} trace={openTrace} copy={copy} />

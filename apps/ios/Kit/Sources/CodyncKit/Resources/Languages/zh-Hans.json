@@ -1882,5 +1882,20 @@
   "Sign in there with {email} and add it to your account, and it shows up here.": "在那里用 {email} 登录并将电脑加入账户，它就会显示在这里。",
   "Scan with the Codync app or the iPhone Camera.": "用 Codync App 或 iPhone 相机扫描。",
   "Phones paired without this account lose access and must pair again.": "未用此账户配对的手机将失去访问权限，必须重新配对。",
-  "This message's files aren't on this device anymore. Delete it and attach them again.": "此消息的文件已不在此设备上。请删除这条消息并重新添加文件。"
+  "This message's files aren't on this device anymore. Delete it and attach them again.": "此消息的文件已不在此设备上。请删除这条消息并重新添加文件。",
+  "Open with…": "打开方式…",
+  "Open with default app": "使用默认应用打开",
+  "Open in Cursor": "在 Cursor 中打开",
+  "Open in Visual Studio Code": "在 Visual Studio Code 中打开",
+  "Save as…": "另存为…",
+  "Copy path": "复制路径",
+  "Copy file contents": "复制文件内容",
+  "Show in Finder": "在 Finder 中显示",
+  "Show in file manager": "在文件管理器中显示",
+  "This file could not be found on this computer.": "找不到此电脑上的文件。",
+  "This action is unavailable for this file.": "此文件不支持该操作。",
+  "Could not complete the file action.": "未能完成文件操作。",
+  "Copy file contents supports UTF-8 text files up to 1 MiB.": "复制文件内容支持不超过 1 MiB 的 UTF-8 文本文件。",
+  "File on the host computer": "主机电脑上的文件",
+  "Couldn't copy the path.": "未能复制路径。"
 }

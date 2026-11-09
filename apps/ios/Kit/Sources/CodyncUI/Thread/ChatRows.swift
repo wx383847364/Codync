@@ -200,7 +200,7 @@ struct AgentBubble: View {
                 } else if let files = entry.data.files, !files.isEmpty {
                     ForEach(files) { file in FileDownloadCard(entry: entry, file: file) }
                 } else {
-                    MarkdownText(entry.data.text ?? "").equatable()
+                    MarkdownText(entry.data.text ?? "", fileLinks: true).equatable()
                         .padding(.horizontal, 16)
                         .padding(.vertical, 10)
                         .background(Palette.bubbleAgent, in: RoundedRectangle(cornerRadius: 18, style: .continuous))

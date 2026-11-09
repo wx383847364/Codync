@@ -160,7 +160,8 @@ pub(super) fn chat(buf: &mut Buffer, r: Rect, app: &mut App, narrow: bool) {
             if artifact {
                 "j k pick · o open in the browser · f save as HTML · ↵ reply · 1–6 react · c copy · esc"
             } else {
-                "j k pick · ↵ reply · 1–6 react · f save files · c copy · esc"
+                // 重绘只提供快捷键提示，路径在用户按键时提取。
+                "j k pick · Y copy file paths · ↵ reply · 1–6 react · f save files · c copy · esc"
             }
             .to_owned()
         } else if app.reply.is_some() {

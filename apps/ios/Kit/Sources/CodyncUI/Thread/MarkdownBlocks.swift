@@ -14,13 +14,16 @@ enum MarkdownBlocks {
         case rule
     }
 
+    /// 划分 Markdown 块，代码围栏内的文件链接示例保持为代码。
     static func parse(_ source: String) -> [Block] {
         var blocks: [Block] = []
         var paragraph: [String] = []
         var table: [String] = []
         var code: [String]?
         var language = ""
+        var fence = ""
 
+        // 按现有规则保存累计的段落和表格。
         func flush() {
             if !paragraph.isEmpty {
                 blocks.append(.paragraph(paragraph.joined(separator: "\n")))
@@ -38,20 +41,23 @@ enum MarkdownBlocks {
         }
 
         for raw in source.components(separatedBy: "\n") {
-            let line = raw.trimmingCharacters(in: .whitespaces)
-            if line.hasPrefix("```") {
-                if let c = code {
+            let line = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            // 两种围栏都可包含较短的围栏作为示例。
+            let marker = line.prefix { ($0 == "`" || $0 == "~") && $0 == line.first }
+            if let c = code {
+                if marker.hasPrefix(fence), marker.count == line.count {
                     blocks.append(.code(c.joined(separator: "\n"), language: language))
                     code = nil
                 } else {
-                    flush()
-                    code = []
-                    language = String(line.dropFirst(3))
+                    code?.append(raw)
                 }
                 continue
             }
-            if code != nil {
-                code?.append(raw)
+            if marker.count >= 3 {
+                flush()
+                code = []
+                fence = String(marker)
+                language = String(line.dropFirst(marker.count))
                 continue
             }
             if line.hasPrefix("|") {

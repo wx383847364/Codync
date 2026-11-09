@@ -16,13 +16,16 @@ object MarkdownBlocks {
         data object Rule : Block
     }
 
+    /** 划分 Markdown 块，代码围栏内的文件链接示例保持为代码。 */
     fun parse(source: String): List<Block> {
         val blocks = mutableListOf<Block>()
         val paragraph = mutableListOf<String>()
         val table = mutableListOf<String>()
         var code: MutableList<String>? = null
         var language = ""
+        var fence = ""
 
+        // 按现有规则保存累计的段落和表格。
         fun flush() {
             if (paragraph.isNotEmpty()) { blocks += Block.Paragraph(paragraph.joinToString("\n")); paragraph.clear() }
             if (table.isNotEmpty()) {
@@ -34,14 +37,25 @@ object MarkdownBlocks {
         }
 
         for (raw in source.split("\n")) {
-            val line = raw.trim(' ', '\t')
-            if (line.startsWith("```")) {
-                val open = code
-                if (open != null) { blocks += Block.Code(open.joinToString("\n"), language); code = null }
-                else { flush(); code = mutableListOf(); language = line.drop(3) }
+            val line = raw.trim()
+            // 两种围栏都可包含较短的围栏作为示例。
+            val first = line.firstOrNull()
+            val marker = if (first == '`' || first == '~') line.takeWhile { it == first } else ""
+            val open = code
+            if (open != null) {
+                if (marker.startsWith(fence) && marker.length == line.length) {
+                    blocks += Block.Code(open.joinToString("\n"), language)
+                    code = null
+                } else open += raw
                 continue
             }
-            code?.let { it += raw; continue }
+            if (marker.length >= 3) {
+                flush()
+                code = mutableListOf()
+                fence = marker
+                language = line.drop(marker.length)
+                continue
+            }
             if (line.startsWith("|")) {
                 if (paragraph.isNotEmpty()) flush()
                 table += line

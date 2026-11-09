@@ -18,12 +18,15 @@ const cells = (line: string) => {
   return row.split('|').map((c) => c.trim())
 }
 
+/** 划分 Markdown 块。代码围栏内的文件链接示例保持为代码。 */
 export function parseMarkdown(source: string): Block[] {
   const blocks: Block[] = []
   let paragraph: string[] = []
   let table: string[] = []
   let code: string[] | null = null
   let language = ''
+  let fence = ''
+  // 按已有的段落及表格规则保存累计内容。
   const flush = () => {
     if (paragraph.length) {
       blocks.push({ kind: 'paragraph', text: paragraph.join('\n') })
@@ -38,19 +41,20 @@ export function parseMarkdown(source: string): Block[] {
   }
   for (const raw of source.split('\n')) {
     const line = raw.trim()
-    if (line.startsWith('```')) {
-      if (code) {
+    const marker = /^(?:`{3,}|~{3,})/.exec(line)?.[0]
+    if (code) {
+      // 闭合围栏须使用相同标记，且长度至少为起始围栏的长度。
+      if (marker?.startsWith(fence) && marker.length === line.length) {
         blocks.push({ kind: 'code', text: code.join('\n'), language })
         code = null
-      } else {
-        flush()
-        code = []
-        language = line.slice(3)
-      }
+      } else code.push(raw)
       continue
     }
-    if (code) {
-      code.push(raw)
+    if (marker) {
+      flush()
+      code = []
+      fence = marker
+      language = line.slice(marker.length)
       continue
     }
     if (line.startsWith('|')) {

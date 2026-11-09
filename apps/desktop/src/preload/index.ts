@@ -135,6 +135,12 @@ const bridge: CodyncBridge = {
     finish: (id) => ipcRenderer.invoke('files:finish', id),
     cancel: (id) => ipcRenderer.invoke('files:cancel', id),
   },
+  fileLinks: {
+    // 文件动作只传递明确选择的路径与固定动作标识。
+    act: (id, path, action) => ipcRenderer.invoke('fileLinks:act', id, path, action),
+    // 由主进程读取受支持的编辑器列表。
+    editors: (id) => ipcRenderer.invoke('fileLinks:editors', id),
+  },
   app: {
     reportError: (report) => ipcRenderer.send('app:reportError', report),
     openExternal: (url) => ipcRenderer.send('app:openExternal', url),

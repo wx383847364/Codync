@@ -94,4 +94,10 @@ Desktop byte caches are limited to 64 MiB per computer and two concurrent downlo
 
 Group file copying freezes chat and delivery identity. Publication rechecks the started delivery, author and membership under the same lock as Stop and member removal; stale copies cannot publish in a later turn or private chat. Snapshot storage remains owned by the source chat.
 
-Text paths stay text: this change adds no automatic path scanning, `resolveImages`, cwd metadata or workspace-file publication. Bots continue to explicitly call `send_file`.
+## File links in replies
+
+A Markdown link to an absolute POSIX or Windows path, or to a local `file://` URI, refers to the original file on the bot's computer. Use percent encoding or enclose a destination with spaces in angle brackets. Plain paths and code examples do not trigger file operations. Opening a link never publishes a copy to the chat or Library. To deliver a downloadable copy to other devices, the bot calls `send_file`.
+
+- On the bot's computer, the link’s file menu offers **Open**, **Save as…**, **Copy path**, **Copy file contents**, and **Show in Finder** or **Show in file manager**. **Open with…** on macOS offers Cursor and Visual Studio Code when installed in Applications, as well as the default app. System actions also accept source links ending in `:line` or `:line:column` when the complete path does not exist. **Copy path** preserves the link’s destination, including any source location. Images open with the system app. Click a local `.html` or `.htm` link to open it in the default browser, or right-click it for file actions. Copying file contents supports UTF-8 text up to 1 MiB. Folders and app bundles can be opened or revealed.
+- On a desktop connected to another computer, iPhone or Android, click or tap the link to copy the original computer's path. In the terminal, select the reply and press `Y` to copy its linked paths, one per line.
+- The desktop main process acts when the user activates an HTML link or selects an action in the chat menu. Paths are never sent to analytics. The host API for shared files is unchanged.

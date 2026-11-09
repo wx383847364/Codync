@@ -78,6 +78,15 @@
   text-underline-offset: 0.15em;
   cursor: pointer;
 }
+/* 文件动作保留行内链接样式。 */
+.md-file-link {
+  display: inline;
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  text-align: inherit;
+}
 .md-strong {
   font-weight: 600;
 }

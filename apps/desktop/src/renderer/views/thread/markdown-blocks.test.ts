@@ -19,3 +19,12 @@ test('blocks: headings, nested lists, rules, tables and code', () => {
 test('a pipe line without its rule stays text', () => {
   assert.deepEqual(parseMarkdown('| not a table'), [{ kind: 'paragraph', text: '| not a table' }])
 })
+
+/** 两种 Markdown 围栏内的文件链接都保持代码，较短围栏不会提前闭合。 */
+test('file link examples stay inside tilde and longer backtick fences', () => {
+  const example = '[file](/tmp/example.png)'
+  assert.deepEqual(parseMarkdown(['~~~md', example, '~~~', '````md', '```', example, '```', '````'].join('\n')), [
+    { kind: 'code', text: example, language: 'md' },
+    { kind: 'code', text: ['```', example, '```'].join('\n'), language: 'md' },
+  ])
+})

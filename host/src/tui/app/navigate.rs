@@ -155,7 +155,7 @@ impl App {
         self.pick = Some(picks[i].0.clone());
     }
 
-    /// Keys while a message is picked. Returns whether the key was used.
+    /// 处理选中消息的快捷键。返回是否消费了按键。
     pub(super) fn pick_key(&mut self, k: KeyEvent) -> bool {
         let Some(id) = self.selected.clone() else { return false };
         let picked = self.pick.as_ref().and_then(|p| self.lane(&id).into_iter().find(|e| &e.id == p).cloned());
@@ -237,6 +237,22 @@ impl App {
             KeyCode::Char('f') => {
                 if let Some(e) = picked {
                     self.save_files(&id, &e.id, &e.data);
+                }
+            }
+            KeyCode::Char('Y') => {
+                let paths = picked.map_or_else(Vec::new, |entry| {
+                    // 只从选中的回复提取路径；终端连接的主机可能在另一台电脑。
+                    entry.file_link_paths()
+                });
+                if paths.is_empty() {
+                    self.flash("No file links in this message");
+                } else {
+                    copy(&paths.join("\n"));
+                    self.track(crate::analytics::reported::Reported::FileLinkAction {
+                        action: crate::analytics::reported::FileLinkAction::CopyPath,
+                        outcome: crate::analytics::reported::FileLinkOutcome::Ok,
+                    });
+                    self.flash("Copied file paths");
                 }
             }
             KeyCode::Char('c') => {

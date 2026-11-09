@@ -1,3 +1,4 @@
+import type { FileLinkAction, FileLinkResult } from './file-links'
 // App-level events the desktop app reports through the host's loopback `track`. The host accepts
 // only the catalog's events and properties (docs/reference/analytics-events.md): feature use,
 // never content.
@@ -45,6 +46,7 @@ export type ClaimFailure = 'unreachable' | 'refused' | 'host'
 export type AnalyticsEvent =
   | { event: 'image_viewed'; outcome: 'opened' | 'original' | 'fit' | 'failed' }
   | { event: 'attachment_preview'; outcome: 'opened' | 'decode_failed' }
+  | { event: 'file_link_action'; action: FileLinkAction | 'copy_path'; outcome: FileLinkResult }
   | { event: 'app_opened'; at_login: boolean }
   | { event: 'window_opened' }
   | { event: 'onboarding_completed'; signed_in: boolean }

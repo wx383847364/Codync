@@ -1,3 +1,4 @@
+import type { FileLinkAction, FileLinkEditor, FileLinkResult } from './file-links'
 import type { SignInFailure, SignInProvider } from './analytics'
 import type { SharedFile } from './models'
 import type { SSHBridge } from './ssh'
@@ -245,6 +246,10 @@ export interface CodyncBridge {
     write(id: string, offset: number, data: Uint8Array): Promise<void>
     finish(id: string): Promise<void>
     cancel(id: string): Promise<void>
+  }
+  fileLinks: {
+    act(computerId: string, path: string, action: FileLinkAction): Promise<FileLinkResult>
+    editors(computerId: string): Promise<FileLinkEditor[]>
   }
   app: {
     /** Error tracking: an uncaught error in this window (shared/error-report.ts). */

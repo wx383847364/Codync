@@ -104,6 +104,11 @@ internal sealed class AnalyticsEvent(val name: String) {
         override val properties get() = mapOf("outcome" to JsonPrimitive(if (decoded) "opened" else "decode_failed"))
     }
     /** A dev server opened, or its address copied; the host reports what it does itself. */
+    /** 只记录复制路径的结果，剪贴板内容不进入统计。 */
+    data class FileLinkPathCopy(val copied: Boolean) : AnalyticsEvent("file_link_action") {
+        override val properties get() = mapOf("action" to JsonPrimitive("copy_path"), "outcome" to JsonPrimitive(if (copied) "ok" else "failed"))
+    }
+
     data class DevServerAction(val use: DevServerUse) : AnalyticsEvent("dev_server_action") {
         override val properties get() = mapOf("action" to use.json)
     }

@@ -32,7 +32,7 @@ def prompt(message):
         assert any(tool['name'] == 'send_file' for tool in tools)
         text = params['prompt'][0]['text']
         results = []
-        if 'path-text-only' in text:
+        if 'path-text-only' in text or 'file-link-menu' in text:
             pass
         elif 'invalid-files' in text:
             for path in ['missing', '.', 'oversized']:
@@ -43,7 +43,12 @@ def prompt(message):
                 results.append(request('tools/call', {'name':'send_file', 'arguments':{'path':path}}))
         Path(session['cwd'], 'file-results.json').write_text(json.dumps(results))
         mcp.stdin.close()
-    if 'files-only' not in text:
+    if 'file-link-menu' in text:
+        # 此用例直接返回文件链接，验证回复只引用原路径。
+        reply = Path(session['cwd'], 'file-links.md').read_text(encoding='utf-8')
+        send({'jsonrpc': '2.0', 'method': 'session/update', 'params': {'sessionId': params['sessionId'],
+            'update': {'sessionUpdate': 'agent_message_chunk', 'content': {'type': 'text', 'text': reply}}}})
+    elif 'files-only' not in text:
         send({'jsonrpc':'2.0','method':'session/update','params':{'sessionId':params['sessionId'],'update':{'sessionUpdate':'agent_message_chunk','content':{'type':'text','text':('(pass)' if 'files-pass' in text else (' ' if 'files-blank' in text else 'The files are ready.'))}}}})
     return {'stopReason':'end_turn'}
 

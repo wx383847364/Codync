@@ -7,6 +7,7 @@ mod editor;
 mod events;
 mod exchange;
 mod fallbacks;
+mod file_links;
 mod forms;
 mod group_form;
 mod input;

@@ -10,7 +10,7 @@ use super::buffer::{centered, frame_box, put, u};
 use super::overlay::field_line;
 use super::style::theme;
 
-const HELP: [(&str, &str, &str); 75] = [
+const HELP: [(&str, &str, &str); 76] = [
     ("MOVE", "j k  ↑ ↓", "next / previous bot"),
     ("MOVE", "[ ]", "previous / next bot"),
     ("MOVE", "1…9", "jump to bot 1–9"),
@@ -39,6 +39,7 @@ const HELP: [(&str, &str, &str); 75] = [
     ("CHAT", "j k  ↵", "picking: move / reply"),
     ("CHAT", "1…6", "picking: react"),
     ("CHAT", "f", "picking: save its files or artifact"),
+    ("CHAT", "Y", "picking: copy file paths"),
     ("CHAT", "o", "picking an artifact: open it in the browser"),
     ("CHAT", "o", "picking: show a summary, handoff or note change"),
     ("CHAT", "e K", "picking a handoff: edit / keep the chat"),

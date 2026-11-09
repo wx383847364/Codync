@@ -1882,5 +1882,20 @@
   "Sign in there with {email} and add it to your account, and it shows up here.": "Войдите там как {email} и добавьте его в аккаунт: он появится здесь.",
   "Scan with the Codync app or the iPhone Camera.": "Отсканируйте в приложении Codync или камерой iPhone.",
   "Phones paired without this account lose access and must pair again.": "Телефоны, сопряжённые без этого аккаунта, потеряют доступ, и их нужно будет сопрячь заново.",
-  "This message's files aren't on this device anymore. Delete it and attach them again.": "Файлов этого сообщения больше нет на этом устройстве. Удалите его и прикрепите файлы заново."
+  "This message's files aren't on this device anymore. Delete it and attach them again.": "Файлов этого сообщения больше нет на этом устройстве. Удалите его и прикрепите файлы заново.",
+  "Open with…": "Открыть с помощью…",
+  "Open with default app": "Открыть в приложении по умолчанию",
+  "Open in Cursor": "Открыть в Cursor",
+  "Open in Visual Studio Code": "Открыть в Visual Studio Code",
+  "Save as…": "Сохранить как…",
+  "Copy path": "Скопировать путь",
+  "Copy file contents": "Скопировать содержимое файла",
+  "Show in Finder": "Показать в Finder",
+  "Show in file manager": "Показать в файловом менеджере",
+  "This file could not be found on this computer.": "Не удалось найти этот файл на компьютере.",
+  "This action is unavailable for this file.": "Это действие недоступно для этого файла.",
+  "Could not complete the file action.": "Не удалось выполнить действие с файлом.",
+  "Copy file contents supports UTF-8 text files up to 1 MiB.": "Можно скопировать содержимое текстового файла UTF-8 размером до 1 МиБ.",
+  "File on the host computer": "Файл на компьютере-хосте",
+  "Couldn't copy the path.": "Не удалось скопировать путь."
 }

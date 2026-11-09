@@ -1882,5 +1882,20 @@
   "Sign in there with {email} and add it to your account, and it shows up here.": "Inicia sesión allí con {email} y añádelo a tu cuenta, y aparecerá aquí.",
   "Scan with the Codync app or the iPhone Camera.": "Escanea con la app de Codync o la cámara del iPhone.",
   "Phones paired without this account lose access and must pair again.": "Los teléfonos emparejados sin esta cuenta pierden el acceso y deben emparejarse de nuevo.",
-  "This message's files aren't on this device anymore. Delete it and attach them again.": "Los archivos de este mensaje ya no están en este dispositivo. Elimínalo y vuelve a adjuntarlos."
+  "This message's files aren't on this device anymore. Delete it and attach them again.": "Los archivos de este mensaje ya no están en este dispositivo. Elimínalo y vuelve a adjuntarlos.",
+  "Open with…": "Abrir con…",
+  "Open with default app": "Abrir con la app predeterminada",
+  "Open in Cursor": "Abrir en Cursor",
+  "Open in Visual Studio Code": "Abrir en Visual Studio Code",
+  "Save as…": "Guardar como…",
+  "Copy path": "Copiar ruta",
+  "Copy file contents": "Copiar contenido del archivo",
+  "Show in Finder": "Mostrar en Finder",
+  "Show in file manager": "Mostrar en el gestor de archivos",
+  "This file could not be found on this computer.": "No se encontró este archivo en este ordenador.",
+  "This action is unavailable for this file.": "Esta acción no está disponible para este archivo.",
+  "Could not complete the file action.": "No se pudo completar la acción del archivo.",
+  "Copy file contents supports UTF-8 text files up to 1 MiB.": "Se puede copiar el contenido de archivos de texto UTF-8 de hasta 1 MiB.",
+  "File on the host computer": "Archivo en el ordenador anfitrión",
+  "Couldn't copy the path.": "No se pudo copiar la ruta."
 }

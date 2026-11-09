@@ -278,8 +278,9 @@ internal val Entry.reactions: List<String> get() = (data["reactions"] as? JsonAr
  * A reply. Holding it opens its menu over a lifted copy, as on iOS, so only that copy is `selectable`:
  * text selection takes the same long press.
  */
+/** 正文中的文件链接可复制路径，长按预览只供选择和复制整段文字。 */
 @Composable private fun AgentText(text: String, selectable: Boolean) {
-    Box(Modifier.background(Palette.bubbleAgent).padding(horizontal = 16.dp, vertical = 10.dp)) { MarkdownText(text, selectable) }
+    Box(Modifier.background(Palette.bubbleAgent).padding(horizontal = 16.dp, vertical = 10.dp)) { MarkdownText(text, selectable, fileLinks = !selectable) }
 }
 
 /** A message's reactions: the user's (tapping one takes it back), then the bots', each emoji with the avatars of the

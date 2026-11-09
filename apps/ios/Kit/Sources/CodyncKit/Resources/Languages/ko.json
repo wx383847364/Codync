@@ -1882,5 +1882,20 @@
   "Sign in there with {email} and add it to your account, and it shows up here.": "거기서 {email}(으)로 로그인하고 계정에 추가하면 여기에 표시됩니다.",
   "Scan with the Codync app or the iPhone Camera.": "Codync 앱 또는 iPhone 카메라로 스캔하세요.",
   "Phones paired without this account lose access and must pair again.": "이 계정으로 페어링하지 않은 휴대폰은 접근 권한을 잃으며 다시 페어링해야 합니다.",
-  "This message's files aren't on this device anymore. Delete it and attach them again.": "이 메시지의 파일이 더 이상 이 기기에 없습니다. 메시지를 삭제하고 파일을 다시 첨부하세요."
+  "This message's files aren't on this device anymore. Delete it and attach them again.": "이 메시지의 파일이 더 이상 이 기기에 없습니다. 메시지를 삭제하고 파일을 다시 첨부하세요.",
+  "Open with…": "다음으로 열기…",
+  "Open with default app": "기본 앱으로 열기",
+  "Open in Cursor": "Cursor에서 열기",
+  "Open in Visual Studio Code": "Visual Studio Code에서 열기",
+  "Save as…": "다른 이름으로 저장…",
+  "Copy path": "경로 복사",
+  "Copy file contents": "파일 내용 복사",
+  "Show in Finder": "Finder에서 보기",
+  "Show in file manager": "파일 관리자에서 보기",
+  "This file could not be found on this computer.": "이 컴퓨터에서 파일을 찾을 수 없습니다.",
+  "This action is unavailable for this file.": "이 파일에는 이 작업을 사용할 수 없습니다.",
+  "Could not complete the file action.": "파일 작업을 완료할 수 없습니다.",
+  "Copy file contents supports UTF-8 text files up to 1 MiB.": "최대 1 MiB의 UTF-8 텍스트 파일 내용을 복사할 수 있습니다.",
+  "File on the host computer": "호스트 컴퓨터의 파일",
+  "Couldn't copy the path.": "경로를 복사할 수 없습니다."
 }

@@ -63,6 +63,15 @@ Codync keeps its own copy of each shared file, so it stays downloadable even if 
 
 A report or a tracker you'll come back to can come as an [artifact](/docs/artifacts) instead: a page that opens from its card. Everything made or shared in a chat is also in its [Library](/docs/artifacts#the-library).
 
+### File links in replies
+
+A bot can link to a file on its computer using Markdown such as `[Report](/Users/me/Desktop/report.pdf)`. Click or right-click the link in the desktop app to see its actions. On the bot’s computer, click a local `.html` or `.htm` link to open it directly in the default browser. Right-click it for the file menu.
+
+- On the bot's computer, the menu offers **Open**, **Save as…**, **Copy path**, **Copy file contents** for UTF-8 text, and **Show in Finder** or **Show in file manager**. On macOS, **Open with…** also offers installed Cursor and Visual Studio Code.
+- On phones and remote desktop connections, use **Copy path** to copy the bot's path. In the terminal, select the reply and press **Y** to copy its file paths.
+
+Ask the bot to share the file when you need a downloadable copy on another device.
+
 ## Approval cards
 
 When a bot's agent asks to run a command, change files or use another tool, an approval card appears in the chat, unless the bot's **Permissions** are **Approve automatically**. In the agent's Auto mode it asks only about what it won't decide on its own. It says what the agent wants ("Wants to run a command", "Wants to change files"…), the computer and folder it runs in, and **Details** with the command or the diff.
@@ -201,4 +210,4 @@ Notices and approvals the bot waits for go to the error output. The exit code sa
 
 Open an attached or bot-shared image to fit it to the window, then choose **100%** to inspect its original detail. On phones, pinch or double-tap to zoom and drag to pan. Previewing a draft does not send it. Very large images remain downloadable when preview limits are exceeded.
 
-Bots can explicitly share files in the group where they are working. Published files stay with that group after the author leaves. Stopping the group cancels unpublished copies. A local image path written in a message remains text; it does not automatically share that file.
+Bots can explicitly share files in the group where they are working. Published files stay with that group after the author leaves. Stopping the group cancels unpublished copies.

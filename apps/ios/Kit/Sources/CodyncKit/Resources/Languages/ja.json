@@ -1882,5 +1882,20 @@
   "Sign in there with {email} and add it to your account, and it shows up here.": "そこで {email} でサインインしてアカウントに追加すると、ここに表示されます。",
   "Scan with the Codync app or the iPhone Camera.": "Codync アプリまたは iPhone のカメラでスキャンしてください。",
   "Phones paired without this account lose access and must pair again.": "このアカウントでペアリングしていないスマートフォンはアクセスを失い、再度ペアリングが必要です。",
-  "This message's files aren't on this device anymore. Delete it and attach them again.": "このメッセージのファイルはこの端末にもうありません。メッセージを削除して、もう一度ファイルを添付してください。"
+  "This message's files aren't on this device anymore. Delete it and attach them again.": "このメッセージのファイルはこの端末にもうありません。メッセージを削除して、もう一度ファイルを添付してください。",
+  "Open with…": "このアプリケーションで開く…",
+  "Open with default app": "デフォルトのアプリで開く",
+  "Open in Cursor": "Cursorで開く",
+  "Open in Visual Studio Code": "Visual Studio Codeで開く",
+  "Save as…": "別名で保存…",
+  "Copy path": "パスをコピー",
+  "Copy file contents": "ファイルの内容をコピー",
+  "Show in Finder": "Finderに表示",
+  "Show in file manager": "ファイルマネージャーに表示",
+  "This file could not be found on this computer.": "このコンピューターでファイルが見つかりませんでした。",
+  "This action is unavailable for this file.": "このファイルではこの操作を利用できません。",
+  "Could not complete the file action.": "ファイル操作を完了できませんでした。",
+  "Copy file contents supports UTF-8 text files up to 1 MiB.": "1 MiB以下のUTF-8テキストファイルの内容をコピーできます。",
+  "File on the host computer": "ホストコンピューター上のファイル",
+  "Couldn't copy the path.": "パスをコピーできませんでした。"
 }

@@ -96,6 +96,12 @@ const bridge: CodyncBridge = {
   updates: { state: async () => updates, onChange: none, check() {}, install() {}, setAutoCheck() {}, setAutoDownload() {} },
   artifacts: { show: async () => {}, openInBrowser: unavailable },
   files: { begin: unavailable, write: async () => {}, finish: async () => {}, cancel: async () => {} },
+  fileLinks: {
+    // 网页演示没有本机文件权限。
+    act: async () => 'unsupported',
+    // 网页演示没有本机编辑器。
+    editors: async () => [],
+  },
   app: {
     reportError() {},
     openExternal: (url) => void window.open(url, '_blank', 'noopener'),

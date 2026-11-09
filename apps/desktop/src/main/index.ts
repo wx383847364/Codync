@@ -7,6 +7,7 @@ import { app, autoUpdater, BrowserWindow, clipboard, dialog, ipcMain, Menu, nati
 import type { HostSnapshot, WindowCommand } from '../shared/ipc'
 import { devPort, HostController } from './host-controller'
 import { registerFileSaves } from './file-saves'
+import { registerFileLinks } from './file-links'
 import { keepArtifactsInFrame, registerArtifacts, registerArtifactScheme } from './artifacts'
 import { registerHostProxy } from './host-proxy'
 import { readClipboardFiles, readFiles } from './files'
@@ -159,6 +160,8 @@ function registerIPC(tray: Tray) {
   ipcMain.on('app:name', (e) => (e.returnValue = app.getName()))
   ipcMain.on('app:scheme', (e) => (e.returnValue = identity.scheme))
   registerFileSaves()
+  // 聊天文件操作只接收本机 host 的会话。
+  registerFileLinks(() => chat, () => host.local?.computerId)
   registerArtifacts()
   ipcMain.on('app:version', (e) => (e.returnValue = app.getVersion()))
   ipcMain.on('app:computerName', (e) => (e.returnValue = computerName()))

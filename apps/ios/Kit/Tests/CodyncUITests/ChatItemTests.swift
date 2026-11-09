@@ -40,6 +40,27 @@ import Testing
     ])
 }
 
+/// 围栏内的文件链接只是示例文字，较短围栏不会提前闭合。
+@Test func markdownFileLinkExamplesStayInsideFences() {
+    let example = "[file](/tmp/example.png)"
+    let source = ["~~~md", example, "~~~", "````md", "```", example, "```", "````"].joined(separator: "\n")
+    #expect(MarkdownBlocks.parse(source) == [.code(example, language: "md"), .code("```\n\(example)\n```", language: "md")])
+}
+
+/// iOS 从 Markdown 提取路径时保留 Unicode、空格和 Windows 盘符。
+@MainActor @Test func markdownFileLinkResolvesHostPaths() throws {
+    for (source, path) in [
+        ("[`App`](</tmp/My App.app>)", "/tmp/My App.app"),
+        ("[image](file:///C:/work/%E5%9B%BE.png)", "C:/work/图.png"),
+        ("[unc](file://server/path.png)", nil),
+        ("[web](https://example.com/a.png)", nil),
+    ] {
+        let text = try AttributedString(markdown: source)
+        let target = try #require(text.runs.compactMap(\.link).first)
+        #expect(MarkdownText.filePath(target) == path)
+    }
+}
+
 @Test func messagesWithoutClientNoncesHaveDistinctRowAndSeparatorIdentities() {
     let entries = ["", "", nil].enumerated().map { index, nonce in
         Entry(id: "incoming-\(index)", seq: Int64(index), botId: "b", rev: Int64(index), kind: "user", turn: 1,
