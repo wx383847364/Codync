@@ -31,6 +31,11 @@ def prompt(message):
         tools = request('tools/list', {})['tools']
         assert any(tool['name'] == 'send_file' for tool in tools)
         text = params['prompt'][0]['text']
+        if 'files-pass-with-progress' in text:
+            # 模拟发文件前的进度与思考，且 ACP 不单独报告工具事件。
+            for kind, chunk in [('agent_message_chunk', '@Observer still preparing.'), ('agent_thought_chunk', 'Prepare the file')]:
+                send({'jsonrpc': '2.0', 'method': 'session/update', 'params': {'sessionId': params['sessionId'],
+                    'update': {'sessionUpdate': kind, 'content': {'type': 'text', 'text': chunk}}}})
         results = []
         if 'path-text-only' in text or 'file-link-menu' in text:
             pass

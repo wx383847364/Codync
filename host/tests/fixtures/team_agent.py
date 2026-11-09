@@ -281,7 +281,27 @@ def prompt(request):
                 response = mcp_call("team", "message_bot", task)
                 assert not response.get("isError"), response
             reply = script["reply"]
+            trailing = script.get("trailingPass")
+            if trailing in ("toolUpdate", "duplicateToolUpdate", "duringReply", "duringReplyThenPass"):
+                # 真实状态变化会继续工作，重复的完成通知不会。
+                status = "completed" if trailing == "duplicateToolUpdate" else "pending"
+                update({"sessionUpdate": "tool_call", "toolCallId": "report-tool", "title": "Check result", "status": status})
+            if trailing in ("duringReply", "duringReplyThenPass"):
+                # 工具完成可以穿插在同一段流文本的两个 chunk 之间。
+                midpoint = len(reply) // 2
+                update({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": reply[:midpoint]}})
+                update({"sessionUpdate": "tool_call_update", "toolCallId": "report-tool", "status": "completed"})
+                reply = reply[midpoint:]
             update({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": reply}})
+            if trailing and trailing != "duringReply":
+                # 复现结果后又输出 pass；工具事件用来区分早先的进度播报。
+                update({"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": "Checking the report"}})
+                if trailing == "tool":
+                    update({"sessionUpdate": "tool_call", "toolCallId": "after-reply", "title": "Check result", "status": "completed"})
+                if trailing in ("toolUpdate", "duplicateToolUpdate"):
+                    update({"sessionUpdate": "tool_call_update", "toolCallId": "report-tool", "status": "completed"})
+                for chunk in ["(pa", "ss)"]:
+                    update({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": chunk}})
             send({"id": request["id"], "result": {"stopReason": "end_turn"}})
             return
         # A room turn: answer only when the user spoke last, otherwise pass.

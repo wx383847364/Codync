@@ -121,10 +121,11 @@ expand it for target status, delivery attempt and retry actions. Neither the col
 nor expanded card repeats the source message. Historical all-cancelled relay limits still show their original reason;
 mixed outcomes keep counts so active work is not mistaken for stopped work. The terminal
 uses its existing selected-message `o` key to expand or collapse these details.
-A `speak` pass is silent; a `task` pass says
-it provided no result. Group work uses the group lane and never records task text as
-user memory or sends its result into the sender's private chat. File/artifact sharing
-from a delivery is unavailable; use the final reply, and user attachments remain usable.
+A `speak` pass publishes no reply. A `task` pass says it provided no result. If a member
+gives a result and then passes after thinking, the host keeps the result unless tool work
+continued or the member requested approval. Group work uses the group lane and never records
+task text as user memory or sends its result into the sender's private chat. A delivery can
+share files in the current group. Artifacts stay in the bot's private chat.
 
 Stop, member removal and group deletion persist cancellation before stopping execution.
 Private Stop keeps requests queued in other groups. `/new` defaults to switching after

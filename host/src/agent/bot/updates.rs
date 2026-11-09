@@ -69,6 +69,7 @@ impl Actor {
         }
     }
 
+    /// 将当前回合的 ACP 更新记入聊天，工具开始时划清进度与结果的边界。
     pub(super) fn on_update(&mut self, u: &Value) {
         // 原生整理的文本可能含其他聊天，只处理使用量和压缩完成事件。
         if self.group_compaction.is_some()
@@ -90,13 +91,17 @@ impl Actor {
                 self.set_activity("Thinking…");
             }
             "tool_call" => {
-                self.close_seg();
+                self.close_seg_for_work();
                 let tool_id = u["toolCallId"].as_str().unwrap_or_default().to_owned();
+                let status = u["status"].as_str().unwrap_or("pending");
+                if let Some(active) = self.active_delivery.as_mut() {
+                    active.note_tool(&tool_id, status);
+                }
                 let mut data = json!({
                     "toolCallId": tool_id,
                     "title": u["title"].as_str().unwrap_or("Tool"),
                     "toolKind": u["kind"].as_str().unwrap_or("other"),
-                    "status": u["status"].as_str().unwrap_or("pending"),
+                    "status": status,
                     "output": "",
                     "diffs": [],
                     "locations": u["locations"].clone(),
@@ -112,8 +117,14 @@ impl Actor {
             }
             "tool_call_update" => {
                 let tool_id = u["toolCallId"].as_str().unwrap_or_default();
-                let Some(entry_id) = self.tools.get(tool_id).cloned() else { return };
-                let Some(mut e) = self.hub.store.entry(&entry_id) else { return };
+                // 在读取工具记录前识别真实状态变化，即使记录写入失败也能划清进度边界。
+                if let Some(status) = u["status"].as_str()
+                    && let Some(active) = self.active_delivery.as_mut()
+                    && active.tool_advanced(tool_id, status)
+                {
+                    active.invalidate_reply_before_pass();
+                }
+                let Some(mut e) = self.tools.get(tool_id).and_then(|id| self.hub.store.entry(id)) else { return };
                 for (k, key) in [("title", "title"), ("kind", "toolKind"), ("status", "status")] {
                     if let Some(v) = u[k].as_str() {
                         e.data[key] = v.into();
@@ -126,7 +137,7 @@ impl Actor {
                 mark_bookkeeping(&self.cfg, self.renamed(), &mut e.data);
                 crate::chat::memory::turns::touched(&self.hub, &self.cfg, &e.data);
                 let working = (e.data["status"] == "in_progress").then(|| activity(&e.data, self.renamed()).to_owned());
-                self.hub.set_entry(&entry_id, &e.data);
+                self.hub.set_entry(&e.id, &e.data);
                 if let Some(working) = working {
                     self.set_activity(&working);
                 }
@@ -174,6 +185,7 @@ impl Actor {
         }
     }
 
+    /// 处理当前回合的权限请求，继续工具工作时清除尾部 pass 的回退正文。
     pub(super) async fn on_permission(&mut self, rpc_id: Value, params: Value) {
         // 原生整理不执行工作；意外工具权限请求一律拒绝而不生成群审批卡。
         if self.group_compaction.is_some() {
@@ -188,7 +200,12 @@ impl Actor {
         if self.cfg.permission == Permission::Auto
             && let (Some(option), Some(conn)) = (auto_pick(&options), &self.conn)
         {
-            let _ = conn.acp.respond(rpc_id, acp::permission_answer(Some(option))).await;
+            let acp = conn.acp.clone();
+            // 自动审批使旧进度失效，但不切断正在到达的正文。
+            if let Some(active) = self.active_delivery.as_mut() {
+                active.invalidate_reply_before_pass();
+            }
+            let _ = acp.respond(rpc_id, acp::permission_answer(Some(option))).await;
             return;
         }
         let title = tool["title"]
@@ -250,10 +267,10 @@ impl Actor {
         self.show_card(title, data, Answer::Codync(reply));
     }
 
-    /// Posts an approval card in the turn's lane and tells the user it needs them.
+    /// 在当前聊天发布审批卡并通知用户，审批前的进度留在记录里。
     fn show_card(&mut self, title: &str, data: Value, answer: Answer) {
         let turn = self.turn.unwrap_or(0);
-        self.close_seg();
+        self.close_seg_for_work();
         if let Some(e) = self.add(EntryKind::Permission, turn, data) {
             self.perms.insert(e.id, answer);
         }
@@ -405,15 +422,8 @@ impl Actor {
         }
         let same = matches!(&self.seg, Seg::Open { kind: k, .. } if *k == kind);
         // 结果缓冲独立于 entry 是否写入成功，首个 chunk 遇到数据库故障也不能丢失。
-        if kind == SegKind::Text
-            && let Some(active) = self.active_delivery.as_mut()
-        {
-            if active.output_open {
-                active.output.get_or_insert_default().push_str(text);
-            } else {
-                active.output = Some(text.to_owned());
-                active.output_open = true;
-            }
+        if let Some(active) = self.active_delivery.as_mut() {
+            active.buffer_output(kind, text);
         }
         if !same {
             let output_open = self.active_delivery.as_ref().is_some_and(|a| a.output_open);

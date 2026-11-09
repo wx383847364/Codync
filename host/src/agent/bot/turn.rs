@@ -144,8 +144,7 @@ impl Actor {
         self.last_text = None;
         // fallback 的失败片段只留 trace，不能成为下一模型 attempt 的最终回复或派生派工。
         if let Some(active) = self.active_delivery.as_mut() {
-            active.output = None;
-            active.output_open = false;
+            active.reset_output();
         }
         self.sent.clear();
         self.reacted = Reacted::No;
@@ -285,7 +284,7 @@ impl Actor {
             return;
         }
         // 写库失败时从仍在内存的流缓冲保留完整结果，不从可能滞后的 entry 重建。
-        let delivery_text = self.active_delivery.as_ref().and_then(|active| active.output.clone());
+        let delivery_text = self.active_delivery.as_ref().and_then(super::delivery::ActiveDelivery::reply_text);
         self.after_turn(done);
         // The bot's own edits to its memory files, checked and shown in the chat it made them from.
         memory::turns::scan_after_turn(self.hub.clone(), self.cfg.clone());

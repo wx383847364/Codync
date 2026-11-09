@@ -196,6 +196,35 @@ test('relay compacts bounded background past fixed limits while preserving origi
   }
 })
 
+/** 同一次群投递先给出结果再输出 pass 时，聊天应显示原结果与完成卡。 */
+test('a trailing pass does not erase a group delivery reply', async () => {
+  const { browser, page } = await attach()
+  const suffix = Date.now()
+  const cwd = join(tmpdir(), `codync-group-pass-${suffix}`)
+  mkdirSync(cwd, { recursive: true })
+  const reply = 'Verification completed with one result.'
+  writeFileSync(join(cwd, 'group-script.json'), JSON.stringify({ reply, trailingPass: 'thought' }))
+  let member: string | undefined
+  let group: string | undefined
+  try {
+    member = (await api<{ bot: { id: string } }>(page, 'createBot', { name: `Report member ${suffix}`, backend: 'custom', cwd, command: `python3 -u '${join(__dirname, '../../../host/tests/fixtures/team_agent.py')}'`, connectors: [], skills: [], notify: false })).bot.id
+    const name = `Report room ${suffix}`
+    group = (await api<{ bot: { id: string } }>(page, 'createBot', { name, kind: 'group', members: [member] })).bot.id
+    await page.locator('.roster-row', { hasText: name }).click()
+    await typeMessage(page, 'Run the verification')
+    const transcript = page.getByRole('log', { name: 'Messages' })
+    await expect(transcript.getByRole('button', { name: '群内派工已完成', exact: true })).toBeVisible()
+    await expect(transcript.getByText(reply, { exact: true })).toBeVisible()
+    await expect(transcript.getByRole('button', { name: '群内派工未回复', exact: true })).toHaveCount(0)
+  } finally {
+    // 清理该场景创建的资源，避免影响后续用例。
+    if (group) await api(page, 'deleteBot', { botId: group }).catch(() => {})
+    if (member) await api(page, 'deleteBot', { botId: member }).catch(() => {})
+    rmSync(cwd, { recursive: true, force: true })
+    await browser.close()
+  }
+})
+
 /** 未回复投递的重试入口位于详情中，点击后仍由 host 创建新投递和新 attempt。 */
 test('folded delivery details preserve explicit retry and a new collapsed attempt', async () => {
   const { browser, page } = await attach()

@@ -68,6 +68,10 @@ impl Actor {
             let _ = reply.send(Err(anyhow!("too many pending file shares")));
             return;
         }
+        // 群内开始复制即进入工具工作，复制失败后也不能恢复旧进度。
+        if let Some(active) = self.active_delivery.as_mut() {
+            active.invalidate_reply_before_pass();
+        }
         self.files.pending.push(cancelled.clone());
         let epoch = self.files.epoch;
         let lane = self.lane.clone();
@@ -143,7 +147,7 @@ impl Actor {
             ensure!(self.hub.store.bot(&self.cfg.id)?.is_some_and(|bot| !bot.deleted), "bot was deleted");
             let mut snapshot = completed.result?;
             let text = format!("{} ({} bytes)", snapshot.meta.name, snapshot.meta.size);
-            self.close_seg();
+            self.close_seg_for_work();
             let data = json!({"text": text, "final": true, "files": [snapshot.meta], "author": self.cfg.id});
             if let Some(id) = &completed.delivery_id {
                 self.hub.publish_delivery_file(id, &self.cfg.id, &completed.lane, turn, &data)?;
