@@ -24,6 +24,18 @@ onFlowComplete:
     commands:
       - launchApp:
           appId: com.pokai.Codync.android.dev
+# 已配对的设备仍可能从免登录欢迎页启动，先进入机器人列表再测试群菜单。
+- extendedWaitUntil:
+    visible: "(${output.group}|Continue without an account)"
+    timeout: 60000
+- runFlow:
+    when:
+      visible: "Continue without an account"
+    commands:
+      - tapOn: "Continue without an account"
+- extendedWaitUntil:
+    visible: ${output.group}
+    timeout: 60000
 - longPressOn: ${output.group}
 - tapOn: "Create new group session"
 - assertVisible: "${output.group} 1"
