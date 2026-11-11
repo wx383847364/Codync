@@ -7,10 +7,19 @@ released version's section; a version without one gets the PRs' "What's New: And
 else a generic "Bug fixes and improvements" line. Delete old sections.
 -->
 
-## 2.43.0
+## 2.45.0
 
 ### zh-Hant
 - 長按 Bot 分享的檔案，即可開啟、另存或複製分享當時的檔案內容。
+- 在聊天輸入 / 可搜尋 Bot 工作區的檔案。選取後插入 @檔名，傳送時讓 Bot 讀取所選檔案。
+
+### en-US
+- Touch and hold a shared file to open it, save a copy, or copy its text.
+- Type / in chat to find files in the bot’s workspace. Select a file to insert an @ reference the bot can read when you send.
+
+## 2.43.0
+
+### zh-Hant
 - 群組可同時顯示多位 Bot 的工作狀態和用時。
 - 點一下對話中的檔案連結或行內程式碼中的絕對路徑，即可複製電腦上的路徑。
 - 圖片可切換原始像素、縮放和平移，並限制快取與讀取資源。
@@ -22,7 +31,6 @@ else a generic "Bug fixes and improvements" line. Delete old sections.
 - 不登入也能用 Wi-Fi 或 Tailscale；帳號可啟用中繼。重試保留附件，儲存故障可重試保存。
 
 ### en-US
-- Touch and hold a shared file to open it, save a copy, or copy its text.
 - See each active group member’s status and elapsed time.
 - Tap file links or absolute paths in inline code to copy the computer’s path.
 - Original image pixels with zoom/pan and bounded caching.
