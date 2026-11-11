@@ -1,51 +1,80 @@
-name: Android
-
+name: Workspace file reference mobile validation
 on:
-  push:
-    branches: [main, dev]
-    paths:
-      - "apps/android/**"
-      - "apps/project.yml"
-      - "docs/reference/fixtures/remote-relay-vectors.json"
-      - ".github/workflows/android.yml"
-  pull_request:
-    paths:
-      - "apps/android/**"
-      - "apps/project.yml"
-      - "docs/reference/fixtures/remote-relay-vectors.json"
-      - ".github/workflows/android.yml"
   workflow_dispatch:
-
 permissions:
   contents: read
-
-# A newer push to the same PR supersedes the run in progress.
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
-
 jobs:
-  build:
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: apps/android
+  mobile:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: ios
+            os: macos-26
+          - platform: android
+            os: ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "21"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: host
+      - name: Build host
+        working-directory: host
+        run: |
+          rustup toolchain install
+          cargo build --locked --bin codync-host
+      - name: Install Maestro
+        shell: bash
+        run: |
+          curl -fsSL https://get.maestro.mobile.dev | bash
+          echo "$HOME/.maestro/bin" >> "$GITHUB_PATH"
+      - name: Install iPhone simulator app
+        if: matrix.platform == 'ios'
+        shell: bash
+        run: |
+          device=$(xcrun simctl list devices available -j | python3 -c 'import json,sys; print(next(d["udid"] for v in json.load(sys.stdin)["devices"].values() for d in v if d["name"].startswith("iPhone")))')
+          xcrun simctl bootstatus "$device" -b
+          xcodebuild build -project apps/Codync.xcodeproj -scheme 'iOS Dev' -configuration DevDebug -destination "platform=iOS Simulator,id=$device" -derivedDataPath build/dd CODE_SIGNING_ALLOWED=NO -quiet
+          app=$(find build/dd/Build/Products/DevDebug-iphonesimulator -maxdepth 1 -name '*.app' -print -quit)
+          test -n "$app"
+          xcrun simctl install "$device" "$app"
+          echo "CODYNC_TEST_DEVICE=$device" >> "$GITHUB_ENV"
       - uses: android-actions/setup-android@v3
+        if: matrix.platform == 'android'
         with:
           packages: platform-tools
-      - run: sdkmanager "platforms;android-37.0" "build-tools;37.0.0"
       - uses: gradle/actions/setup-gradle@v4
-      - run: python3 tools/agent_icons_test.py
-      # PRs run the tests, compile and lint. The minified release build (R8) runs once a change lands on
-      # dev or main, before a tag ships it.
-      - run: ./gradlew :core:test :app:testDebugUnitTest :app:assembleDebug :app:assembleDebugAndroidTest :app:lintDebug ${{ github.event_name != 'pull_request' && ':app:assembleRelease' || '' }}
+        if: matrix.platform == 'android'
+      - name: Install Android emulator app
+        if: matrix.platform == 'android'
+        shell: bash
+        run: |
+          test -e /dev/kvm
+          sudo chmod 0666 /dev/kvm
+          sdkmanager 'platforms;android-37.0' 'build-tools;37.0.0' 'emulator' 'system-images;android-36;google_apis;x86_64'
+          echo no | avdmanager create avd -n codync_worktree -k 'system-images;android-36;google_apis;x86_64' -d pixel_7
+          "$ANDROID_HOME/emulator/emulator" -avd codync_worktree -no-window -no-snapshot -noaudio -no-boot-anim -gpu swiftshader_indirect > "$RUNNER_TEMP/emulator.log" 2>&1 &
+          (cd apps/android && ./gradlew :app:assembleDebug)
+          timeout 180 adb wait-for-device
+          timeout 180 bash -c 'until [ "$(adb shell getprop sys.boot_completed | tr -d "\r")" = 1 ]; do sleep 2; done'
+          adb shell input keyevent 82
+          adb install -r apps/android/app/build/outputs/apk/debug/app-debug.apk
+          adb reverse tcp:19391 tcp:19391
+          adb shell pm grant com.pokai.Codync.android.dev android.permission.POST_NOTIFICATIONS
+          echo 'CODYNC_TEST_DEVICE=emulator-5554' >> "$GITHUB_ENV"
+      - name: Exercise the installed client against the host
+        run: python3 apps/maestro/validate-workspace-file.py ${{ matrix.platform }}
       - uses: actions/upload-artifact@v4
+        if: failure()
         with:
-          name: codync-android-debug
-          path: apps/android/app/build/outputs/apk/debug/*.apk
+          name: workspace-file-validation-${{ matrix.platform }}
+          path: |
+            ${{ runner.temp }}/workspace-file-validation/maestro
+            ${{ runner.temp }}/workspace-file-validation/host.log
+            ${{ runner.temp }}/emulator.log

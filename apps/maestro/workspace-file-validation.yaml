@@ -1,0 +1,36 @@
+appId: com.pokai.Codync.ios.dev
+---
+- runFlow:
+    when:
+      platform: iOS
+    commands:
+      - launchApp:
+          appId: com.pokai.Codync.ios.dev
+          arguments:
+            "-reviewInvitationOff": true
+- runFlow:
+    when:
+      platform: Android
+    commands:
+      - launchApp:
+          appId: com.pokai.Codync.android.dev
+- tapOn: "Continue without an account"
+- tapOn: "Continue"
+- tapOn: "Pairing link or code"
+- inputText: ${PAIRING_URL}
+- tapOn: "Pair"
+- extendedWaitUntil:
+    visible: "Workspace Reference Check"
+    timeout: 90000
+- tapOn: "Workspace Reference Check"
+- tapOn: "Ask Workspace Reference Check"
+- inputText: "READ_WORKSPACE_FILE /guide"
+- extendedWaitUntil:
+    visible: "guide.md"
+    timeout: 20000
+- tapOn: "guide.md"
+- assertVisible: "READ_WORKSPACE_FILE @guide.md.*"
+- tapOn: "Send"
+- extendedWaitUntil:
+    visible: "Selected mobile workspace contents"
+    timeout: 20000
