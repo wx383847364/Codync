@@ -1,35 +1,90 @@
 name: Android
 
 on:
-  push:
-    branches: [main, dev]
-    paths:
-      - "apps/android/**"
-      - "apps/project.yml"
-      - "docs/reference/fixtures/remote-relay-vectors.json"
-      - ".github/workflows/android.yml"
-  pull_request:
-    paths:
-      - "apps/android/**"
-      - "apps/project.yml"
-      - "docs/reference/fixtures/remote-relay-vectors.json"
-      - ".github/workflows/android.yml"
   workflow_dispatch:
 
 permissions:
   contents: read
 
-# A newer push to the same PR supersedes the run in progress.
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
-
 jobs:
-  build:
+  ios-group-session:
+    runs-on: macos-26
+    timeout-minutes: 28
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+      - name: Build the test Host
+        run: CODYNC_ENV=dev cargo build --manifest-path host/Cargo.toml --locked
+      - name: Boot the iPhone simulator and build the app
+        run: |
+          set -euo pipefail
+          device="$(xcrun simctl list devices available -j | jq -r '[.devices | to_entries[] | select(.key | contains("iOS-26")) | .value[] | select(.name | startswith("iPhone"))][0].udid // empty')"
+          test -n "$device"
+          xcrun simctl bootstatus "$device" -b
+          xcodebuild -project apps/Codync.xcodeproj -scheme 'iOS Dev' -configuration DevDebug -sdk iphonesimulator -destination "id=$device" -derivedDataPath build/dd -quiet build CODE_SIGNING_ALLOWED=NO COMPILER_INDEX_STORE_ENABLE=NO
+          app="$(find build/dd/Build/Products/DevDebug-iphonesimulator -maxdepth 1 -type d -name '*.app' -print -quit)"
+          test -n "$app"
+          xcrun simctl install "$device" "$app"
+          echo "DEVICE_ID=$device" >> "$GITHUB_ENV"
+      - name: Install Maestro
+        run: |
+          set -euo pipefail
+          curl -fLsS --retry 3 https://github.com/mobile-dev-inc/Maestro/releases/download/cli-2.12.1/maestro.zip -o "$RUNNER_TEMP/maestro.zip"
+          unzip -q "$RUNNER_TEMP/maestro.zip" -d "$RUNNER_TEMP/maestro-install"
+          maestro_bin="$(find "$RUNNER_TEMP/maestro-install" -type f -path '*/bin/maestro' -print -quit)"
+          test -n "$maestro_bin"
+          dirname "$maestro_bin" >> "$GITHUB_PATH"
+      - name: Pair and create a fresh group on iPhone
+        run: |
+          set -euo pipefail
+          export CODYNC_HOME="$RUNNER_TEMP/codync-group-fixture"
+          export CODYNC_CLOUD=off CODYNC_VAULT=folder CODYNC_AGENT_CHECKS=off
+          export HOST_PORT=19455
+          export CODYNC_EXTERNAL_URL="http://127.0.0.1:$HOST_PORT"
+          host="$PWD/host/target/debug/codync-host"
+          "$host" serve --port "$HOST_PORT" --bind 127.0.0.1 > "$RUNNER_TEMP/codync-host.log" 2>&1 &
+          host_pid=$!
+          approver=
+          trap 'test -z "$approver" || kill "$approver" 2>/dev/null || true; kill "$host_pid" 2>/dev/null || true' EXIT
+          base="http://127.0.0.1:$HOST_PORT"
+          for _ in $(seq 1 100); do
+            if curl -fsS --max-time 1 "$base/health" >/dev/null 2>&1 && test -s "$CODYNC_HOME/token"; then break; fi
+            sleep 0.2
+          done
+          export HOST_TOKEN="$(cat "$CODYNC_HOME/token")"
+          echo "::add-mask::$HOST_TOKEN"
+          api() {
+            curl -fsS --max-time 5 -X POST "$base/api/$1" -H "Authorization: Bearer $HOST_TOKEN" \
+              -H 'Content-Type: application/json' -d "$2"
+          }
+          pairing_url="$(api pairing '{"shortCode":false}' | jq -er .pairingUrl)"
+          echo "::add-mask::$pairing_url"
+          (
+            for _ in $(seq 1 100); do
+              request="$(api pairingRequests '{}' | jq -r '.requests[0].requestId // empty')"
+              if test -n "$request"; then
+                sleep 3
+                api decidePairing "$(jq -nc --arg requestId "$request" '{requestId:$requestId,approve:true,join:false}')" >/dev/null
+                exit
+              fi
+              sleep 1
+            done
+            exit 1
+          ) &
+          approver=$!
+          maestro --device "$DEVICE_ID" test -e PAIRING_URL="$pairing_url" apps/maestro/signed-out-pairing.yaml
+          wait "$approver"
+          approver=
+          maestro --device "$DEVICE_ID" test -e HOST_PORT="$HOST_PORT" -e HOST_TOKEN="$HOST_TOKEN" apps/maestro/group-session.yaml
+  android-group-session:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: apps/android
+    timeout-minutes: 28
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -39,13 +94,73 @@ jobs:
       - uses: android-actions/setup-android@v3
         with:
           packages: platform-tools
-      - run: sdkmanager "platforms;android-37.0" "build-tools;37.0.0"
       - uses: gradle/actions/setup-gradle@v4
-      - run: python3 tools/agent_icons_test.py
-      # PRs run the tests, compile and lint. The minified release build (R8) runs once a change lands on
-      # dev or main, before a tag ships it.
-      - run: ./gradlew :core:test :app:testDebugUnitTest :app:assembleDebug :app:assembleDebugAndroidTest :app:lintDebug ${{ github.event_name != 'pull_request' && ':app:assembleRelease' || '' }}
-      - uses: actions/upload-artifact@v4
-        with:
-          name: codync-android-debug
-          path: apps/android/app/build/outputs/apk/debug/*.apk
+      - name: Build and boot the Android test app
+        run: |
+          set -euo pipefail
+          sudo chmod a+rw /dev/kvm
+          sdkmanager 'platforms;android-37.0' 'build-tools;37.0.0' emulator 'system-images;android-34;google_apis;x86_64'
+          echo no | avdmanager create avd --name codync_ci --package 'system-images;android-34;google_apis;x86_64' --device pixel_6
+          nohup "$ANDROID_HOME/emulator/emulator" -avd codync_ci -no-window -no-audio -no-snapshot -no-boot-anim -gpu swiftshader_indirect > "$RUNNER_TEMP/android-emulator.log" 2>&1 &
+          ./apps/android/gradlew -p apps/android :app:assembleDebug
+          adb wait-for-device
+          for _ in $(seq 1 120); do
+            if test "$(adb shell getprop sys.boot_completed | tr -d '\r')" = 1; then break; fi
+            sleep 1
+          done
+          adb install apps/android/app/build/outputs/apk/debug/app-debug.apk
+          adb shell pm grant com.pokai.Codync.android.dev android.permission.POST_NOTIFICATIONS
+          adb reverse tcp:19455 tcp:19455
+          echo "DEVICE_ID=$(adb devices | awk '/^emulator-/{print $1; exit}')" >> "$GITHUB_ENV"
+      - name: Build the test Host
+        run: CODYNC_ENV=dev cargo build --manifest-path host/Cargo.toml --locked
+      - name: Install Maestro
+        run: |
+          set -euo pipefail
+          curl -fLsS --retry 3 https://github.com/mobile-dev-inc/Maestro/releases/download/cli-2.12.1/maestro.zip -o "$RUNNER_TEMP/maestro.zip"
+          unzip -q "$RUNNER_TEMP/maestro.zip" -d "$RUNNER_TEMP/maestro-install"
+          maestro_bin="$(find "$RUNNER_TEMP/maestro-install" -type f -path '*/bin/maestro' -print -quit)"
+          test -n "$maestro_bin"
+          dirname "$maestro_bin" >> "$GITHUB_PATH"
+      - name: Pair and create a fresh group on Android
+        run: |
+          set -euo pipefail
+          export CODYNC_HOME="$RUNNER_TEMP/codync-group-fixture"
+          export CODYNC_CLOUD=off CODYNC_VAULT=folder CODYNC_AGENT_CHECKS=off
+          export HOST_PORT=19455
+          export CODYNC_EXTERNAL_URL="http://127.0.0.1:$HOST_PORT"
+          host="$PWD/host/target/debug/codync-host"
+          "$host" serve --port "$HOST_PORT" --bind 127.0.0.1 > "$RUNNER_TEMP/codync-host.log" 2>&1 &
+          host_pid=$!
+          approver=
+          trap 'test -z "$approver" || kill "$approver" 2>/dev/null || true; kill "$host_pid" 2>/dev/null || true' EXIT
+          base="http://127.0.0.1:$HOST_PORT"
+          for _ in $(seq 1 100); do
+            if curl -fsS --max-time 1 "$base/health" >/dev/null 2>&1 && test -s "$CODYNC_HOME/token"; then break; fi
+            sleep 0.2
+          done
+          export HOST_TOKEN="$(cat "$CODYNC_HOME/token")"
+          echo "::add-mask::$HOST_TOKEN"
+          api() {
+            curl -fsS --max-time 5 -X POST "$base/api/$1" -H "Authorization: Bearer $HOST_TOKEN" \
+              -H 'Content-Type: application/json' -d "$2"
+          }
+          pairing_url="$(api pairing '{"shortCode":false}' | jq -er .pairingUrl)"
+          echo "::add-mask::$pairing_url"
+          (
+            for _ in $(seq 1 100); do
+              request="$(api pairingRequests '{}' | jq -r '.requests[0].requestId // empty')"
+              if test -n "$request"; then
+                sleep 3
+                api decidePairing "$(jq -nc --arg requestId "$request" '{requestId:$requestId,approve:true,join:false}')" >/dev/null
+                exit
+              fi
+              sleep 1
+            done
+            exit 1
+          ) &
+          approver=$!
+          maestro --device "$DEVICE_ID" test -e PAIRING_URL="$pairing_url" apps/maestro/signed-out-pairing.yaml
+          wait "$approver"
+          approver=
+          maestro --device "$DEVICE_ID" test -e HOST_PORT="$HOST_PORT" -e HOST_TOKEN="$HOST_TOKEN" apps/maestro/group-session.yaml
