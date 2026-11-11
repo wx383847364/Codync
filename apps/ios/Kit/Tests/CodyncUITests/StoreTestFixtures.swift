@@ -95,7 +95,7 @@ actor FakeRemote: RemoteTransport {
         for s in mailboxSinks { s.yield(event) }
     }
 
-    /// 返回 Host 测试响应并记录客户端的请求，按各方法读取需要的参数。
+    /// 模拟 Host RPC，并记录调用供测试验证。
     private func respond(_ method: String, _ body: Data) throws -> Data {
         guard !isShutdown else { throw HostError.unreachable }
         calls.append(method)
@@ -113,13 +113,23 @@ actor FakeRemote: RemoteTransport {
             readReceipts.append(body)
             return Data("{}".utf8)
         case "send":
-            // 提及和文件是数组，只提取字符串字段以构造响应。
-            let fields = (try JSONSerialization.jsonObject(with: body) as? [String: Any]) ?? [:]
-            let b = fields.compactMapValues { $0 as? String }
-            sent.append(b["text"] ?? "")
-            replyTos.append(b["replyTo"])
-            let entry = #"{"id":"e\#(sent.count)","seq":\#(sent.count),"botId":"\#(b["botId"] ?? "")","rev":\#(sent.count),"kind":"user","turn":1,"data":{"text":"\#(b["text"] ?? "")","clientNonce":"\#(b["clientNonce"] ?? "")"},"createdAt":1,"updatedAt":1}"#
-            return Data(#"{"entry":\#(entry)}"#.utf8)
+            // 只解码测试关心的字段，允许请求同时携带结构化提及等数组。
+            struct SendBody: Decodable {
+                let botId: String
+                let text: String
+                let clientNonce: String
+                let replyTo: String?
+            }
+            let message = try JSONDecoder().decode(SendBody.self, from: body)
+            sent.append(message.text)
+            replyTos.append(message.replyTo)
+            let entry: [String: Any] = [
+                "id": "e\(sent.count)", "seq": sent.count, "botId": message.botId,
+                "rev": sent.count, "kind": "user", "turn": 1,
+                "data": ["text": message.text, "clientNonce": message.clientNonce],
+                "createdAt": 1, "updatedAt": 1,
+            ]
+            return try JSONSerialization.data(withJSONObject: ["entry": entry])
         case "startCall":
             // A fresh credential per provider session, so a test can tell a replaced session from the first.
             let n = calls.filter { $0 == "startCall" }.count

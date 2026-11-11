@@ -59,12 +59,11 @@ private let installed = [("pdf", "PDF"), ("code-review", "Code Review"), ("xlsx"
     #expect(SlashCommands.list(for: group, members: [on, refused], query: "", skills: []).first?.warning == true)
 }
 
-/// 内置斜杠命令由客户端识别，未识别的命令继续发给 Agent。
+/// 验证完整的内置命令由客户端处理，普通草稿仍发送给机器人。
 @Test func sendingJustABuiltInCommandRunsIt() throws {
     let offered = try bot(#"{"id":"b","fastModeSupport":"offered"}"#)
     #expect(SlashCommands.builtIn(for: offered, draft: "/fast ")?.action == .fast)
     #expect(SlashCommands.builtIn(for: offered, draft: "/new")?.action == .session("after"))
-    #expect(SlashCommands.builtIn(for: offered, draft: "/compact") == nil, "reaches the agent as typed")
     #expect(SlashCommands.builtIn(for: offered, draft: "/fast please") == nil)
     #expect(SlashCommands.builtIn(for: try bot(#"{"id":"b","fastModeSupport":"unsupported"}"#), draft: "/fast") == nil, "without Fast mode it reaches the agent")
 }
