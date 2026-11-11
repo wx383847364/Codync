@@ -6,6 +6,14 @@ any left). tools/asc-submit.py reads the released version's section;
 a version without one gets a generic "Bug fixes and improvements" line. Delete old sections.
 -->
 
+## 2.45.0
+
+### zh-Hant
+- 長按群組可用原有成員建立新的空白會話，成員從各自的新會話開始。
+
+### en-US
+- Touch and hold a group to start a fresh conversation with the same bots. Each bot gets its own session in the new group.
+
 ## 2.43.0
 
 ### zh-Hant
