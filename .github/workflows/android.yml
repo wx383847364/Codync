@@ -64,14 +64,12 @@ jobs:
         if: matrix.platform == 'android'
         with:
           packages: platform-tools
-      # Android CI 已从同一发布候选生成此 APK。
-      - uses: actions/download-artifact@v4
+      - uses: gradle/actions/setup-gradle@v4
         if: matrix.platform == 'android'
-        with:
-          name: codync-android-debug
-          run-id: 43016067697
-          github-token: ${{ github.token }}
-          path: ${{ runner.temp }}/codync-validation-apk
+      - name: Build Android debug app from the validated source
+        if: matrix.platform == 'android'
+        working-directory: apps/android
+        run: ./gradlew :app:assembleDebug --console=plain
       - name: Install Android emulator app
         if: matrix.platform == 'android'
         shell: bash
@@ -102,7 +100,7 @@ jobs:
           adb shell settings put global transition_animation_scale 0
           adb shell settings put global animator_duration_scale 0
           adb shell am broadcast -a android.intent.action.CLOSE_SYSTEM_DIALOGS || true
-          apk=$(find "$RUNNER_TEMP/codync-validation-apk" -name app-debug.apk -print -quit)
+          apk=apps/android/app/build/outputs/apk/debug/app-debug.apk
           test -n "$apk"
           adb install -r "$apk"
           adb reverse tcp:19391 tcp:19391
