@@ -179,22 +179,24 @@ export function AgentBubble({ entry, openTrace, reply, openArtifact }: { entry: 
   const store = useStore()
   const [hovering, setHovering] = useState(false)
   const copy = () => entry.data.text && window.codync.app.copy(entry.data.text)
+  const reactions = reactionPick(store, entry)
+  const items = () => [
+    { title: 'Copy', icon: 'square.on.square', action: copy },
+    ...(reply ? [{ title: 'Reply', icon: 'arrowshape.turn.up.left', action: reply }] : []),
+    { title: 'Show what it did', icon: 'list.bullet', action: openTrace },
+  ]
   return (
     <div className="message agent" title={fullDate.format(entry.createdAt)} onMouseEnter={() => setHovering(true)} onMouseLeave={() => setHovering(false)}>
       <div className="message-body">
         <Bubble
           className={entry.data.files?.length || entry.data.artifact ? 'file-message' : 'bubble agent'}
-          reactions={reactionPick(store, entry)}
-          items={() => [
-            { title: 'Copy', icon: 'square.on.square', action: copy },
-            ...(reply ? [{ title: 'Reply', icon: 'arrowshape.turn.up.left', action: reply }] : []),
-            { title: 'Show what it did', icon: 'list.bullet', action: openTrace },
-          ]}
+          reactions={reactions}
+          items={items}
         >
           {entry.data.artifact ? (
             <ArtifactCard botId={entry.botId} card={entry.data.artifact} open={() => openArtifact?.(entry.data.artifact!.id)} />
           ) : entry.data.files?.length ? (
-            <div className="file-message-cards">{entry.data.files.map((file) => <FileDownloadCard key={file.id} entry={entry} file={file} />)}</div>
+            <div className="file-message-cards">{entry.data.files.map((file) => <FileDownloadCard key={file.id} entry={entry} file={file} messageItems={items} reactions={reactions} />)}</div>
           ) : (
             <MarkdownText text={entry.data.text ?? ''} fileLinks />
           )}

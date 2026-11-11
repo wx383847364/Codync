@@ -5,6 +5,8 @@
 // Key handlers read best with k (key), m / l / f / a (the sheet), n (rows).
 #![allow(clippy::many_single_char_names)]
 
+use super::net::files::SharedFileAction;
+
 mod agent;
 mod analytics;
 mod bot_chat;
@@ -311,7 +313,7 @@ impl App {
         }
         if let Some(meta) = data["files"].as_array().and_then(|files| files.first()) {
             match serde_json::from_value(meta.clone()) {
-                Ok(file) => self.download_shared(entry.to_owned(), file),
+                Ok(file) => self.download_shared(entry.to_owned(), file, SharedFileAction::Save),
                 Err(error) => self.flash(&format!("Invalid file: {error}")),
             }
             return;
@@ -330,8 +332,8 @@ impl App {
     }
 
     /// Saves a file the bot shared (`readFile`), with progress; `f` again cancels.
-    fn download_shared(&mut self, entry: String, file: crate::chat::files::SharedFile) {
-        self.download = Some(self.client.download_file(entry, file, self.tx.clone()));
+    fn download_shared(&mut self, entry: String, file: crate::chat::files::SharedFile, action: SharedFileAction) {
+        self.download = Some(self.client.download_file(entry, file, action, self.tx.clone()));
         self.flash("Downloading… · f cancels");
     }
 

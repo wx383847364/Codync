@@ -59,7 +59,13 @@ Bots can send files back when you ask, such as a report or a build. Each one sho
 - **iPhone:** opens the share sheet, including Save to Files.
 - **Terminal UI:** pick the message (`v`), then `f` saves it to Downloads.
 
-Codync keeps its own copy of each shared file, so it stays downloadable even if the bot later changes or deletes the original. Bots share files only in their own chat, not in group chats or routine runs.
+Codync keeps the file as it was shared, even if the bot later changes or deletes the original. Bots can share files in a direct chat or their current group.
+
+- **Desktop:** right-click the file card or select its filename for **Open**, **Save as…**, **Copy path**, **Copy file contents**, and **Show in Finder** or **Show in file manager**. macOS also offers installed editors under **Open with…**. **Copy path** creates a temporary copy on your current computer and copies its path.
+- **iPhone and Android:** touch and hold a file card to open it, choose an app, save a copy, or copy its text.
+- **Terminal UI:** open the chat’s Library with **L**, select the file, and press **Enter** to open, **f** to save, **Y** to copy a local path, **C** to copy text, or **R** to reveal it. Local file actions place the copy in Downloads.
+
+**Copy file contents** supports UTF-8 text files up to 1 MiB, or 256 KiB on Android.
 
 A report or a tracker you'll come back to can come as an [artifact](/docs/artifacts) instead: a page that opens from its card. Everything made or shared in a chat is also in its [Library](/docs/artifacts#the-library).
 

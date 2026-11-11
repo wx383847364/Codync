@@ -80,8 +80,7 @@ into memory through the same `readFile` chunks, checks size and SHA-256, and kee
 in the sent-attachment cache under its file id; a failed read leaves the placeholder.
 The terminal UI shows only the card.
 
-This feature adds no previews of other file types, folder packaging, background
-transfers, persistent resume or Watch UI. Existing bots do not publish workspace files
+The inline preview is for images. Shared files can also be opened in the system previewer or an external app. Existing bots do not publish workspace files
 automatically: they must call `send_file`.
 
 ## Original image viewing and bounds
@@ -93,6 +92,15 @@ The default viewer fits the image to the window. **100%** displays original pixe
 Desktop byte caches are limited to 64 MiB per computer and two concurrent downloads, with identical requests shared and retirement clearing the cache. Phones queue image reads and use bounded disk caches (512 MiB soft limit, preserving the current file). Failed previews can be retried explicitly.
 
 Group file copying freezes chat and delivery identity. Publication rechecks the started delivery, author and membership under the same lock as Stop and member removal; stale copies cannot publish in a later turn or private chat. Snapshot storage remains owned by the source chat.
+
+## Shared file card actions
+
+The desktop card uses the same menu and native file handlers as local path links. File cards
+read their own entry and file ID through `readFile`, even when the chat is on another computer.
+The download checks the snapshot's size and SHA-256 before an action can use it. Open, copy path,
+and reveal materialize a temporary copy on the current computer. Save as writes to the chosen
+destination. Copy file contents reads verified UTF-8 text up to 1 MiB. iPhone and Android expose
+open, open with, save, and text copy on long press. Android copies UTF-8 text up to 256 KiB. The terminal exposes file actions in the Library.
 
 ## File links in replies
 

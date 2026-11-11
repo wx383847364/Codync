@@ -159,7 +159,7 @@ function registerIPC(tray: Tray) {
   ipcMain.on('app:hostPort', (e) => (e.returnValue = identity.port))
   ipcMain.on('app:name', (e) => (e.returnValue = app.getName()))
   ipcMain.on('app:scheme', (e) => (e.returnValue = identity.scheme))
-  registerFileSaves()
+  registerFileSaves(() => chat)
   // 聊天文件操作只接收本机 host 的会话。
   registerFileLinks(() => chat, () => host.local?.computerId)
   registerArtifacts()

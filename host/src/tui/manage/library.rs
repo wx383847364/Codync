@@ -7,7 +7,7 @@ use std::collections::{HashMap, HashSet};
 
 use super::super::app::{App, Editor, Entry, Overlay};
 use super::super::net::artifacts::ArtifactTo;
-use super::{Fields, Input, Library, Page, Reply, Submit};
+use super::{Fields, Input, Library, Page, Reply, SharedFileAction, Submit};
 use crate::chat::artifacts::Artifact;
 use crate::chat::files::SharedFile;
 
@@ -69,8 +69,8 @@ impl LibraryItem {
 
 impl App {
     pub fn open_library(&mut self) {
-        let Some(b) = self.bot().filter(|b| !b.group) else {
-            self.flash("The Library belongs to a bot, not a group");
+        let Some(b) = self.bot() else {
+            self.flash("Select a chat to open its Library");
             return;
         };
         let bot = b.id.clone();
@@ -93,6 +93,11 @@ impl App {
             (KeyCode::Enter | KeyCode::Char('o'), Some(LibraryItem::Artifact(a))) => {
                 self.fetch_artifact(&bot, &a.id, ArtifactTo::Browser);
             }
+            (key, Some(LibraryItem::File { entry, file, .. })) if let Some(action) = shared_file_action(key) => {
+                if !self.cancel_download() {
+                    self.download_shared(entry, file, action);
+                }
+            }
             (KeyCode::Enter | KeyCode::Char('o'), Some(_)) => self.flash("f saves it to Downloads"),
             (KeyCode::Char('f'), Some(item)) => self.save_item(&bot, item),
             (KeyCode::Char('r'), Some(LibraryItem::Artifact(a))) => {
@@ -113,7 +118,7 @@ impl App {
         }
         match item {
             LibraryItem::Artifact(a) => self.fetch_artifact(bot, &a.id, ArtifactTo::Downloads),
-            LibraryItem::File { entry, file, .. } => self.download_shared(entry, file),
+            LibraryItem::File { entry, file, .. } => self.download_shared(entry, file, SharedFileAction::Save),
             LibraryItem::Attachment { id, name, .. } => self.save_uploads(bot, vec![(id, name)]),
         }
     }
@@ -181,6 +186,16 @@ impl App {
             items.sort_by_key(|x| std::cmp::Reverse(x.at()));
         }
     }
+}
+
+fn shared_file_action(key: KeyCode) -> Option<SharedFileAction> {
+    Some(match key {
+        KeyCode::Enter | KeyCode::Char('o') => SharedFileAction::Open,
+        KeyCode::Char('Y') => SharedFileAction::CopyPath,
+        KeyCode::Char('C') => SharedFileAction::CopyContents,
+        KeyCode::Char('R') => SharedFileAction::Reveal,
+        _ => return None,
+    })
 }
 
 /// Whether an entry puts something in its chat's Library: an artifact card, or a message with files the

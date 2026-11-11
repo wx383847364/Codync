@@ -1895,6 +1895,7 @@
   "This file could not be found on this computer.": "Diese Datei wurde auf diesem Computer nicht gefunden.",
   "This action is unavailable for this file.": "Diese Aktion ist für diese Datei nicht verfügbar.",
   "Could not complete the file action.": "Die Dateiaktion konnte nicht abgeschlossen werden.",
+  "Copy file contents supports UTF-8 text files up to 256 KiB.": "Der Inhalt von UTF-8-Textdateien bis 256 KiB kann kopiert werden.",
   "Copy file contents supports UTF-8 text files up to 1 MiB.": "Der Inhalt von UTF-8-Textdateien bis 1 MiB kann kopiert werden.",
   "File on the host computer": "Datei auf dem Hostcomputer",
   "Couldn't copy the path.": "Der Pfad konnte nicht kopiert werden."
