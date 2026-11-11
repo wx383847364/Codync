@@ -7,6 +7,7 @@ struct MentionComposerField: UIViewRepresentable {
     var focused: FocusState<Bool>.Binding
     let placeholder: String
     let menuOpen: Bool
+    var fileSearchOpen = false
     var selectsFileOnReturn = false
     let key: (String) -> Void
 
@@ -32,7 +33,8 @@ struct MentionComposerField: UIViewRepresentable {
         view.menuKey = key
         view.accessibilityLabel = placeholder
         if view.markedTextRange == nil {
-            let returnKey: UIReturnKeyType = selectsFileOnReturn ? .done : .default
+            // 查询刷新期间保持回车样式，避免反复重载键盘。
+            let returnKey: UIReturnKeyType = fileSearchOpen ? .done : .default
             if view.returnKeyType != returnKey {
                 view.returnKeyType = returnKey
                 if view.isFirstResponder { view.reloadInputViews() }
