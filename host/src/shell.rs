@@ -168,11 +168,11 @@ pub fn program(name: &str) -> PathBuf {
     crate::agent::backends::which(name).unwrap_or_else(|| name.into())
 }
 
-/// The command that runs a Python test fixture.
+/// 启动 Python 测试夹具，固定 ACP 和夹具文件使用 UTF-8，避免 Windows 系统代码页改写正文。
 #[cfg(test)]
 pub fn python(script: &std::path::Path) -> String {
     let python = if cfg!(windows) { "python" } else { "python3" };
-    format!("{python} -u {}", quote(&script.to_string_lossy()))
+    format!("{python} -X utf8 -u {}", quote(&script.to_string_lossy()))
 }
 
 /// Leading `KEY=value` words (an optional `env` first), and the command after them.

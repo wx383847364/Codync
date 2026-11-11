@@ -58,7 +58,8 @@ def mcp_call(server_name, tool, arguments, check_roster=True):
     # 真实适配器把 ACP 工具桥的环境传给进程，夹具也要使用对应的会话身份。
     env = dict(os.environ, **{entry["name"]: entry["value"] for entry in server.get("env", [])})
     with subprocess.Popen([server["command"], *server["args"]], stdin=subprocess.PIPE,
-                          stdout=subprocess.PIPE, text=True, env=env) as mcp:
+                          stdout=subprocess.PIPE, encoding="utf-8", env=env) as mcp:
+        # MCP 的 JSON-RPC 管道固定使用 UTF-8，回复正文可包含任意 Unicode 字符。
         def rpc(identifier, method, params):
             mcp.stdin.write(json.dumps({"jsonrpc": "2.0", "id": identifier, "method": method, "params": params}) + "\n")
             mcp.stdin.flush()
