@@ -8,9 +8,8 @@ permissions:
 
 jobs:
   ios-group-session:
-    if: ${{ false }}
     runs-on: macos-26
-    timeout-minutes: 28
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -28,9 +27,10 @@ jobs:
           device="$(xcrun simctl list devices available -j | jq -r '[.devices | to_entries[] | select(.key | contains("iOS-26")) | .value[] | select(.name | startswith("iPhone"))][0].udid // empty')"
           test -n "$device"
           xcrun simctl bootstatus "$device" -b
-          xcodebuild -project apps/Codync.xcodeproj -scheme 'iOS Dev' -configuration DevDebug -sdk iphonesimulator -destination "id=$device" -derivedDataPath build/dd -quiet build CODE_SIGNING_ALLOWED=NO COMPILER_INDEX_STORE_ENABLE=NO
+          xcodebuild -project apps/Codync.xcodeproj -scheme 'iOS Dev' -configuration DevDebug -sdk iphonesimulator -destination "id=$device" -derivedDataPath build/dd -quiet build CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= COMPILER_INDEX_STORE_ENABLE=NO
           app="$(find build/dd/Build/Products/DevDebug-iphonesimulator -maxdepth 1 -type d -name '*.app' -print -quit)"
           test -n "$app"
+          codesign -d --entitlements - "$app"
           xcrun simctl install "$device" "$app"
           echo "DEVICE_ID=$device" >> "$GITHUB_ENV"
       - name: Install Maestro
@@ -79,11 +79,30 @@ jobs:
             exit 1
           ) &
           approver=$!
-          maestro --device "$DEVICE_ID" test -e PAIRING_URL="$pairing_url" apps/maestro/signed-out-pairing.yaml
+          export MAESTRO_CLI_NO_ANALYTICS=1
+          maestro --device "$DEVICE_ID" test --debug-output "$RUNNER_TEMP/maestro-pairing" -e PAIRING_URL="$pairing_url" apps/maestro/signed-out-pairing.yaml
           wait "$approver"
           approver=
-          maestro --device "$DEVICE_ID" test -e HOST_PORT="$HOST_PORT" -e HOST_TOKEN="$HOST_TOKEN" apps/maestro/group-session.yaml
+          maestro --device "$DEVICE_ID" test --debug-output "$RUNNER_TEMP/maestro-group" -e HOST_PORT="$HOST_PORT" -e HOST_TOKEN="$HOST_TOKEN" apps/maestro/group-session.yaml
+      - name: Collect iPhone simulator diagnostics
+        if: failure()
+        run: |
+          mkdir -p "$RUNNER_TEMP/ios-crashes"
+          for root in "$HOME/Library/Logs/DiagnosticReports" "$HOME/Library/Developer/CoreSimulator/Devices/$DEVICE_ID/data/Library/Logs/CrashReporter"; do
+            if test -d "$root"; then find "$root" -name '*Codync*.ips' -mmin -40 -exec cp {} "$RUNNER_TEMP/ios-crashes/" \;; fi
+          done
+          xcrun simctl spawn "$DEVICE_ID" log show --last 8m --predicate 'process CONTAINS "Codync"' > "$RUNNER_TEMP/ios-crashes/runtime.log" || true
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: ios-group-diagnostics
+          path: |
+            ${{ runner.temp }}/ios-crashes
+            ${{ runner.temp }}/maestro-pairing
+            ${{ runner.temp }}/maestro-group
+          retention-days: 3
   android-group-session:
+    if: ${{ false }}
     runs-on: ubuntu-latest
     timeout-minutes: 28
     steps:
