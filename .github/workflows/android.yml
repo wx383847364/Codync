@@ -12,6 +12,7 @@ on:
         default: false
 permissions:
   contents: read
+  actions: read
 jobs:
   mobile:
     strategy:
@@ -58,15 +59,21 @@ jobs:
         if: matrix.platform == 'android'
         with:
           packages: platform-tools
-      - uses: gradle/actions/setup-gradle@v4
+      # 复用同一发布候选 Android CI 已通过构建的 APK。
+      - uses: actions/download-artifact@v4
         if: matrix.platform == 'android'
+        with:
+          name: codync-android-debug
+          run-id: 43011502071
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/codync-validation-apk
       - name: Install Android emulator app
         if: matrix.platform == 'android'
         shell: bash
         run: |
           test -e /dev/kvm
           sudo chmod 0666 /dev/kvm
-          sdkmanager 'platforms;android-37.0' 'build-tools;37.0.0' 'emulator' 'system-images;android-36;google_apis;x86_64'
+          sdkmanager 'emulator' 'system-images;android-36;google_apis;x86_64'
           export ANDROID_USER_HOME="$RUNNER_TEMP/codync-android"
           export ANDROID_AVD_HOME="$ANDROID_USER_HOME/avd"
           mkdir -p "$ANDROID_AVD_HOME"
@@ -77,11 +84,16 @@ jobs:
           emulator_pid=$!
           sleep 8
           if ! kill -0 "$emulator_pid"; then cat "$RUNNER_TEMP/emulator.log"; exit 1; fi
-          (cd apps/android && ./gradlew :app:assembleDebug)
           timeout 180 adb wait-for-device
           timeout 180 bash -c 'until [ "$(adb shell getprop sys.boot_completed | tr -d "\r")" = 1 ]; do sleep 2; done'
           adb shell input keyevent 82
-          adb install -r apps/android/app/build/outputs/apk/debug/app-debug.apk
+          adb shell settings put global window_animation_scale 0
+          adb shell settings put global transition_animation_scale 0
+          adb shell settings put global animator_duration_scale 0
+          adb shell am broadcast -a android.intent.action.CLOSE_SYSTEM_DIALOGS || true
+          apk=$(find "$RUNNER_TEMP/codync-validation-apk" -name app-debug.apk -print -quit)
+          test -n "$apk"
+          adb install -r "$apk"
           adb reverse tcp:19391 tcp:19391
           adb shell pm grant com.pokai.Codync.android.dev android.permission.POST_NOTIFICATIONS
           echo 'CODYNC_TEST_DEVICE=emulator-5554' >> "$GITHUB_ENV"

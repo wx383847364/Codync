@@ -14,6 +14,10 @@ appId: com.pokai.Codync.ios.dev
     commands:
       - launchApp:
           appId: com.pokai.Codync.android.dev
+      # 冷启动时系统界面可能暂时失去响应，关闭系统遮罩后再读应用。
+      - tapOn:
+          text: "Wait"
+          optional: true
 - tapOn: "Continue without an account"
 - tapOn: "Continue"
 - tapOn: "Pairing link or code"
