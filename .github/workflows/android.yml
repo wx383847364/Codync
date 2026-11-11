@@ -80,11 +80,13 @@ jobs:
           ) &
           approver=$!
           export MAESTRO_CLI_NO_ANALYTICS=1
-          sed '/^- tapOn: .*connected/,$d' apps/maestro/signed-out-pairing.yaml > "$RUNNER_TEMP/pair-and-open.yaml"
-          maestro --device "$DEVICE_ID" test --debug-output "$RUNNER_TEMP/maestro-pairing" -e PAIRING_URL="$pairing_url" "$RUNNER_TEMP/pair-and-open.yaml"
-          api devices '{}' | jq -e '.devices | length == 1' >/dev/null
-          kill "$approver" 2>/dev/null || true
-          wait "$approver" 2>/dev/null || true
+          SIMCTL_CHILD_CODYNC_PAIR_URL="$pairing_url" xcrun simctl launch "$DEVICE_ID" com.pokai.Codync.ios.dev
+          for _ in $(seq 1 60); do
+            if api devices '{}' | jq -e 'any(.devices[]; .connected == true)' >/dev/null; then break; fi
+            sleep 1
+          done
+          api devices '{}' | jq -e 'any(.devices[]; .connected == true)' >/dev/null
+          wait "$approver"
           approver=
           maestro --device "$DEVICE_ID" test --debug-output "$RUNNER_TEMP/maestro-group" -e HOST_PORT="$HOST_PORT" -e HOST_TOKEN="$HOST_TOKEN" apps/maestro/group-session.yaml
       - name: Collect iPhone simulator diagnostics
@@ -101,7 +103,6 @@ jobs:
           name: ios-group-evidence
           path: |
             ${{ runner.temp }}/ios-crashes
-            ${{ runner.temp }}/maestro-pairing
             ${{ runner.temp }}/maestro-group
             group-session.png
           retention-days: 3
@@ -199,11 +200,13 @@ jobs:
           ) &
           approver=$!
           export MAESTRO_CLI_NO_ANALYTICS=1
-          sed '/^- tapOn: .*connected/,$d' apps/maestro/signed-out-pairing.yaml > "$RUNNER_TEMP/pair-and-open.yaml"
-          maestro --device "$DEVICE_ID" test --debug-output "$RUNNER_TEMP/maestro-pairing" -e PAIRING_URL="$pairing_url" "$RUNNER_TEMP/pair-and-open.yaml"
-          api devices '{}' | jq -e '.devices | length == 1' >/dev/null
-          kill "$approver" 2>/dev/null || true
-          wait "$approver" 2>/dev/null || true
+          adb -s "$DEVICE_ID" shell am start -W -a android.intent.action.VIEW -d "'$pairing_url'" com.pokai.Codync.android.dev >/dev/null
+          for _ in $(seq 1 60); do
+            if api devices '{}' | jq -e 'any(.devices[]; .connected == true)' >/dev/null; then break; fi
+            sleep 1
+          done
+          api devices '{}' | jq -e 'any(.devices[]; .connected == true)' >/dev/null
+          wait "$approver"
           approver=
           maestro --device "$DEVICE_ID" test --debug-output "$RUNNER_TEMP/maestro-group" -e HOST_PORT="$HOST_PORT" -e HOST_TOKEN="$HOST_TOKEN" apps/maestro/group-session.yaml
       - uses: actions/upload-artifact@v4
