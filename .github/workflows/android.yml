@@ -8,7 +8,6 @@ permissions:
 
 jobs:
   ios-group-session:
-    if: ${{ false }}
     runs-on: macos-26
     timeout-minutes: 35
     steps:
@@ -68,7 +67,7 @@ jobs:
           pairing_url="$(api pairing '{"shortCode":false}' | jq -er .pairingUrl)"
           echo "::add-mask::$pairing_url"
           (
-            for _ in $(seq 1 100); do
+            for _ in $(seq 1 600); do
               request="$(api pairingRequests '{}' | jq -r '.requests[0].requestId // empty')"
               if test -n "$request"; then
                 sleep 3
@@ -81,8 +80,11 @@ jobs:
           ) &
           approver=$!
           export MAESTRO_CLI_NO_ANALYTICS=1
-          maestro --device "$DEVICE_ID" test --debug-output "$RUNNER_TEMP/maestro-pairing" -e PAIRING_URL="$pairing_url" apps/maestro/signed-out-pairing.yaml
-          wait "$approver"
+          sed '/^- tapOn: .*connected/,$d' apps/maestro/signed-out-pairing.yaml > "$RUNNER_TEMP/pair-and-open.yaml"
+          maestro --device "$DEVICE_ID" test --debug-output "$RUNNER_TEMP/maestro-pairing" -e PAIRING_URL="$pairing_url" "$RUNNER_TEMP/pair-and-open.yaml"
+          api devices '{}' | jq -e '.devices | length == 1' >/dev/null
+          kill "$approver" 2>/dev/null || true
+          wait "$approver" 2>/dev/null || true
           approver=
           maestro --device "$DEVICE_ID" test --debug-output "$RUNNER_TEMP/maestro-group" -e HOST_PORT="$HOST_PORT" -e HOST_TOKEN="$HOST_TOKEN" apps/maestro/group-session.yaml
       - name: Collect iPhone simulator diagnostics
@@ -94,13 +96,14 @@ jobs:
           done
           xcrun simctl spawn "$DEVICE_ID" log show --last 8m --predicate 'process CONTAINS "Codync"' > "$RUNNER_TEMP/ios-crashes/runtime.log" || true
       - uses: actions/upload-artifact@v4
-        if: failure()
+        if: always()
         with:
-          name: ios-group-diagnostics
+          name: ios-group-evidence
           path: |
             ${{ runner.temp }}/ios-crashes
             ${{ runner.temp }}/maestro-pairing
             ${{ runner.temp }}/maestro-group
+            group-session.png
           retention-days: 3
   android-group-session:
     runs-on: ubuntu-latest
@@ -183,7 +186,7 @@ jobs:
           pairing_url="$(api pairing '{"shortCode":false}' | jq -er .pairingUrl)"
           echo "::add-mask::$pairing_url"
           (
-            for _ in $(seq 1 100); do
+            for _ in $(seq 1 600); do
               request="$(api pairingRequests '{}' | jq -r '.requests[0].requestId // empty')"
               if test -n "$request"; then
                 sleep 3
@@ -198,7 +201,9 @@ jobs:
           export MAESTRO_CLI_NO_ANALYTICS=1
           sed '/^- tapOn: .*connected/,$d' apps/maestro/signed-out-pairing.yaml > "$RUNNER_TEMP/pair-and-open.yaml"
           maestro --device "$DEVICE_ID" test --debug-output "$RUNNER_TEMP/maestro-pairing" -e PAIRING_URL="$pairing_url" "$RUNNER_TEMP/pair-and-open.yaml"
-          wait "$approver"
+          api devices '{}' | jq -e '.devices | length == 1' >/dev/null
+          kill "$approver" 2>/dev/null || true
+          wait "$approver" 2>/dev/null || true
           approver=
           maestro --device "$DEVICE_ID" test --debug-output "$RUNNER_TEMP/maestro-group" -e HOST_PORT="$HOST_PORT" -e HOST_TOKEN="$HOST_TOKEN" apps/maestro/group-session.yaml
       - uses: actions/upload-artifact@v4
