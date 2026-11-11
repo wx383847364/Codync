@@ -22,11 +22,13 @@ impl App {
         });
     }
 
+    /// 进入聊天输入时恢复草稿和它当前的文件查询。
     pub(super) fn start_typing(&mut self) {
         if self.selected.is_some() {
             self.typing = true;
             self.chat_page = true;
             self.focus = Focus::Chat;
+            self.slash_typed();
             if self.trace == TraceMode::Full {
                 self.trace = TraceMode::Off;
             }

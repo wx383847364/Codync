@@ -8,9 +8,12 @@ use std::ops::Range;
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct Mention {
-    pub bot_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bot_id: Option<String>,
     pub start: usize,
     pub end: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_file: Option<super::workspace_files::Reference>,
 }
 
 /// UTF-16 边界转为字节边界；代理对内部不是合法边界。
@@ -42,7 +45,12 @@ pub fn checked(text: &str, mentions: &[Mention], members: &[String]) -> Result<V
             text[start..end].starts_with('@') && start >= leading && end <= trimmed_end,
             "提及范围失效，请重新选择成员"
         );
-        ensure!(members.contains(&m.bot_id), "提及成员已不在群内，请重新选择成员");
+        // 只接受一种身份。文件没有 botId，旧 Host 会拒绝请求而非降级成成员提及。
+        match (&m.bot_id, &m.workspace_file) {
+            (Some(id), None) => ensure!(members.contains(id), "提及成员已不在群内，请重新选择成员"),
+            (None, Some(_)) => {}
+            _ => bail!("Invalid mention identity. Choose it again."),
+        }
         previous = m.end;
         m.start -= shift;
         m.end -= shift;
@@ -177,8 +185,11 @@ pub fn targets(
         let range: Range<usize> = byte_offset(text, m.start).ok_or_else(|| anyhow::anyhow!("invalid mention"))?
             ..byte_offset(text, m.end).ok_or_else(|| anyhow::anyhow!("invalid mention"))?;
         mask[range].fill(true);
-        if !targets.contains(&m.bot_id) {
-            targets.push(m.bot_id.clone());
+        // 文件引用占据文本范围，但不会把文件来源 Bot 加到派工目标。
+        if let Some(id) = &m.bot_id
+            && !targets.contains(id)
+        {
+            targets.push(id.clone());
         }
     }
     for (at, _) in text.match_indices('@') {
@@ -251,11 +262,14 @@ mod tests {
     /// UTF-16 校验拒绝切断代理对，并与正文裁剪同步换算。
     #[test]
     fn unicode_ranges_survive_trim_and_rename() {
-        let m = Mention { bot_id: "a".into(), start: 4, end: 7 };
+        let m = Mention { bot_id: Some("a".into()), start: 4, end: 7, workspace_file: None };
         let normalized = checked("  😀@旧名  ", &[m], &["a".into()]).unwrap();
         assert_eq!(normalized[0].start, 2);
         assert_eq!(normalized[0].end, 5);
         assert_eq!(byte_offset("😀", 1), None);
-        assert!(checked("@A", &[Mention { bot_id: "gone".into(), start: 0, end: 2 }], &[]).is_err());
+        assert!(
+            checked("@A", &[Mention { bot_id: Some("gone".into()), start: 0, end: 2, workspace_file: None }], &[])
+                .is_err()
+        );
     }
 }

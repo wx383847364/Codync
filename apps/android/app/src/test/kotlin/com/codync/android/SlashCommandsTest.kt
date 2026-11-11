@@ -8,6 +8,15 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class SlashCommandsTest {
+    /** 正文里的路径可选，URL 和正在移动光标编辑的词保持普通输入。 */
+    @Test fun `workspace files use the slash word at the caret`() {
+        val draft = "😀 /docs/架构 tail"
+        assertEquals(3 until 11, SlashCommands.fileRange(draft, 11, 11))
+        assertNull(SlashCommands.fileRange(draft, 3, 11))
+        assertNull(SlashCommands.fileRange("/fast", 2, 2))
+        assertNull(SlashCommands.fileRange("/foo\n", 5, 5))
+    }
+
     @Test fun `only a leading slash word lists commands and the bot's skills`() {
         assertEquals("ne", SlashCommands.query("/ne"))
         assertNull(SlashCommands.query("/new session"))

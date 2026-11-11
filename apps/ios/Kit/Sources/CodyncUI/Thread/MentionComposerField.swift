@@ -7,6 +7,7 @@ struct MentionComposerField: UIViewRepresentable {
     var focused: FocusState<Bool>.Binding
     let placeholder: String
     let menuOpen: Bool
+    var selectsFileOnReturn = false
     let key: (String) -> Void
 
     /// 创建原生多行输入，尺寸仍由 Composer 的字体和外边距控制。
@@ -27,9 +28,15 @@ struct MentionComposerField: UIViewRepresentable {
     func updateUIView(_ view: Field, context: Context) {
         context.coordinator.parent = self
         view.menuOpen = menuOpen
+        view.selectsFileOnReturn = selectsFileOnReturn
         view.menuKey = key
         view.accessibilityLabel = placeholder
         if view.markedTextRange == nil {
+            let returnKey: UIReturnKeyType = selectsFileOnReturn ? .done : .default
+            if view.returnKeyType != returnKey {
+                view.returnKeyType = returnKey
+                if view.isFirstResponder { view.reloadInputViews() }
+            }
             if view.text != input.text { view.text = input.text }
             if case .selection(let range) = input.selection?.indices,
                range.upperBound <= input.text.endIndex {
@@ -59,6 +66,11 @@ struct MentionComposerField: UIViewRepresentable {
 
         /// UIKit 给出的原选区是 UTF-16 范围，不能用字符串差异猜测粘贴位置。
         func textView(_ textView: UITextView, shouldChangeTextIn range: NSRange, replacementText text: String) -> Bool {
+            // 软件键盘的确认与硬件回车共用选择；输入法仍拥有未提交文字。
+            if text == "\n", parent.selectsFileOnReturn, textView.markedTextRange == nil {
+                parent.key("\r")
+                return false
+            }
             parent.input.editRange = range.location..<(range.location + range.length)
             return true
         }
@@ -86,18 +98,28 @@ struct MentionComposerField: UIViewRepresentable {
 
     final class Field: UITextView {
         var menuOpen = false
+        var selectsFileOnReturn = false
         var menuKey: ((String) -> Void)?
 
         /// 仅候选打开且没有组合文字时提供优先按键；Shift+Enter 继续换行。
         override var keyCommands: [UIKeyCommand]? {
             guard menuOpen, markedTextRange == nil else { return super.keyCommands }
             let inputs = [UIKeyCommand.inputUpArrow, UIKeyCommand.inputDownArrow, "\r", "\t", UIKeyCommand.inputEscape]
-            return (super.keyCommands ?? []) + inputs.map { input in
+            var commands = (super.keyCommands ?? []) + inputs.map { input in
                 let command = UIKeyCommand(input: input, modifierFlags: [], action: #selector(pickMention(_:)))
                 command.wantsPriorityOverSystemBehavior = true
                 return command
             }
+            if selectsFileOnReturn {
+                let newline = UIKeyCommand(input: "\r", modifierFlags: .shift, action: #selector(insertLine))
+                newline.wantsPriorityOverSystemBehavior = true
+                commands.append(newline)
+            }
+            return commands
         }
+
+        /// 硬件 Shift+Enter 保留换行，避开软键盘的文件确认。
+        @objc private func insertLine() { menuKey?("shift-return") }
 
         /// 确认后立即关闭原生拦截，重复确认不会重复插入或发送消息。
         @objc private func pickMention(_ command: UIKeyCommand) {

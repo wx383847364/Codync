@@ -3,18 +3,29 @@
 //! (`market::expand_command`). A group offers the same, over its members.
 
 use crossterm::event::{KeyCode, KeyEvent};
-use serde_json::json;
+use serde_json::{Value, json};
+use uuid::Uuid;
+
+use crate::chat::workspace_files::{Candidate, Reference};
 
 use super::{After, App, Bot, Editor};
 
 /// What picking a command does.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SlashAction {
     Fast,
     DevServers,
     Skill,
     Mention,
     Session,
+    File(Reference),
+}
+
+pub(super) struct WorkspaceSearch {
+    id: Uuid,
+    bot: String,
+    query: String,
+    result: Option<Result<Vec<Candidate>, String>>,
 }
 
 /// A command the list offers.
@@ -31,7 +42,7 @@ impl SlashCommand {
     /// 描述命令的用户行为，包含群成员选择和会话切换选项。
     pub fn about(&self) -> String {
         match self.action {
-            SlashAction::Mention => self.detail.clone(),
+            SlashAction::Mention | SlashAction::File(_) => self.detail.clone(),
             SlashAction::Skill if self.detail.is_empty() => self.title.clone(),
             SlashAction::Skill => self.detail.replace('\n', " "),
             SlashAction::Fast | SlashAction::DevServers | SlashAction::Session => {
@@ -81,7 +92,9 @@ impl App {
     /// 按来源列出适用命令，群成员选择与会话操作保持四端一致。
     pub fn slash_commands(&self) -> Vec<SlashCommand> {
         let draft = self.draft();
-        if let Some((start, end)) = self.mention_query() {
+        if self.file_query().is_none()
+            && let Some((start, end)) = self.mention_query()
+        {
             let query = draft.text[start + 1..end].to_lowercase();
             return self
                 .reached()
@@ -95,7 +108,26 @@ impl App {
                 })
                 .collect();
         }
-        let Some((query, None)) = crate::market::slash_command(&draft.text) else { return vec![] };
+        let mut commands = self.existing_slash_commands(&draft.text);
+        if let Some(Ok(candidates)) = self.current_workspace_search().and_then(|search| search.result.as_ref()) {
+            // 追加文件结果，不改变已有命令的默认位置。
+            commands.extend(candidates.iter().map(|candidate| SlashCommand {
+                name: candidate.name.clone(),
+                title: candidate.name.clone(),
+                detail: if candidate.source.is_empty() {
+                    candidate.file.path.clone()
+                } else {
+                    format!("{} · {}", candidate.source, candidate.file.path)
+                },
+                action: SlashAction::File(candidate.file.clone()),
+            }));
+        }
+        commands
+    }
+
+    /// 保留原有命令和技能的匹配规则，文件结果独立于该规则。
+    fn existing_slash_commands(&self, text: &str) -> Vec<SlashCommand> {
+        let Some((query, None)) = crate::market::slash_command(text) else { return vec![] };
         if query.starts_with("new") && self.bot().is_some_and(|b| !b.group) {
             return [
                 ("new", "after", "在当前任务结束后新建会话"),
@@ -144,8 +176,17 @@ impl App {
             return false;
         }
         let commands = self.slash_commands();
-        let Some(n) = std::num::NonZeroUsize::new(commands.len()).map(usize::from) else { return false };
         let typed = self.draft().text;
+        if k.code == KeyCode::Esc && self.file_query().is_some() {
+            self.mention_dismissed = Some((typed, self.draft().cursor));
+            return true;
+        }
+        let Some(n) = std::num::NonZeroUsize::new(commands.len()).map(usize::from) else {
+            // 等待文件名匹配时保护回车，正文中的多段路径仍可直接发送。
+            return k.code == KeyCode::Enter
+                && self.file_query().is_some_and(|(start, end)| start == 0 || !typed[start + 1..end].contains('/'))
+                && self.current_workspace_search().is_none_or(|search| search.result.is_none());
+        };
         let sel = self.slash_selected(n);
         match k.code {
             KeyCode::Down => self.slash_pick = (typed, (sel + 1) % n),
@@ -191,6 +232,14 @@ impl App {
         if at > 0 && !draft.text[..at].chars().next_back()?.is_whitespace() {
             return None;
         }
+        let offset = draft.text[..at].encode_utf16().count();
+        if draft
+            .mentions
+            .iter()
+            .any(|mention| mention.start <= offset && offset < mention.end && mention.workspace_file.is_some())
+        {
+            return None;
+        }
         let query = &draft.text[at + 1..end];
         (!query.contains('\n') && query.encode_utf16().count() <= 24).then_some((at, end))
     }
@@ -206,8 +255,13 @@ impl App {
             }
             return;
         }
-        if command.action == SlashAction::Mention {
-            if let Some((start, end)) = self.mention_query()
+        if matches!(command.action, SlashAction::Mention | SlashAction::File(_)) {
+            let (range, member, file) = if let SlashAction::File(file) = &command.action {
+                (self.file_query(), None, Some(file.clone()))
+            } else {
+                (self.mention_query(), Some(command.name.clone()), None)
+            };
+            if let Some((start, end)) = range
                 && let Some(key) = self.selected.clone()
             {
                 let draft = self.drafts.entry(key).or_default();
@@ -215,15 +269,16 @@ impl App {
                 let token = format!("@{}", command.title);
                 draft.replace_range(start, end, &format!("{token} "));
                 draft.mentions.push(crate::chat::mentions::Mention {
-                    bot_id: command.name.clone(),
+                    bot_id: member,
                     start: before,
                     end: before + token.encode_utf16().count(),
+                    workspace_file: file,
                 });
             }
             return;
         }
         let fill = match command.action {
-            SlashAction::Session | SlashAction::Mention => unreachable!("handled above"),
+            SlashAction::Session | SlashAction::Mention | SlashAction::File(_) => unreachable!("handled above"),
             // Each bot's own setting, so it holds in its own chat too.
             SlashAction::Fast => {
                 let bots = self.fast_bots();
@@ -245,10 +300,74 @@ impl App {
         }
     }
 
-    /// Starting a draft with `/` loads the computer's skills again, so the menu is current.
-    pub(super) fn slash_typed(&self) {
-        if self.draft().text == "/" {
+    /// 光标前的斜杠词可以包含相对路径，只有空白或正文开头的斜杠触发。
+    fn file_query(&self) -> Option<(usize, usize)> {
+        if !self.online || !self.workspace_file_search {
+            return None;
+        }
+        let draft = self.drafts.get(self.selected.as_ref()?)?;
+        if self.mention_dismissed.as_ref().is_some_and(|(text, caret)| text == &draft.text && *caret == draft.cursor) {
+            return None;
+        }
+        if draft.text[draft.cursor..].starts_with(|ch: char| !ch.is_whitespace()) {
+            return None;
+        }
+        let prefix = &draft.text[..draft.cursor];
+        let token = prefix.rsplit(char::is_whitespace).next()?;
+        (token.starts_with('/') && !token.starts_with("//") && token.encode_utf16().count() <= 256)
+            .then_some((draft.cursor - token.len(), draft.cursor))
+    }
+
+    /// 仅展示当前聊天和光标查询的结果。
+    fn current_workspace_search(&self) -> Option<&WorkspaceSearch> {
+        let (start, end) = self.file_query()?;
+        let draft = self.drafts.get(self.selected.as_ref()?)?;
+        let state = self.workspace_search.as_ref()?;
+        (self.selected.as_deref() == Some(&state.bot) && draft.text[start + 1..end] == state.query).then_some(state)
+    }
+
+    /// 返回等待或无结果状态，终端通过现有列表位置显示。
+    pub fn workspace_search_status(&self) -> Option<&'static str> {
+        self.file_query()?;
+        match self.current_workspace_search().and_then(|search| search.result.as_ref()) {
+            None => Some("Searching workspace files…"),
+            Some(Err(_)) => Some("Could not search workspace files."),
+            Some(Ok(items)) if items.is_empty() => Some("No matching workspace files"),
+            Some(Ok(_)) => None,
+        }
+    }
+
+    /// 只应用当前请求的结果，避免较早的响应覆盖新结果。
+    pub(super) fn workspace_files_answered(&mut self, id: Uuid, reply: Result<Value, String>) {
+        if let Some(search) = self.workspace_search.as_mut().filter(|search| search.id == id) {
+            search.result =
+                Some(reply.and_then(|value| {
+                    serde_json::from_value(value["items"].clone()).map_err(|error| error.to_string())
+                }));
+        }
+    }
+
+    /// 开始斜杠查询时刷新技能；向同一个已连接的 Host 请求工作区候选。
+    pub(super) fn slash_typed(&mut self) {
+        let Some(draft) = self.selected.as_ref().and_then(|bot| self.drafts.get(bot)) else {
+            self.workspace_search = None;
+            return;
+        };
+        if draft.text == "/" {
             self.call("skills", json!({}), After::Skills);
+        }
+        let Some((start, end)) = self.file_query() else {
+            self.workspace_search = None;
+            return;
+        };
+        if self.current_workspace_search().is_some() {
+            return;
+        }
+        if let Some(bot) = self.selected.clone() {
+            let query = draft.text[start + 1..end].to_owned();
+            let id = Uuid::new_v4();
+            self.call("searchWorkspaceFiles", json!({"botId": bot, "query": query}), After::WorkspaceFiles(id));
+            self.workspace_search = Some(WorkspaceSearch { id, bot, query, result: None });
         }
     }
 }
@@ -288,6 +407,32 @@ mod tests {
 
     fn key(code: KeyCode) -> KeyEvent {
         KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    /// 选中文件后长按回车的重复事件不能把草稿送出。
+    #[tokio::test]
+    async fn file_confirmation_and_enter_repeat_keep_the_draft() {
+        let mut app = app_with(&json!({"id":"b","name":"Bot","fastModeSupport":"unsupported"}));
+        app.online = true;
+        app.typing = true;
+        app.workspace_file_search = true;
+        app.drafts.insert("b".into(), super::Editor::with("Read /guide"));
+        app.workspace_search = Some(super::WorkspaceSearch {
+            id: super::Uuid::new_v4(),
+            bot: "b".into(),
+            query: "guide".into(),
+            result: Some(Ok(vec![super::Candidate {
+                name: "guide.md".into(),
+                source: String::new(),
+                file: super::Reference { path: "docs/guide.md".into(), workspace: "root".into() },
+            }])),
+        });
+
+        app.on_key(key(KeyCode::Enter));
+        assert_eq!(app.draft().text, "Read @guide.md ");
+        assert_eq!(app.draft().mentions.len(), 1);
+        app.on_key(KeyEvent::new_with_kind(KeyCode::Enter, KeyModifiers::NONE, crossterm::event::KeyEventKind::Repeat));
+        assert!(app.sends.is_empty());
     }
 
     #[tokio::test]

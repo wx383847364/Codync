@@ -1,15 +1,16 @@
 import { useEffect, useState, type KeyboardEvent } from 'react'
 import type { Bot } from '@shared/models'
-import { mentionQuery } from '@shared/mentions'
+import { mentionQuery, type Mention } from '@shared/mentions'
 
 /** 管理光标处候选和键盘；IME 的确认键必须留给系统。 */
-export function useMentionMenu(text: string, members: Bot[], select: (bot: Bot, start: number, end: number) => void) {
+export function useMentionMenu(text: string, members: Bot[], select: (bot: Bot, start: number, end: number) => void, bindings: readonly Mention[] = []) {
   const [selection, setSelection] = useState({ start: text.length, end: text.length })
   const [pick, setPick] = useState({ key: '', index: 0 })
   const [dismissed, setDismissed] = useState<string | null>(null)
   const raw = mentionQuery(text, selection.start, selection.end)
   // 完整成员名后空格结束候选，仍允许在正文中间插入新成员。
-  const query = raw && !members.some((m) => raw.query.toLocaleLowerCase() === `${m.name.toLocaleLowerCase()} `) && !/^\s/.test(raw.query) ? raw : null
+  // 已选文件的 @ 标签不能再次解析为群成员候选。
+  const query = raw && !bindings.some((binding) => binding.workspaceFile && binding.start <= raw.start && raw.start < binding.end) && !members.some((m) => raw.query.toLocaleLowerCase() === `${m.name.toLocaleLowerCase()} `) && !/^\s/.test(raw.query) ? raw : null
   const key = JSON.stringify([text, selection.start, selection.end])
   // Esc 只关闭当前查询；编辑或移动光标后重新出现相同查询也应可以选择。
   useEffect(() => { if (dismissed !== key) setDismissed(null) }, [key, dismissed])

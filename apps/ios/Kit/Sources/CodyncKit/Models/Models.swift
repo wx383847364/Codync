@@ -235,6 +235,7 @@ public enum SetupStep: String, Codable, Sendable {
 }
 
 public struct Hello: Codable, Sendable {
+    public var workspaceFileSearch: Bool? = nil
     public var icons: [String: CustomIcon]?
     public var iconsRevision: Int64?
     public var hostId: String

@@ -81,7 +81,8 @@ host answers and sends it once the host is up.
 | `bot_deleted` | host | `deleteBot` | — |
 | `attachment_preview` | desktop, iPhone, Android | Local draft image preview | `outcome`: `opened` or `decode_failed`; no filename, path or image content |
 | `file_link_action` | desktop, terminal UI, iPhone, Android | Action selected on a file link or shared file | `action`: `open`, `reveal`, `save`, `copy_path`, `copy_contents`, `cursor`, `vscode`; `outcome`: `ok`, `cancelled`, `missing`, `unsupported`, `failed`; no path or contents |
-| `message_sent` | host | `send` (a resend counts once) | `kind`, `agent`, `reply` (whether it quotes a message), `attachments` (count) |
+| `message_sent` | host | `send` (a resend counts once) | `kind`, `agent`, `reply` (whether it quotes a message), `attachments` (count), `workspaceFileReferences` (count when present) |
+| `workspace_files_searched` | host | `searchWorkspaceFiles` | `outcome` (found, empty or failed), `error` (search_failed on failure) |
 | `bot_reply_read` | host (`team`) | A bot uses the read-only local reply tool | `mode` (`page`/`query`/`ranges`), `outcome` (`trace`/`summary`/`pending`/`unavailable`/`error`), `error` (`invalid_or_unavailable` or null); no queries, offsets, request IDs or content |
 | `message_steered` | host | *Send now* on a queued message (`steer`), once its outcome is known | `agent`, `how` (`joined` the running turn / `next` turn, the turn ended first / `interrupted` the user's turn / `moved_up` behind other work / `failed`, it waits) |
 | `queued_message_removed` | host | *Remove* on a queued message (`unqueue`) | — |

@@ -1,4 +1,7 @@
 import { test, expect } from '@playwright/test'
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join, resolve } from 'node:path'
 import { api, attach } from './sandbox.ts'
 
 test('typing / lists the bot\'s commands, and the keyboard moves, picks and hides', async () => {
@@ -80,6 +83,12 @@ test('typing / lists the bot\'s commands, and the keyboard moves, picks and hide
     await field.press('Enter')
     await expect(field).toHaveValue('')
     await expect.poll(sent).toBe(1)
+
+    // 搜索没有文件候选时，适配器自己的命令照常发送。
+    await field.fill('/adapter-test-command')
+    await expect(list.getByRole('status')).toHaveText('No matching workspace files')
+    await field.press('Enter')
+    await expect.poll(sent).toBe(2)
   } finally {
     if (botId) await api(page, 'deleteBot', { botId }).catch(() => {})
     await api(page, 'removeSkill', { id: skill.id }).catch(() => {})
@@ -118,5 +127,49 @@ test('command arrows wrap from the visible highlight when enabled skills shrink'
     if (botId) await api(page, 'deleteBot', { botId }).catch(() => {})
     for (const id of skills) await api(page, 'removeSkill', { id }).catch(() => {})
     await browser.close()
+  }
+})
+
+/** 同名中文文件由路径区分，回车只引用，第二次回车才让 ACP Agent 读取。 */
+test('workspace search inserts the selected file and the agent reads it after send', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'codync-workspace-file-'))
+  const agent = resolve(__dirname, '../../../host/tests/fixtures/team_agent.py')
+  const { browser, page } = await attach()
+  const name = `Workspace files ${Date.now()}`
+  let botId: string | undefined
+  try {
+    for (const [folder, contents] of [['docs', 'First file contents'], ['notes', 'Selected second file contents']]) {
+      await mkdir(join(workspace, folder))
+      await writeFile(join(workspace, folder, '架构 说明.md'), contents)
+    }
+    botId = (await api<{ bot: { id: string } }>(page, 'createBot', {
+      name, backend: 'custom', command: `python3 -X utf8 -u "${agent}"`, cwd: workspace,
+      connectors: [], skills: [], permission: 'auto', notify: false,
+    })).bot.id
+    await page.locator('.roster-row', { hasText: name }).click()
+    const field = page.locator('.composer textarea')
+    const rows = page.getByRole('listbox', { name: 'Commands' }).getByRole('option')
+    await field.fill('READ_WORKSPACE_FILE /架构')
+    await expect(rows).toHaveCount(2)
+    await expect(rows.nth(0)).toContainText('docs/架构 说明.md')
+    await expect(rows.nth(1)).toContainText('notes/架构 说明.md')
+    await field.press('ArrowDown')
+    await field.press('Enter')
+    await expect(field).toHaveValue('READ_WORKSPACE_FILE @架构 说明.md ')
+    const draftOnly = await api<{ entries: { kind: string }[] }>(page, 'history', { botId })
+    expect(draftOnly.entries.filter((entry) => entry.kind === 'user')).toHaveLength(0)
+
+    await field.press('Enter')
+    await expect(page.getByRole('log', { name: 'Messages' }).getByText('Selected second file contents', { exact: true })).toBeVisible()
+    await expect(field).toHaveValue('')
+    // 老客户端仍能按原 mentions 契约读取这一条历史。
+    const history = await api<{ entries: { kind: string; data: { mentions?: unknown[]; workspaceFileReferences?: unknown[] } }[] }>(page, 'history', { botId })
+    const posted = history.entries.find((entry) => entry.kind === 'user')
+    expect(posted?.data.mentions).toEqual([])
+    expect(posted?.data.workspaceFileReferences).toHaveLength(1)
+  } finally {
+    if (botId) await api(page, 'deleteBot', { botId }).catch(() => {})
+    await browser.close()
+    await rm(workspace, { recursive: true, force: true })
   }
 })

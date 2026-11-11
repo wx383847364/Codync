@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, typ
 import { groupFastMode } from '@shared/fast-mode'
 import { artifactDraftKey, artifactQuote, type Artifact } from '@shared/artifacts'
 import { isGroup, isWorkingIn, quoteOf, type Entry } from '@shared/models'
+import type { Mention, WorkspaceFileCandidate } from '@shared/mentions'
 import type { PickedFile } from '@shared/ipc'
 import { useMentionMenu } from './MentionMenu'
 import { Icon } from '../../components/Icon'
@@ -22,7 +23,7 @@ import { ComposerAttachment } from './ComposerAttachment'
 import { QuoteRow } from './ChatRows'
 import { useDictation } from './dictation-platform'
 import { DictationEngineMenu } from './DictationEngineMenu'
-import { builtInCommand, returnRuns, slashCommands, slashQuery, type SlashCommand } from './slash-commands'
+import { builtInCommand, returnRuns, slashCommands, slashQuery, workspaceFileCommand, workspaceFileQuery, type SlashCommand } from './slash-commands'
 import { useVoiceShortcut } from './voice-shortcut-keys'
 
 type Trailing = 'interrupt' | 'stop' | 'call' | 'send'
@@ -117,10 +118,10 @@ function DestinationComposer({ botId, reply, about, cancelReply, onCall, onInter
   }, [])
 
   // 在原光标范围内插入，保留前后正文及选中成员身份。
-  const mentionMenu = useMentionMenu(draft, members, (member, start, end) => {
-    const token = `@${member.name}`
+  const insertReference = (name: string, owner: string | undefined, start: number, end: number, workspaceFile?: Mention['workspaceFile']) => {
+    const token = `@${name}`
     const next = `${draft.slice(0, start)}${token} ${draft.slice(end)}`
-    drafts.selectMention(draftKey, next, { botId: member.id, start, end: start + token.length }, { start, end })
+    drafts.selectMention(draftKey, next, { botId: owner, start, end: start + token.length, workspaceFile }, { start, end })
     const caret = start + token.length + 1
     // 选择只插入草稿，下一帧恢复原输入焦点并把光标放在成员片段后。
     requestAnimationFrame(() => {
@@ -128,17 +129,55 @@ function DestinationComposer({ botId, reply, about, cancelReply, onCall, onInter
       if (drafts.get(draftKey) !== next) return
       field.current?.focus()
       field.current?.setSelectionRange(caret, caret)
-      mentionMenu.selection({ start: caret, end: caret })
+      updateSelection(caret, caret)
     })
-  })
-
+  }
+  // 选成员沿用同一个范围替换过程。
+  const mentionMenu = useMentionMenu(draft, members,
+    (member, start, end) => insertReference(member.name, member.id, start, end), drafts.mentions(draftKey))
+  const [selection, setSelection] = useState({ start: draft.length, end: draft.length })
+  /** 同步光标位置，允许在正文中间插入引用。 */
+  const updateSelection = (start: number, end: number) => {
+    mentionMenu.selection({ start, end })
+    setSelection({ start, end })
+  }
+  const fileRange = workspaceFileQuery(draft, selection.start, selection.end)
+  const fileQuery = store.hello?.workspaceFileSearch && store.connection.kind === 'online' ? fileRange?.query : undefined
+  const [search, setSearch] = useState<{ query: string; items: WorkspaceFileCandidate[]; failed?: boolean }>()
+  // 短暂去抖，查询失效或切换聊天后丢弃返回值。
+  useEffect(() => {
+    if (fileQuery === undefined) return
+    let active = true
+    const timer = setTimeout(async () => {
+      try {
+        const items = await store.searchWorkspaceFiles(botId, fileQuery)
+        if (active) setSearch({ query: fileQuery, items })
+      } catch {
+        if (active) setSearch({ query: fileQuery, items: [], failed: true })
+      }
+    }, fileQuery ? 120 : 0)
+    // 已经发出的请求可以结束，但不能覆盖更晚的查询。
+    return () => { active = false; clearTimeout(timer) }
+  }, [botId, fileQuery, store])
   const slash = slashQuery(draft)
-  const commands = slash === null ? [] : slashCommands(bot, slash, plugins.installedSkills, members)
+  const existing = slash === null ? [] : slashCommands(bot, slash, plugins.installedSkills, members)
+  const results = fileQuery !== undefined && search?.query === fileQuery ? search : undefined
+  const searching = fileQuery !== undefined && !results
+  const commands = [...existing, ...(results?.items.map(workspaceFileCommand) ?? [])]
+  const searchStatus = searching ? tr('Searching workspace files…') : results?.failed ? tr('Could not search workspace files.') :
+    results && !results.items.length && !existing.length ? tr('No matching workspace files') : ''
 
   /** 执行快捷命令，群会话切换按成员意图交给 host。 */
   const run = (command: SlashCommand) => {
     if (!bot) return
     switch (command.action.kind) {
+      case 'file': {
+        if (fileRange) {
+          const { candidate } = command.action
+          insertReference(candidate.name, undefined, fileRange.start, fileRange.end, candidate.file)
+        }
+        return
+      }
       case 'fast':
         if (isGroup(bot)) {
           // Each member's own Fast mode: all on, or all back off.
@@ -159,7 +198,12 @@ function DestinationComposer({ botId, reply, about, cancelReply, onCall, onInter
     }
     field.current?.focus()
   }
-  const commandMenu = useComposerMenu(draft, commands, run, returnRuns)
+  const commandMenu = useComposerMenu(draft, commands, run, returnRuns, {
+    caret: fileQuery === undefined ? undefined : fileRange?.end,
+    status: searchStatus,
+    // 等待文件名匹配时保护回车，正文中的多段路径仍可直接发送。
+    loading: searching && (fileRange?.start === 0 || !fileQuery?.includes('/')),
+  })
 
   /** 接收所选附件，不按总大小拒绝；发送仍由既有分片协议完成。 */
   const append = (incoming: PickedFile[]) => {
@@ -258,12 +302,12 @@ function DestinationComposer({ botId, reply, about, cancelReply, onCall, onInter
                 onCompositionStart={() => { composing.current = true }}
                 onCompositionEnd={() => { composing.current = false }}
                 // 光标变化也刷新候选，支持正文中间插入。
-                onSelect={(e) => mentionMenu.selection({ start: e.currentTarget.selectionStart, end: e.currentTarget.selectionEnd })}
+                onSelect={(e) => updateSelection(e.currentTarget.selectionStart, e.currentTarget.selectionEnd)}
                 // 保存真实替换选区，整段粘贴与重复字符编辑都解除被触及的绑定。
                 onBeforeInput={(event) => { replacement.current = { start: event.currentTarget.selectionStart, end: event.currentTarget.selectionEnd } }}
                 // 原生替换范围随一次正文更新消费，后续编辑不能复用旧范围。
                 onChange={(e) => {
-                  mentionMenu.selection({ start: e.target.selectionStart, end: e.target.selectionEnd })
+                  updateSelection(e.target.selectionStart, e.target.selectionEnd)
                   setDraft(e.target.value, replacement.current)
                   replacement.current = undefined
                   // Starting a command: list the computer's skills again.

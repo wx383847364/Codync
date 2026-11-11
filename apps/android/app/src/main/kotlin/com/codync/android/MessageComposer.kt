@@ -35,6 +35,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.input.KeyboardActionHandler
 import androidx.compose.foundation.text.input.InputTransformation
 import androidx.compose.foundation.text.input.TextFieldLineLimits
 import androidx.compose.foundation.text.input.rememberTextFieldState
@@ -70,11 +72,16 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.input.ImeAction
 import com.codync.android.core.*
 import com.codync.android.design.*
 import com.kyant.shapes.Capsule
 import com.kyant.shapes.RoundedRectangle
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.jsonPrimitive
 
 /** What the composer's one trailing button does now; it morphs between them. */
 private enum class Trailing { Interrupt, Stop, Call, Send }
@@ -168,7 +175,34 @@ private enum class Trailing { Interrupt, Stop, Call, Send }
     }
     val typed = text.text.toString()
     val members = bot.memberBots(state.bots)
-    val commands = SlashCommands.query(typed)?.let { SlashCommands.list(bot, it, state.plugins?.skills.orEmpty(), members) }.orEmpty()
+    val existingCommands = SlashCommands.query(typed)?.let { SlashCommands.list(bot, it, state.plugins?.skills.orEmpty(), members) }.orEmpty()
+    val fileRange = SlashCommands.fileRange(typed, text.selection.start, text.selection.end)
+    val fileQuery = fileRange?.let { typed.substring(it.first + 1, it.last + 1) }
+        ?.takeIf { online && state.hello?.get("workspaceFileSearch")?.jsonPrimitive?.booleanOrNull == true }
+    var fileResults by remember(bot.id, fileQuery) { mutableStateOf<List<WorkspaceFileCandidate>?>(null) }
+    var searchFailed by remember(bot.id, fileQuery) { mutableStateOf(false) }
+    var dismissedFiles by remember(typed, text.selection) { mutableStateOf(false) }
+    var commandIndex by remember(typed, text.selection) { mutableStateOf(0) }
+    // 请求随当前聊天及查询取消，避免旧结果替换新光标处的候选。
+    LaunchedEffect(bot.id, fileQuery) {
+        val query = fileQuery ?: return@LaunchedEffect
+        try {
+            if (query.isNotEmpty()) delay(120)
+            fileResults = store.searchWorkspaceFiles(bot.id, query)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            searchFailed = true
+        }
+    }
+    val commands = existingCommands + if (dismissedFiles) emptyList() else fileResults.orEmpty().map(SlashCommands::workspaceFile)
+    val fileStatus = when {
+        fileQuery == null || dismissedFiles -> ""
+        searchFailed -> tr("Could not search workspace files.")
+        fileResults == null -> tr("Searching workspace files…")
+        commands.isEmpty() -> tr("No matching workspace files")
+        else -> ""
+    }
     // Starting a command: list the computer's skills again, once each time the draft becomes "/".
     val startingCommand = typed == "/"
     LaunchedEffect(startingCommand) { if (startingCommand && online) store.refreshPlugins() }
@@ -177,24 +211,36 @@ private enum class Trailing { Interrupt, Stop, Call, Send }
     var mentionIndex by remember(mentionKey) { mutableStateOf(0) }
     // 关闭仅作用于当前查询，编辑或移动光标后解除临时关闭。
     var dismissedMention by remember(mentionKey) { mutableStateOf<String?>(null) }
-    val mentions = if (dismissedMention == mentionKey || bot.kind != "group") emptyList() else mentionQuery(typed, text.selection.start, members)?.takeIf { text.selection.collapsed }?.let { query ->
+    val mentionStart = typed.lastIndexOf('@', text.selection.start - 1)
+    // 已选文件的短标签和成员名相同时，保留文件绑定。
+    val boundFile = draft?.mentions.orEmpty().any { it.workspaceFile != null && mentionStart in it.start until it.end }
+    val mentions = if (dismissedMention == mentionKey || bot.kind != "group" || boundFile) emptyList() else mentionQuery(typed, text.selection.start, members)?.takeIf { text.selection.collapsed }?.let { query ->
         members.filter { query.isEmpty() || it.name.contains(query, true) }
     }.orEmpty()
     /** 原子替换查询并恢复光标，尾文与后方绑定一起保留。 */
+    fun insertReference(name: String, range: IntRange, member: String? = null, file: WorkspaceFileReference? = null) {
+        val start = range.first
+        val end = range.last + 1
+        val token = "@$name "
+        if (!store.bindMention(draftKey, typed.substring(0, start) + token + typed.substring(end),
+                Mention(member, start, start + token.length - 1, file), range)) return
+        text.edit { replace(start, end, token); selection = androidx.compose.ui.text.TextRange(start + token.length) }
+        dismissedMention = mentionKey
+    }
+
+    /** 成员候选和文件候选都只修改当前光标处的词。 */
     fun selectMention(member: Bot) {
         val end = text.selection.start
         val start = typed.lastIndexOf('@', end - 1)
-        if (start < 0) return
-        val token = "@${member.name} "
-        store.bindMention(draftKey, typed.substring(0, start) + token + typed.substring(end), Mention(member.id, start, start + token.length - 1))
-        text.edit { replace(start, end, token); selection = androidx.compose.ui.text.TextRange(start + token.length) }
-        dismissedMention = mentionKey
+        if (start >= 0) insertReference(member.name, start until end, member = member.id)
     }
     fun clear() = text.edit { replace(0, length, "") }
     /** 把群快捷操作按成员发送给 host，统一执行会话切换语义。 */
     fun run(command: SlashCommand) {
         val skill = command.skill
+        val file = command.file
         when {
+            file != null -> if (fileRange != null) insertReference(file.name, fileRange, file = file.file)
             command.sessionMode != null -> { store.command("newSession", body("botId" to bot.id, "mode" to command.sessionMode)); clear() }
             skill != null -> text.setTextAndPlaceCursorAtEnd("/$skill ")
             else -> { store.toggleFastMode(bot); clear() }
@@ -215,9 +261,9 @@ private enum class Trailing { Interrupt, Stop, Call, Send }
     if (bot.pendingNewSession) Text("将在当前任务结束后新建会话；主会话与群共享。输入 /new-cancel 取消切换。", style = Type.footnote, color = Palette.secondary)
     // Over the box, past the + button.
     QueuedMessages(queued, state, store, Modifier.padding(start = 16.dp + FIELD_HEIGHT + 8.dp, end = 16.dp))
-    AnimatedVisibility(commands.isNotEmpty(), enter = fadeIn(Motion.fade()) + expandVertically(Motion.layoutSize),
+    AnimatedVisibility(commands.isNotEmpty() || fileStatus.isNotEmpty(), enter = fadeIn(Motion.fade()) + expandVertically(Motion.layoutSize),
         exit = fadeOut(Motion.fade()) + shrinkVertically(Motion.layoutSize)) {
-        CommandList(commands, ::run, Modifier.padding(horizontal = 16.dp))
+        CommandList(commands, ::run, Modifier.padding(horizontal = 16.dp), commandIndex, fileStatus)
     }
     AnimatedVisibility(mentions.isNotEmpty(), enter = fadeIn(Motion.fade()), exit = fadeOut(Motion.fade())) {
         MentionList(mentions, state.bots, ::selectMention, Modifier.padding(horizontal = 16.dp), mentionIndex)
@@ -265,11 +311,34 @@ private enum class Trailing { Interrupt, Stop, Call, Send }
                             }
                         }
                     }
+                    // 未组合文字时，文件候选的确认消费回车，不进入发送或换行。
+                    if (e.type == KeyEventType.KeyDown && text.composition == null && fileQuery != null &&
+                        !dismissedFiles && !e.isCtrlPressed && !e.isMetaPressed && !e.isShiftPressed) {
+                        val count = commands.size
+                        when (e.key) {
+                            Key.DirectionUp, Key.DirectionDown -> if (count > 0) {
+                                val step = if (e.key == Key.DirectionDown) 1 else -1
+                                commandIndex = (commandIndex.coerceAtMost(count - 1) + step + count) % count
+                                return@onPreviewKeyEvent true
+                            }
+                            Key.Escape -> { dismissedFiles = true; return@onPreviewKeyEvent true }
+                            Key.Enter, Key.Tab -> {
+                                if (count > 0 && e.nativeKeyEvent.repeatCount == 0) run(commands[commandIndex.coerceAtMost(count - 1)])
+                                if (count > 0 || fileResults == null && !searchFailed) return@onPreviewKeyEvent true
+                            }
+                        }
+                    }
                     val ctrlEnter = e.type == KeyEventType.KeyDown && e.key == Key.Enter && (e.isCtrlPressed || e.isMetaPressed)
                     if (ctrlEnter && trailing == Trailing.Send && canSend) send()
                     ctrlEnter
                 }
-                BasicTextField(state = text, inputTransformation = transformation, enabled = !queuing, modifier = Modifier.weight(1f).focusRequester(focus).contentReceiver(receiver).then(sendKey).padding(vertical = 10.dp),
+                val highlightedFile = commands.getOrNull(commandIndex.coerceAtMost(commands.lastIndex))?.takeIf { it.file != null }
+                BasicTextField(state = text, inputTransformation = transformation,
+                    keyboardOptions = if (highlightedFile == null) KeyboardOptions.Default else KeyboardOptions(imeAction = ImeAction.Done),
+                    // 手机软键盘确认只插入高亮文件，不调用发送。
+                    onKeyboardAction = highlightedFile?.let { command ->
+                        KeyboardActionHandler { if (text.composition == null) run(command) }
+                    }, enabled = !queuing, modifier = Modifier.weight(1f).focusRequester(focus).contentReceiver(receiver).then(sendKey).padding(vertical = 10.dp),
                     textStyle = Type.body.copy(color = Palette.text), cursorBrush = SolidColor(Palette.accent),
                     lineLimits = TextFieldLineLimits.MultiLine(maxHeightInLines = 8),
                     decorator = { input -> Box { if (text.text.isEmpty()) Text(placeholder, style = Type.body, color = Palette.tertiary, maxLines = 1, overflow = TextOverflow.Ellipsis); input() } })

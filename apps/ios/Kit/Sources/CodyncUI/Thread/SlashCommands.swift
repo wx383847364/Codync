@@ -1,8 +1,9 @@
 import CodyncKit
+import Observation
 
 /// A command in the composer's `/` list.
 struct SlashCommand: Identifiable, Equatable {
-    enum Action: Hashable { case fast, skill(String), session(String) }
+    enum Action: Hashable { case fast, skill(String), session(String), file(WorkspaceFileCandidate) }
 
     /// What follows the `/`.
     let name: String
@@ -23,6 +24,12 @@ enum SlashCommands {
     static func query(_ draft: String) -> String? {
         guard draft.hasPrefix("/"), !draft.contains(where: \.isWhitespace) else { return nil }
         return String(draft.dropFirst())
+    }
+
+    /// 复用命令行布局，保留文件名和可区分同名文件的路径。
+    static func workspaceFile(_ candidate: WorkspaceFileCandidate) -> SlashCommand {
+        let detail = [candidate.source, candidate.file.path].filter { !$0.isEmpty }.joined(separator: " · ")
+        return SlashCommand(name: candidate.file.path, icon: "doc", title: candidate.name, detail: detail, warning: false, action: .file(candidate))
     }
 
     /// Built-in commands, then the skills the bot has on (a group's: any member's), whose name or
@@ -79,4 +86,66 @@ func mentionQuery(_ draft: String, members: [Bot]) -> String? {
     let query = String(draft[draft.index(after: at)...])
     if query.first?.isWhitespace == true || query.contains(where: \.isNewline) || query.count > 24 { return nil }
     return members.contains { query.lowercased() == "\($0.name.lowercased()) " } ? nil : query
+}
+
+/// 持有当前斜杠查询的结果与高亮，网络调用经 BotStore 连接目标 Host。
+@MainActor @Observable
+final class WorkspaceFileSearch {
+    struct Query: Hashable {
+        let botId: String
+        let text: String
+        let end: Int
+    }
+
+    private var result: (query: Query, items: [WorkspaceFileCandidate], failed: Bool)?
+    private var dismissed: Query?
+    private(set) var index = 0
+
+    /// 已关闭的查询在改变正文或位置后才会重新打开。
+    func active(_ query: Query?) -> Bool { query != nil && query != dismissed }
+
+    /// 只展示与当前查询对应且未关闭的候选。
+    func items(for query: Query?) -> [SlashCommand] {
+        guard active(query), result?.query == query else { return [] }
+        return (result?.items ?? []).map(SlashCommands.workspaceFile)
+    }
+
+    /// 命令可继续使用，文件查询单独反馈等待、空结果和错误。
+    func status(for query: Query?, hasCommands: Bool) -> String {
+        guard active(query) else { return "" }
+        guard let result, result.query == query else { return L10n.tr("Searching workspace files…") }
+        if result.failed { return L10n.tr("Could not search workspace files.") }
+        return hasCommands ? "" : L10n.tr("No matching workspace files")
+    }
+
+    /// 取消后的响应不能覆盖新光标处的候选。
+    func refresh(_ query: Query?, store: BotStore) async {
+        guard !Task.isCancelled else { return }
+        result = nil
+        dismissed = nil
+        index = 0
+        guard let query else { return }
+        do {
+            if !query.text.isEmpty { try await Task.sleep(for: .milliseconds(120)) }
+            let items = try await store.searchWorkspaceFiles(botId: query.botId, query: query.text)
+            try Task.checkCancellation()
+            result = (query, items, false)
+        } catch {
+            if !Task.isCancelled { result = (query, [], true) }
+        }
+    }
+
+    /// 关闭当前搜索，保留输入的斜杠词。
+    func dismiss(_ query: Query?) { dismissed = query }
+
+    /// 高亮首尾循环，并从仍可见的行开始。
+    func move(by step: Int, count: Int) {
+        guard count > 0 else { return }
+        index = (min(index, count - 1) + step + count) % count
+    }
+
+    /// 结果在按键之间变化时，把高亮限制在当前列表内。
+    func selected(in commands: [SlashCommand]) -> SlashCommand? {
+        commands.isEmpty ? nil : commands[min(index, commands.count - 1)]
+    }
 }

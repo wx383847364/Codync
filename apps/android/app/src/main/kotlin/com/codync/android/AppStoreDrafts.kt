@@ -24,11 +24,25 @@ fun AppStore.editDraft(botId: String, text: String, replacement: IntRange? = nul
     catch (error: Exception) { showError(error) }
 }
 
-/** 原文和选人身份在同一份草稿快照中保存。 */
-fun AppStore.bindMention(key: String, text: String, mention: Mention) {
-    editDraft(key, text)
-    val current = state.value.drafts[key] ?: return
-    updateDraft(current.copy(mentions = current.mentions.filterNot { it.start < mention.end && it.end > mention.start } + mention))
+/** 一次保存原文和引用身份，编辑范围之后的既有引用同步平移。 */
+fun AppStore.bindMention(key: String, text: String, mention: Mention, replacement: IntRange? = null): Boolean {
+    if (state.value.loading || draftBook == null) return false
+    val current = state.value.drafts[key] ?: ComposerDraft(key)
+    val shifted = editMentions(current.text, text, current.mentions, replacement)
+    return try {
+        updateDraft(current.copy(text = text, mentions = shifted + mention))
+        true
+    } catch (error: Exception) {
+        // 超出草稿限额时保持原正文和引用，输入框不能先行更新。
+        showError(error)
+        false
+    }
+}
+
+/** 搜索目标聊天在当前 Host 上的工作区，结果不读取手机本地文件。 */
+internal suspend fun AppStore.searchWorkspaceFiles(botId: String, query: String): List<WorkspaceFileCandidate> {
+    val response = hostCall("searchWorkspaceFiles", body("botId" to botId, "query" to query))
+    return WireJson.decodeFromJsonElement(response.jsonObject.getValue("items"))
 }
 
 /** host 拒发后恢复原目标草稿，不覆盖随后输入的新内容。 */

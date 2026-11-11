@@ -98,7 +98,7 @@ export class BotSending extends BotSync {
     const text = entry.data.text ?? ''
     if (!text && !files.length) return
     this.dropEntry(entry)
-    this.send(text, entry.botId, { files, nonce: entry.data.clientNonce, replyTo: entry.data.replyTo, pasted: entry.data.pasted, call: entry.data.call, mentions: entry.data.mentions })
+    this.send(text, entry.botId, { files, nonce: entry.data.clientNonce, replyTo: entry.data.replyTo, pasted: entry.data.pasted, call: entry.data.call, mentions: [...entry.data.mentions ?? [], ...entry.data.workspaceFileReferences ?? []] })
   }
 
   discard(entry: Entry) {

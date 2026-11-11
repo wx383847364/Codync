@@ -33,6 +33,7 @@ struct Composer: View {
     @State private var files: [OutgoingFile] = []
     @State private var mentionIndex = 0
     @State private var dismissedMention: String?
+    @State private var fileSearch = WorkspaceFileSearch()
     @State private var pickingFiles = false
     @State private var pickingPhotos = false
     @State private var photoItems: [PhotosPickerItem] = []
@@ -66,6 +67,9 @@ struct Composer: View {
     /// 按光标定位查询，正文中间选人不截断尾文。
     private var mentionQuery: String? {
         guard bot?.isGroup == true, let range = input.mentionRange else { return nil }
+        let start = draft.utf16.distance(from: draft.startIndex, to: range.lowerBound)
+        // 群成员名称可能包含文件名，已选文件标签不进入成员搜索。
+        guard model.composerMentions[draftKey]?.contains(where: { $0.start <= start && start < $0.end && $0.workspaceFile != nil }) != true else { return nil }
         return String(draft[draft.index(after: range.lowerBound)..<range.upperBound])
     }
 
@@ -99,10 +103,40 @@ struct Composer: View {
     /// A group's bots, which its commands act on.
     private var members: [Bot] { bot.map(model.members(of:)) ?? [] }
 
-    /// The bot's `/` commands while the draft is `/partial`.
+    /// 查询只绑定当前聊天和光标位置；移开光标后可重新打开候选。
+    private var fileQuery: WorkspaceFileSearch.Query? {
+        guard model.connection == .online, model.hello?.workspaceFileSearch == true,
+              let range = input.workspaceFileRange else { return nil }
+        return .init(botId: botId, text: String(draft[range].dropFirst()), end: range.upperBound.utf16Offset(in: draft))
+    }
+
+    /// 保留原有命令优先级，把文件候选追加到同一列表。
     private var commands: [SlashCommand] {
-        guard let query = SlashCommands.query(draft) else { return [] }
-        return SlashCommands.list(for: bot, members: members, query: query, skills: model.installedSkills)
+        let existing = SlashCommands.query(draft).map {
+            SlashCommands.list(for: bot, members: members, query: $0, skills: model.installedSkills)
+        } ?? []
+        return existing + fileSearch.items(for: fileQuery)
+    }
+
+    /// 软键盘只在高亮的是文件时显示确认操作。
+    private var selectsFileOnReturn: Bool {
+        guard fileSearch.active(fileQuery), let command = fileSearch.selected(in: commands),
+              case .file = command.action else { return false }
+        return true
+    }
+
+    /// 原生输入框交付按键，候选状态由搜索模型维护。
+    private func composerKeyboard(_ key: String) {
+        if key == "shift-return" { return newline() }
+        if !suggestions.isEmpty { return mentionKeyboard(key) }
+        switch key {
+        case UIKeyCommand.inputEscape: fileSearch.dismiss(fileQuery)
+        case UIKeyCommand.inputUpArrow: fileSearch.move(by: -1, count: commands.count)
+        case UIKeyCommand.inputDownArrow: fileSearch.move(by: 1, count: commands.count)
+        case "\r", "\t":
+            if let command = fileSearch.selected(in: commands) { run(command) }
+        default: break
+        }
     }
 
     /// 群内按来源 lane 展示持有未保存结果的成员，恢复入口不依赖数据库卡片。
@@ -129,8 +163,9 @@ struct Composer: View {
                     .padding(.trailing, 16)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
-            if !commands.isEmpty {
-                CommandList(commands: commands, pick: run)
+            let status = fileSearch.status(for: fileQuery, hasCommands: !commands.isEmpty)
+            if !commands.isEmpty || !status.isEmpty {
+                CommandList(commands: commands, status: status, selected: fileSearch.index, pick: run)
                     .padding(.horizontal, 16)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
@@ -142,6 +177,7 @@ struct Composer: View {
             field
         }
         // 查询变化后重置高亮与临时关闭，后续相同输入仍能重新选人。
+        .task(id: fileQuery) { await fileSearch.refresh(fileQuery, store: model) }
         .onChange(of: mentionKey) { mentionIndex = 0; dismissedMention = nil }
         .animation(Motion.layout, value: suggestions.map(\.id))
         .animation(Motion.layout, value: commands.map(\.id))
@@ -296,7 +332,8 @@ struct Composer: View {
     private var box: some View {
         HStack(alignment: .bottom, spacing: 8) {
             MentionComposerField(input: $input, focused: $focused, placeholder: placeholder,
-                                 menuOpen: !suggestions.isEmpty, key: mentionKeyboard)
+                                 menuOpen: !suggestions.isEmpty || fileSearch.active(fileQuery),
+                                 selectsFileOnReturn: selectsFileOnReturn, key: composerKeyboard)
                 .overlay(alignment: .topLeading) {
                     if draft.isEmpty { Text(placeholder).foregroundStyle(Palette.tertiary).allowsHitTesting(false) }
                 }
@@ -426,6 +463,13 @@ struct Composer: View {
     private func run(_ command: SlashCommand) {
         guard let bot else { return }
         switch command.action {
+        case .file(let candidate):
+            guard let range = input.workspaceFileRange else { return }
+            let old = NSRange(range, in: draft)
+            input.insertMention(candidate.name, replacing: range)
+            let mention = Mention(start: old.location,
+                                  end: old.location + 1 + candidate.name.utf16.count, workspaceFile: candidate.file)
+            model.bindComposerMention(mention, text: draft, for: draftKey, replacing: old.location..<(old.location + old.length))
         case .fast:
             model.toggleFastMode(bot)
             draft = ""

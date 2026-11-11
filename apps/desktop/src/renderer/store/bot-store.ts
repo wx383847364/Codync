@@ -327,6 +327,12 @@ export class BotStore extends BotSending {
     return (await this.ready()).call<{ path: string }>('selectWorkspace', { path })
   }
 
+  /** 使用聊天对应的主机连接搜索工作区，客户端只显示候选。 */
+  async searchWorkspaceFiles(botId: string, query: string) {
+    const client = await this.ready()
+    return (await client.call<{ items: import('@shared/mentions').WorkspaceFileCandidate[] }>('searchWorkspaceFiles', { botId, query })).items
+  }
+
   async listDirs(path: string | null) {
     return (await this.ready()).call<DirListing>('listDirs', { path })
   }

@@ -94,6 +94,8 @@ pub struct App {
     /// The `/` list's highlighted row and the draft it was picked for.
     pub mention_dismissed: Option<(String, usize)>,
     pub slash_pick: (String, usize),
+    pub(super) workspace_file_search: bool,
+    workspace_search: Option<slash::WorkspaceSearch>,
     /// Files dropped on the composer (pasted paths), per draft like the text.
     pub files: HashMap<String, Vec<std::path::PathBuf>>,
     /// What was pasted into each draft, sent along so memory never takes it as the user's own words.
@@ -194,6 +196,8 @@ impl App {
             drafts: HashMap::new(),
             mention_dismissed: None,
             slash_pick: (String::new(), 0),
+            workspace_file_search: false,
+            workspace_search: None,
             files: HashMap::new(),
             pasted: HashMap::new(),
             sends: HashMap::new(),

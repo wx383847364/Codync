@@ -2,13 +2,23 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { groupFastMode } from '../../../shared/fast-mode.ts'
 import { normalizeBot } from '../../../shared/models.ts'
-import { builtInCommand, returnRuns, slashCommands, slashQuery } from './slash-commands.ts'
+import { builtInCommand, returnRuns, slashCommands, slashQuery, workspaceFileQuery } from './slash-commands.ts'
 
 const installed = [
   { id: 'pdf', name: 'PDF', description: 'PDFs' },
   { id: 'code-review', name: 'Code Review', description: '' },
   { id: 'xlsx', name: 'xlsx', description: '' },
 ]
+
+/** 光标中间支持路径，粘贴的 URL、选区和换行后的空输入保持普通文本。 */
+test('workspace search follows the slash word at the caret', () => {
+  const draft = '😀 /docs/架构 tail'
+  assert.deepEqual(workspaceFileQuery(draft, 11, 11), { query: 'docs/架构', start: 3, end: 11 })
+  assert.equal(workspaceFileQuery(draft, 3, 11), null)
+  assert.equal(workspaceFileQuery('/fast', 2, 2), null)
+  assert.equal(workspaceFileQuery('https://example.com', 19, 19), null)
+  assert.equal(workspaceFileQuery('/foo\n', 5, 5), null)
+})
 
 test('a leading slash opens the list until the name ends', () => {
   assert.equal(slashQuery('/'), '')
