@@ -47,14 +47,16 @@ pub fn tools() -> Value {
     }])
 }
 
-pub async fn call(hub: &Arc<Hub>, bot: &str, name: &str, args: &Value) -> Result<Value> {
+/// 按工具桥的会话身份向 actor 发送消息、表情和文件。
+pub async fn call(hub: &Arc<Hub>, bot: &str, name: &str, group: Option<&str>, args: &Value) -> Result<Value> {
     if name == "send_file" {
-        return send_file(hub, bot, args).await;
+        return send_file(hub, bot, group, args).await;
     }
     if name == crate::chat::reactions::TOOL {
         let (emoji, to) =
             (args["emoji"].as_str().unwrap_or_default().to_owned(), args["to"].as_str().map(str::to_owned));
-        deliver(hub, bot, |reply| Cmd::React { emoji, to, reply }).await?;
+        // actor 收到时检查群，避免入队后路由到了另一会话。
+        deliver(hub, bot, |reply| Cmd::React { group_session: group.map(str::to_owned), emoji, to, reply }).await?;
         return Ok(json!({"reacted": true}));
     }
     if name != "send_message" {
@@ -64,7 +66,13 @@ pub async fn call(hub: &Arc<Hub>, bot: &str, name: &str, args: &Value) -> Result
     if text.is_empty() || text.len() > MAX_MESSAGE_BYTES {
         bail!("text must be nonempty and at most {MAX_MESSAGE_BYTES} bytes");
     }
-    deliver(hub, bot, |reply| Cmd::SendToUser { text: text.to_owned(), reply }).await?;
+    // 保存工具桥的归属直到 actor 消费命令。
+    deliver(hub, bot, |reply| Cmd::SendToUser {
+        group_session: group.map(str::to_owned),
+        text: text.to_owned(),
+        reply,
+    })
+    .await?;
     Ok(json!({"sent": true}))
 }
 
@@ -85,7 +93,8 @@ impl Drop for CancelCopy {
     }
 }
 
-async fn send_file(hub: &Arc<Hub>, bot: &str, args: &Value) -> Result<Value> {
+/// 保留文件命令的群归属，复制和发布仍沿用既有投递校验。
+async fn send_file(hub: &Arc<Hub>, bot: &str, group: Option<&str>, args: &Value) -> Result<Value> {
     let path = args["path"].as_str().filter(|s| !s.is_empty()).ok_or_else(|| anyhow!("path is required"))?;
     let name = match args.get("name") {
         Some(value) => Some(crate::chat::files::name(value.as_str().ok_or_else(|| anyhow!("name must be a string"))?)?),
@@ -93,7 +102,16 @@ async fn send_file(hub: &Arc<Hub>, bot: &str, args: &Value) -> Result<Value> {
     };
     let guard = CancelCopy(Arc::new(std::sync::atomic::AtomicBool::new(false)));
     let (reply, delivered) = oneshot::channel();
-    hub.send_cmd(bot, Cmd::SendFile { path: path.to_owned(), name, cancelled: guard.0.clone(), reply })?;
+    hub.send_cmd(
+        bot,
+        Cmd::SendFile {
+            group_session: group.map(str::to_owned),
+            path: path.to_owned(),
+            name,
+            cancelled: guard.0.clone(),
+            reply,
+        },
+    )?;
     let result = tokio::time::timeout(Duration::from_mins(1), delivered).await;
     let delivered = result.map_err(|_| anyhow!("file sharing timed out; check the conversation before retrying"))?;
     delivered.map_err(|_| anyhow!("file sharing interrupted"))??;

@@ -63,6 +63,21 @@ pub async fn dispatch(hub: &Arc<Hub>, caller: &Caller, method: &str, b: Value) -
     if (method.ends_with("Call") || connector_call) && b["botId"].as_str().is_some_and(|id| hub.team.maintaining(id)) {
         anyhow::bail!("tools are unavailable during context maintenance");
     }
+    // 只有代理的内置工具桥携带会话归属。移动端通话等 API 仍按自己的目标鉴权。
+    if matches!(
+        method,
+        "chatCall"
+            | "teamCall"
+            | "memoryCall"
+            | "manageCall"
+            | "connectorCall"
+            | "computerCall"
+            | "routineCall"
+            | "composioCall"
+    ) && let Some(bot) = b["botId"].as_str()
+    {
+        hub.team.scoped_delivery(bot, b["groupSession"].as_str())?;
+    }
     if method == "connectorRuntime" && b["checkOnly"] == true {
         // 本地代理逐次检查执行窗口，不读取凭据或解锁保险库。
         return Ok(serde_json::json!({}));

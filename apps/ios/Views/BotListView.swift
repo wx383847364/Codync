@@ -357,6 +357,7 @@ struct BotListView: View {
             Button(L10n.tr("Move up")) { withAnimation(Motion.reduced(Motion.layout, reduceMotion)) { store.move(bot.id, by: -1) } }
             Button(L10n.tr("Move down")) { withAnimation(Motion.reduced(Motion.layout, reduceMotion)) { store.move(bot.id, by: 1) } }
         }
+        // 群的新会话操作沿用该行所属的电脑与菜单。
         .contextActions {
             var items = [MenuItem(bot.pinned ? "Unpin" : "Pin", icon: bot.pinned ? "pin.slash" : "pin") { store.setPinned(bot, !bot.pinned) }]
             // Below Pin, like the desktop; an older computer has no sections.
@@ -367,6 +368,12 @@ struct BotListView: View {
                     : MenuItem("Edit profile", icon: "pencil") { editing = EditTarget(computerId: item.ref.computerId, draft: BotDraft(bot)) },
                 MenuItem("Mark as read", icon: "checkmark.message") { store.markAllRead(bot.id) },
             ]
+            if bot.isGroup && store.supportsGroupSessions {
+                items.append(MenuItem("Create new group session", icon: "bubble.left.and.bubble.right") {
+                    // Host 返回新群后，名单选择会打开其聊天。
+                    store.createGroupSession(bot.id)
+                })
+            }
             if !bot.lead && !bot.isGroup && store.supportsLeadChoice {
                 items.append(MenuItem("Make lead agent", icon: "star") { store.setLead(bot) })
             }

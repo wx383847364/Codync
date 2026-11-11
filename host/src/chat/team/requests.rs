@@ -1,7 +1,7 @@
 //! Admission, capacity and the hop limit for bot messages.
 
 use crate::LockExt;
-use anyhow::{Result, bail};
+use anyhow::{Result, bail, ensure};
 use std::collections::HashMap;
 use std::sync::Mutex;
 
@@ -25,7 +25,7 @@ pub enum Turn {
     /// 整理回合不允许工作工具。
     Maintenance,
     /// 群投递的可信来源，不接受模型提供房间或执行身份。
-    Delivery { room: String, id: String },
+    Delivery { room: String, id: String, isolated: bool },
 }
 
 #[derive(Default)]
@@ -66,8 +66,19 @@ impl Requests {
     /// MCP 调用读取 actor 设置的可信执行身份，不能从模型入参伪造。
     pub fn delivery(&self, bot: &str) -> Option<(String, String)> {
         match self.0.locked().active.get(bot) {
-            Some(Turn::Delivery { room, id }) => Some((room.clone(), id.clone())),
+            Some(Turn::Delivery { room, id, .. }) => Some((room.clone(), id.clone())),
             _ => None,
+        }
+    }
+
+    /// 验证工具桥的会话归属并返回当时的投递 ID，迟到的调用无法归到其他群。
+    pub(crate) fn scoped_delivery(&self, bot: &str, group: Option<&str>) -> Result<Option<(String, String)>> {
+        if let Some(Turn::Delivery { room, id, isolated }) = self.0.locked().active.get(bot) {
+            ensure!(group == isolated.then_some(room.as_str()), "the tool is bound to another conversation");
+            Ok(Some((room.clone(), id.clone())))
+        } else {
+            ensure!(group.is_none(), "the tool is bound to another conversation");
+            Ok(None)
         }
     }
 
@@ -109,6 +120,19 @@ impl RequestState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 旧群桥和未绑定的主会话桥不能把派工归到当前独立群。
+    #[test]
+    fn isolated_tool_calls_require_the_active_rooms_bridge() {
+        let requests = Requests::default();
+        requests.start_turn("bot", Turn::Delivery { room: "fresh".into(), id: "delivery".into(), isolated: true });
+        assert!(requests.scoped_delivery("bot", Some("old")).is_err());
+        assert!(requests.scoped_delivery("bot", None).is_err());
+        assert_eq!(requests.scoped_delivery("bot", Some("fresh")).unwrap(), Some(("fresh".into(), "delivery".into())),);
+        requests.end_turn("bot");
+        assert!(requests.scoped_delivery("bot", Some("fresh")).is_err());
+        assert!(requests.scoped_delivery("bot", None).unwrap().is_none());
+    }
 
     #[test]
     fn exhausted_chain_rejects_messages_without_reserving_capacity() {

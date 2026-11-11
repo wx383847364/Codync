@@ -48,6 +48,7 @@ pub enum After {
     Backends,
     Update,
     Saved,
+    GroupSessionCreated,
     Connectors,
     Skills,
     Installed,

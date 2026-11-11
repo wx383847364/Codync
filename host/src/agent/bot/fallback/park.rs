@@ -45,6 +45,7 @@ pub(in crate::agent::bot) fn resume_step(hub: &Hub, base: &BotConfig) -> BotConf
 
 impl Actor {
     /// Moves the main session to step `target`'s agent: parks this agent's session and resumes the other's.
+    /// 切换 agent 时暂停主会话，独立群保留其各 agent 的会话。
     pub(super) async fn switch_to(&mut self, target: usize) {
         let bot = self.base.id.clone();
         let from = self.cfg.backend.clone();
@@ -71,7 +72,7 @@ impl Actor {
             c.acp.kill().await;
         }
         // A routine run's session belongs to the agent it ran on.
-        for slot in self.run_slots() {
+        for slot in self.run_slots().into_iter().filter(|slot| crate::store::slotted_group(slot).is_none()) {
             self.set_session(Some(&slot), None);
         }
         let left_session = self.session_id.clone();

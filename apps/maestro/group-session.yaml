@@ -1,0 +1,49 @@
+# 手机需先与任务沙箱配对。复用 mentions.js 创建测试群和成员。
+# maestro test --include-tags group-session -e HOST_PORT=<port> -e HOST_TOKEN=<token> apps/maestro
+appId: com.pokai.Codync.ios.dev
+tags:
+  - group-session
+onFlowComplete:
+  - runScript:
+      file: mentions.js
+      env:
+        CLEANUP: "true"
+---
+- runScript: mentions.js
+- runFlow:
+    when:
+      platform: iOS
+    commands:
+      - launchApp:
+          appId: com.pokai.Codync.ios.dev
+          arguments:
+            "-reviewInvitationOff": true
+- runFlow:
+    when:
+      platform: Android
+    commands:
+      - launchApp:
+          appId: com.pokai.Codync.android.dev
+- longPressOn: ${output.group}
+- tapOn: "Create new group session"
+- assertVisible: "${output.group} 1"
+- assertVisible: "Ask everyone.*"
+- takeScreenshot: group-session
+# 用新群的设置确认成员，并删除本流程创建的新群。
+- tapOn: "${output.group} 1, view details"
+- assertVisible: ${output.alpha}
+- assertVisible: ${output.beta}
+- scrollUntilVisible:
+    element: "Delete group chat"
+    direction: DOWN
+- tapOn: "Delete group chat"
+- runFlow:
+    when:
+      platform: iOS
+    commands:
+      - tapOn: "Delete bot and its conversation"
+- runFlow:
+    when:
+      platform: Android
+    commands:
+      - tapOn: "Delete group chat"

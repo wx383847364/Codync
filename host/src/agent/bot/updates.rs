@@ -20,6 +20,7 @@ pub(super) enum Answer {
 }
 
 impl Actor {
+    /// 只有当前 ACP 会话的审批和更新能进入当前聊天。
     pub(super) async fn on_incoming(&mut self, inc: Option<Incoming>) {
         match inc {
             None | Some(Incoming::Closed { .. }) => {
@@ -51,7 +52,10 @@ impl Actor {
                 }
             }
             Some(Incoming::Request { id, method, params }) => {
-                if method == "session/request_permission" && self.turn.is_some() {
+                if method == "session/request_permission"
+                    && self.turn.is_some()
+                    && self.turn_session.as_deref().is_some_and(|sid| params["sessionId"] == sid)
+                {
                     self.on_permission(id, params).await;
                 } else {
                     self.answer_outside_turn(id, &method, &params).await;

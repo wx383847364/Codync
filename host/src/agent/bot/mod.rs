@@ -195,8 +195,12 @@ pub(crate) struct Conn {
     pub(crate) rx: mpsc::UnboundedReceiver<Incoming>,
     sessions: SessionCaps,
     pub(crate) adapter: Adapter,
+    /// pi 的 MCP 工具按进程绑定，保存该进程可服务的独立群。
+    tool_group: Option<String>,
     /// Sessions already created or loaded in this process, and when each was last used.
     loaded: HashMap<String, Instant>,
+    /// 本进程里每个 ACP ID 的会话槽，防止新进程重用 ID 时跨槽加载。
+    session_slots: HashMap<String, Option<String>>,
     started: Instant,
     /// A `session/new` or `session/load` is waiting for its answer. Still set when a routine's time limit cut it short:
     /// the agent may then open that session, tools and all, under an id the host never learns (`drop_unanswered`).

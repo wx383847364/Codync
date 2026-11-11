@@ -36,9 +36,9 @@ internal object SlashCommands {
 
     /** /new 默认等任务与保存结束；立即切换和取消切换为另两项。 */
     private fun sessions(bot: Bot): List<SlashCommand> = if (bot.kind == "group") emptyList() else listOf(
-        SlashCommand("new", "plus", "在当前任务结束后新建会话", "主会话与群共享；先保存当前执行状态", false, sessionMode = "after"),
-        SlashCommand("new-now", "plus", "立即停止并新建", "主会话与群共享；先保存当前执行状态", false, sessionMode = "immediate"),
-        SlashCommand("new-cancel", "plus", "取消切换", "主会话与群共享", false, sessionMode = "cancel"),
+        SlashCommand("new", "plus", "在当前任务结束后新建会话", "主会话与普通群共享；先保存当前执行状态", false, sessionMode = "after"),
+        SlashCommand("new-now", "plus", "立即停止并新建", "主会话与普通群共享；先保存当前执行状态", false, sessionMode = "immediate"),
+        SlashCommand("new-cancel", "plus", "取消切换", "主会话与普通群共享", false, sessionMode = "cancel"),
     )
 
     /** Fast mode, while the bot (or a member of the group) shows it. */

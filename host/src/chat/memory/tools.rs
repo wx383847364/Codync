@@ -69,12 +69,12 @@ pub fn tools() -> Value {
 }
 
 /// 依据宿主当前执行选择私聊或本群检索，模型参数不能扩大可读范围。
-pub async fn call(hub: &Arc<Hub>, bot_id: &str, name: &str, args: &Value) -> Result<Value> {
+pub async fn call(hub: &Arc<Hub>, bot_id: &str, name: &str, group: Option<&str>, args: &Value) -> Result<Value> {
     let cfg = hub.store.bot(bot_id)?.filter(|b| !b.deleted).ok_or_else(|| anyhow!("unknown bot"))?.config;
     match name {
         "search_memory" => search_memory(hub, &cfg, args["query"].as_str().unwrap_or_default()).await,
         "search_history" => {
-            if let Some((_, id)) = hub.team.delivery(bot_id) {
+            if let Some((_, id)) = hub.team.scoped_delivery(bot_id, group)? {
                 crate::chat::group::history::read(hub, bot_id, &id, args).await
             } else {
                 if args.get("contextDeliveryId").is_some()

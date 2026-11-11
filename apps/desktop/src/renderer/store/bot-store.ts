@@ -268,6 +268,17 @@ export class BotStore extends BotSending {
     return bot
   }
 
+  /** 复制群设置并通过新群的 ID 打开空白会话，失败沿用现有错误提示。 */
+  createGroupSession(botId: string) {
+    // 新群的创建不能自动重放，避免断线时提交成功却又多建一个。
+    return this.perform(async (client) => {
+      const res = await client.call<{ bot: Bot }>('createGroupSession', { botId })
+      this.selection = this.putHostBot(normalizeBot(res.bot)).id
+      this.onRosterChanged?.()
+      this.changed()
+    })
+  }
+
   async updateGroup(draft: GroupDraft) {
     const res = await (await this.ready()).call<{ bot: Bot }>('updateBot', draft)
     this.putHostBot(normalizeBot(res.bot))

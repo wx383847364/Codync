@@ -40,7 +40,14 @@ pub(super) async fn call(hub: &Arc<Hub>, caller: &Caller, method: &str, b: Value
         )?,
         "routineCall" => crate::routines::call(hub, str_arg(&b, "botId")?, str_arg(&b, "name")?, &b["arguments"])?,
         "memoryCall" => {
-            crate::chat::memory::tool_call(hub, str_arg(&b, "botId")?, str_arg(&b, "name")?, &b["arguments"]).await?
+            crate::chat::memory::tool_call(
+                hub,
+                str_arg(&b, "botId")?,
+                str_arg(&b, "name")?,
+                b["groupSession"].as_str(),
+                &b["arguments"],
+            )
+            .await?
         }
         "chatCall" => {
             let (bot, name) = (str_arg(&b, "botId")?, str_arg(&b, "name")?);
@@ -51,11 +58,11 @@ pub(super) async fn call(hub: &Arc<Hub>, caller: &Caller, method: &str, b: Value
             } else if crate::chat::fallbacks::TOOLS.contains(&name) {
                 crate::chat::fallbacks::call(hub, bot, name, &b["arguments"]).await?
             } else if crate::chat::artifacts::TOOLS.contains(&name) {
-                crate::chat::artifacts::call(hub, bot, name, &b["arguments"]).await?
+                crate::chat::artifacts::call(hub, bot, name, b["groupSession"].as_str(), &b["arguments"]).await?
             } else if crate::dev_servers::TOOLS.contains(&name) {
-                crate::dev_servers::call(hub, bot, name, &b["arguments"]).await?
+                crate::dev_servers::call(hub, bot, name, b["groupSession"].as_str(), &b["arguments"]).await?
             } else {
-                crate::chat::outbox::call(hub, bot, name, &b["arguments"]).await?
+                crate::chat::outbox::call(hub, bot, name, b["groupSession"].as_str(), &b["arguments"]).await?
             }
         }
         // An agent on this computer that isn't a bot (`codync-host mcp network`).
@@ -64,10 +71,24 @@ pub(super) async fn call(hub: &Arc<Hub>, caller: &Caller, method: &str, b: Value
                 .await?
         }
         "teamCall" => {
-            crate::chat::team::call_async(hub, str_arg(&b, "botId")?, str_arg(&b, "name")?, &b["arguments"]).await?
+            crate::chat::team::call_async(
+                hub,
+                str_arg(&b, "botId")?,
+                str_arg(&b, "name")?,
+                b["groupSession"].as_str(),
+                &b["arguments"],
+            )
+            .await?
         }
         "manageCall" => {
-            crate::chat::manage::call(hub, str_arg(&b, "botId")?, str_arg(&b, "name")?, &b["arguments"]).await?
+            crate::chat::manage::call(
+                hub,
+                str_arg(&b, "botId")?,
+                str_arg(&b, "name")?,
+                b["groupSession"].as_str(),
+                &b["arguments"],
+            )
+            .await?
         }
         "history" => {
             let bot = str_arg(&b, "botId")?;
@@ -86,6 +107,11 @@ pub(super) async fn call(hub: &Arc<Hub>, caller: &Caller, method: &str, b: Value
             let cfg = crate::agent::new_bot::with_defaults(hub, b).await?;
             let hub = hub.clone();
             json!({"bot": tokio::task::spawn_blocking(move || hub.create_bot(cfg)).await??})
+        }
+        "createGroupSession" => {
+            let id = str_arg(&b, "botId")?.to_owned();
+            let hub = hub.clone();
+            json!({"bot": tokio::task::spawn_blocking(move || hub.create_group_session(&id)).await??})
         }
         // Bots from another app's export file on this computer (`import`).
         "previewImport" => crate::import::preview(&b).await?,

@@ -366,11 +366,13 @@ pub(crate) fn visible_bots(store: &Store) -> Result<Vec<BotConfig>> {
 /// A team tool call. Listing asks the other computers (briefly) when it hasn't lately, and a
 /// message to a bot on another computer goes over the network; everything else is [`call`].
 /// 将协作工具请求送到可信来源对应的群或私聊执行路径。
-pub async fn call_async(hub: &Arc<Hub>, from: &str, name: &str, args: &Value) -> Result<Value> {
-    if name == "list_bots"
-        && let Some((room, _)) = hub.team.delivery(from)
-    {
-        return directory::group(hub, from, &room, args);
+pub async fn call_async(hub: &Arc<Hub>, from: &str, name: &str, group: Option<&str>, args: &Value) -> Result<Value> {
+    if let Some((room, id)) = hub.team.scoped_delivery(from, group)? {
+        return match name {
+            "list_bots" => directory::group(hub, from, &room, args),
+            "message_bot" => group_message(hub, from, &room, &id, args),
+            _ => bail!("unknown team tool: {name}"),
+        };
     }
     match name {
         "list_bots" => {
@@ -379,13 +381,10 @@ pub async fn call_async(hub: &Arc<Hub>, from: &str, name: &str, args: &Value) ->
             directory::list(hub, from, args, &remote, |_| true)
         }
         "message_bot" => {
-            if let Some((room, id)) = hub.team.delivery(from) {
-                return group_message(hub, from, &room, &id, args);
-            }
             let (to, message) = message_args(args)?;
             match hub.network.recipient(to)? {
                 Recipient::There(target) => remote::message(hub, &visible_bot(hub, from)?, &target, message).await,
-                Recipient::Here(_) => call(hub, from, name, args),
+                Recipient::Here(to) => message_bot(hub, &visible_bot(hub, from)?, &to, message),
             }
         }
         _ => call(hub, from, name, args),

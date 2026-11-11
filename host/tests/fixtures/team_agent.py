@@ -1,6 +1,7 @@
 """Deterministic ACP agent for delegation tests; no provider or network access."""
 
 import json
+import os
 import pathlib
 import re
 import subprocess
@@ -9,6 +10,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 
 output_lock = threading.Lock()
@@ -16,6 +18,7 @@ cancel = threading.Event()
 permission = threading.Event()
 permission_reply = None
 servers = []
+prompt_session = threading.local()
 
 
 def send(value):
@@ -24,7 +27,8 @@ def send(value):
 
 
 def update(value):
-    send({"method": "session/update", "params": {"sessionId": "session", "update": value}})
+    """将更新标记到当前 prompt 的会话，多个会话共用进程时不能串线。"""
+    send({"method": "session/update", "params": {"sessionId": prompt_session.id, "update": value}})
 
 
 # actor 单测没有可执行的宿主 CLI；通过真实 loopback API 测工具桥，完整 stdio MCP 留给 team_e2e。
@@ -51,8 +55,10 @@ def mcp_call(server_name, tool, arguments, check_roster=True):
     if direct.exists():
         return direct_call(json.loads(direct.read_text()), server_name, tool, arguments)
     server = next(s for s in servers if s["name"] == server_name)
+    # 真实适配器把 ACP 工具桥的环境传给进程，夹具也要使用对应的会话身份。
+    env = dict(os.environ, **{entry["name"]: entry["value"] for entry in server.get("env", [])})
     with subprocess.Popen([server["command"], *server["args"]], stdin=subprocess.PIPE,
-                          stdout=subprocess.PIPE, text=True) as mcp:
+                          stdout=subprocess.PIPE, text=True, env=env) as mcp:
         def rpc(identifier, method, params):
             mcp.stdin.write(json.dumps({"jsonrpc": "2.0", "id": identifier, "method": method, "params": params}) + "\n")
             mcp.stdin.flush()
@@ -134,7 +140,8 @@ def compact(request):
 
 # 真实 ACP 回合夹具：读取有限派工步骤并通过真实 MCP 服务发出任务。
 def prompt(request):
-    """执行委派、分页读取与取消测试场景，不访问真实模型或账户。"""
+    """在当前会话模拟委派、分页读取与取消，不访问真实模型或账户。"""
+    prompt_session.id = request["params"]["sessionId"]
     text = request["params"]["prompt"][0]["text"]
     with open("prompts.jsonl", "a") as log:
         log.write(json.dumps(text) + "\n")
@@ -242,7 +249,7 @@ def prompt(request):
         return
     if "PERMISSION" in text:
         send({"id": "permission", "method": "session/request_permission", "params": {
-            "sessionId": "session", "toolCall": {"toolCallId": "edit", "title": "Edit a file"},
+            "sessionId": prompt_session.id, "toolCall": {"toolCallId": "edit", "title": "Edit a file"},
             "options": [{"optionId": "allow", "name": "Allow", "kind": "allow_once"}],
         }})
         while not cancel.is_set() and not permission.wait(0.01):
@@ -369,7 +376,9 @@ for line in sys.stdin:
             send({"id": request["id"], "error": {"code": -32000, "message": "fixture cannot reload session"}})
             continue
         pathlib.Path("servers.json").write_text(json.dumps(request["params"]["mcpServers"]))
-        send({"id": request["id"], "result": {"sessionId": "session", "models": {
+        # 新会话获得不同身份；重开时返回宿主请求的原身份。
+        session_id = request["params"].get("sessionId") or str(uuid.uuid4())
+        send({"id": request["id"], "result": {"sessionId": session_id, "models": {
             "currentModelId": "old", "availableModels": [{"modelId": "old", "name": "Old"}, {"modelId": "new", "name": "New"}],
         }}})
     elif method == "session/set_model":

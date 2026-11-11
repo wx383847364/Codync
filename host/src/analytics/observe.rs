@@ -61,6 +61,7 @@ pub fn observe(caller: &Caller, method: &str, b: &Value) -> Option<(Event, Map<S
 }
 
 /// The rest of `observe`: one arm per method.
+/// 复制群会话沿用建群事件，只添加操作来源。
 fn call_event(method: &str, b: &Value, p: &mut Map<String, Value>) -> Option<Event> {
     Some(match method {
         "setCloudUrl" => {
@@ -79,6 +80,11 @@ fn call_event(method: &str, b: &Value, p: &mut Map<String, Value>) -> Option<Eve
                 p.insert("agent".into(), b["backend"].clone());
                 p.insert("model".into(), b["model"].clone());
             }
+            Event::BotCreated
+        }
+        "createGroupSession" => {
+            p.insert("kind".into(), "group".into());
+            p.insert("source".into(), "group_session".into());
             Event::BotCreated
         }
         "setUsageShown" => {
@@ -225,8 +231,13 @@ pub fn observe_call(hub: &Hub, caller: &Caller, method: &str, b: &Value) -> Opti
 /// What only the answer tells: how many connectors or bots an import added, whether a Composio app is
 /// connected yet (its sign-in is polled until the connection is active), whether a published
 /// artifact's card went into its bot's chat, and whether a connector edit needed a check. `None`: not an event.
+/// 从创建结果统计成员数，群名和成员身份不进入事件。
 pub fn answered(event: Event, mut p: Map<String, Value>, answer: &Value) -> Option<Map<String, Value>> {
     match event {
+        Event::BotCreated if p.get("source").and_then(Value::as_str) == Some("group_session") => {
+            p.insert("members".into(), answer["bot"]["members"].as_array().map_or(0, Vec::len).into());
+            p.insert("outcome".into(), "created".into());
+        }
         Event::ConnectorsImported => {
             p.insert("count".into(), answer["items"].as_array().map_or(0, Vec::len).into());
         }
@@ -258,8 +269,14 @@ pub fn answered(event: Event, mut p: Map<String, Value>, answer: &Value) -> Opti
 /// What a failed call reports: a `network*` call's failure keeps what it was (`via` or
 /// `action`) as `network_failed` with `stage` `action`, and a connector edit reports its category,
 /// never the message; other failures report nothing.
+/// 创建新会话群失败时只上报预定义类别。
 pub fn failed(event: Event, mut p: Map<String, Value>, error: &anyhow::Error) -> Option<(Event, Map<String, Value>)> {
     match event {
+        Event::BotCreated if p.get("source").and_then(Value::as_str) == Some("group_session") => {
+            p.insert("outcome".into(), "failed".into());
+            p.insert("error".into(), (if error.is::<rusqlite::Error>() { "storage" } else { "other" }).into());
+            Some((event, p))
+        }
         Event::NetworkJoined | Event::NetworkChanged => {
             p.insert("stage".into(), "action".into());
             Some((Event::NetworkFailed, p))

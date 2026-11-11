@@ -237,8 +237,10 @@ impl Actor {
 
     /// Runs a compaction the host decided on, as a hidden turn in the main chat. Dreaming goes first, and Claude's
     /// opening is rendered again, so the compaction keeps current memory (render, load, compact).
+    /// 群整理使用其已通过预检的会话；私聊整理沿用主会话。
     pub(super) async fn start_compaction(&mut self, idle: bool, done_tx: &tokio::sync::mpsc::UnboundedSender<Done>) {
-        let (Some(sid), Some(command)) = (self.session_id.clone(), self.compact_command()) else { return };
+        let session = self.group_compaction.as_ref().map_or(self.session_id.as_ref(), |group| Some(&group.session));
+        let (Some(sid), Some(command)) = (session.cloned(), self.compact_command()) else { return };
         let _ = self.dreamer.send(memory::DreamEvent::Flush);
         if let Err(error) = context::refresh(&self.hub.store, &self.cfg.id, &sid) {
             tracing::warn!(bot = %self.cfg.id, error = format!("{error:#}"), "couldn't refresh the opening");

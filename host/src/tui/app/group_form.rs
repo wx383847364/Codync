@@ -1,11 +1,36 @@
 //! The new/edit group chat form.
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use serde_json::json;
+use serde_json::{Value, json};
 
-use super::{After, App, Bot, Editor, GroupField, GroupForm, Overlay};
+use super::{After, App, Bot, Editor, Focus, GroupField, GroupForm, Overlay};
 
 impl App {
+    /// 当前聊天选中群时返回它的 ID，供菜单显示和发起创建使用。
+    pub(super) fn selected_group_id(&self) -> Option<&str> {
+        self.selected.as_deref().filter(|id| self.group_sessions && self.bots.get(*id).is_some_and(|bot| bot.group))
+    }
+
+    /// 让 Host 创建独立会话群，收到新群后打开其聊天。
+    pub(super) fn create_group_session(&mut self) {
+        if let Some(id) = self.selected_group_id() {
+            self.call("createGroupSession", json!({"botId":id}), After::GroupSessionCreated);
+        }
+    }
+
+    /// 保存响应先更新名单，创建操作随后将焦点交给新聊天的输入框。
+    pub(super) fn receive_saved_bot(&mut self, bot: &Value, created: bool) {
+        if let Some(id) = bot["id"].as_str() {
+            self.upsert_bot(bot);
+            if created {
+                self.select(id);
+                self.chat_page = true;
+                self.focus = Focus::Chat;
+                self.typing = true;
+            }
+        }
+    }
+
     pub(super) fn new_group(&mut self) {
         self.overlays.push(Overlay::Group(GroupForm {
             group_id: None,

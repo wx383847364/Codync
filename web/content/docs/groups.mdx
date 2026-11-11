@@ -1,6 +1,6 @@
 A group chat puts several of your bots and you in one conversation. Each member answers in turn, reads what the others said, and does its work with its own agent, folder, tools and approval setting. Use a group when you want bots to discuss a problem, review each other's work, or split a task while you watch.
 
-A group has no agent, folder or session of its own. It's a room for bots you already have.
+A group is a room for bots you already have. Each member uses its own agent and folder.
 
 ## Create a group
 
@@ -12,7 +12,15 @@ Pick the bots to add, type a name if you like, and choose **Create**. Without a 
 
 - A group needs at least one bot.
 - A group can't contain another group.
-- If a group with exactly the same bots already exists, you get that group instead of a second one.
+- If an ordinary group with exactly the same bots already exists, this opens that group.
+
+## Start a fresh conversation with the same group
+
+- **Desktop:** right-click the group in the sidebar and choose **Create new group session**.
+- **iPhone and Android:** touch and hold the group in the bot list and choose **Create new group session**.
+- **Terminal UI:** select the group and press `Ctrl+K` and choose **Create new group session**.
+
+The new group opens immediately with the same members in the same order. Its name gets the next number, such as **Release 1**, **Release 2**, or **Release 3**. Each member starts a fresh agent session for that group, and later messages in that group use its own conversation. Bots still use their own settings, workspace and long-term memory.
 
 ## Edit, remove members, delete
 
@@ -79,14 +87,14 @@ exits, unsaved results may be lost; Codync reports uncertainty and does not reru
 
 `/new` waits for the current task and result save before switching; `/new-now` stops and
 switches after interruption has been saved; `/new-cancel` cancels the pending switch.
-A member's private chat and its groups share the session, so the switch affects all of them.
+A member's private chat and ordinary groups share the main session. Groups created with **Create new group session** have a separate session for each member.
 
 
 ## What each member remembers
 
-- **Shared session.** A member uses the same session in its private chat and its groups. Starting a fresh session affects both.
+- **Session history.** A member shares its main session between its private chat and ordinary groups. A numbered group created with **Create new group session** has its own conversation history and member sessions.
 - **Complete request.** Each turn receives the original request, attachments and quote, plus recent room context. Prior replies are available to the next member.
-- **Private chats.** Members are instructed not to reveal private conversations. The session still holds both conversations.
+- **Private chats.** In an ordinary group, the shared session still holds the member's private conversation, and members are instructed to keep it private.
 - **Long-term memory.** Group work does not feed user-conversation dreaming. A tool assignment is never recorded as the user's own words.
 
 ## Notifications and voice

@@ -212,7 +212,7 @@ private enum class Trailing { Interrupt, Stop, Call, Send }
         Text("${member.name}: ${member.storageError}", style = Type.footnote, color = Palette.danger)
         SecondaryButton("重试保存", action = { store.command("retryDeliverySave", body("botId" to member.id)) })
     }
-    if (bot.pendingNewSession) Text("将在当前任务结束后新建会话；主会话与群共享。输入 /new-cancel 取消切换。", style = Type.footnote, color = Palette.secondary)
+    if (bot.pendingNewSession) Text("将在当前任务结束后新建会话；主会话与普通群共享。输入 /new-cancel 取消切换。", style = Type.footnote, color = Palette.secondary)
     // Over the box, past the + button.
     QueuedMessages(queued, state, store, Modifier.padding(start = 16.dp + FIELD_HEIGHT + 8.dp, end = 16.dp))
     AnimatedVisibility(commands.isNotEmpty(), enter = fadeIn(Motion.fade()) + expandVertically(Motion.layoutSize),

@@ -514,6 +514,8 @@ export function normalizeScreen(raw: Partial<ScreenState> | undefined | null): S
 }
 
 export interface Hello {
+  /** 主机支持创建具有独立模型会话的群。 */
+  groupSessions?: boolean
   /** 主机能按附件身份校验原图尺寸，不包含正文路径读取能力。 */
   fileImageInfo?: boolean
   iconsRevision?: number

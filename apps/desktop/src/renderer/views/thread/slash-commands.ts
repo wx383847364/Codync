@@ -28,14 +28,14 @@ function builtIn(bot: Bot, members: Bot[]): SlashCommand[] {
   return fast ? [{ name: 'fast', icon: 'bolt', title: 'Fast mode', detail: fast.detail, warning: fast.state === 'refused', action: { kind: 'fast' } }] : []
 }
 
-/** /new 提供三项明确选择，默认等待；主会话和所有群共享新会话。 */
+/** /new 提供三项明确选择，默认等待；主会话和普通群共享新会话。 */
 function sessions(bot: Bot): SlashCommand[] {
   if (bot.kind === 'group') return []
   return [
     ['new', 'after', '在当前任务结束后新建会话'],
     ['new-now', 'immediate', '立即停止并新建'],
     ['new-cancel', 'cancel', '取消切换'],
-  ].map(([name, mode, title]) => ({ name: name!, icon: 'plus', title: title!, detail: '主会话与群共享；先保存当前执行状态', warning: false, action: { kind: 'session', mode: mode! } }))
+  ].map(([name, mode, title]) => ({ name: name!, icon: 'plus', title: title!, detail: '主会话与普通群共享；先保存当前执行状态', warning: false, action: { kind: 'session', mode: mode! } }))
 }
 
 /** A bot's own Fast mode, while it shows it. */

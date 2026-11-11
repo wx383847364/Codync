@@ -162,9 +162,10 @@ fn write(dest: &Path, source: &Path) -> Result<(u64, String)> {
 }
 
 /// The `chat` server's artifact tools.
-pub async fn call(hub: &Arc<Hub>, bot: &str, name: &str, args: &Value) -> Result<Value> {
+/// 传递工具桥归属，等待文件存储后仍只能在同一会话发布卡片。
+pub async fn call(hub: &Arc<Hub>, bot: &str, name: &str, group: Option<&str>, args: &Value) -> Result<Value> {
     match name {
-        "publish_artifact" => publish(hub, bot, args).await,
+        "publish_artifact" => publish(hub, bot, group, args).await,
         "list_artifacts" => {
             let artifacts: Vec<Value> = list(&hub.store, bot)
                 .iter()
@@ -179,7 +180,8 @@ pub async fn call(hub: &Arc<Hub>, bot: &str, name: &str, args: &Value) -> Result
     }
 }
 
-async fn publish(hub: &Arc<Hub>, bot: &str, args: &Value) -> Result<Value> {
+/// 存储结果后把会话归属交给 actor，由它核对当前卡片的目标。
+async fn publish(hub: &Arc<Hub>, bot: &str, group: Option<&str>, args: &Value) -> Result<Value> {
     let row = hub.store.bot(bot)?.filter(|r| !r.deleted).ok_or_else(|| anyhow!("unknown bot"))?;
     let source = args["path"].as_str().filter(|s| !s.is_empty()).ok_or_else(|| anyhow!("path is required"))?;
     let existing = match args["artifact"].as_str().filter(|s| !s.is_empty()) {
@@ -212,7 +214,10 @@ async fn publish(hub: &Arc<Hub>, bot: &str, args: &Value) -> Result<Value> {
     put(hub, &mut artifact)?;
     let mut answer = json!({"published": true, "artifact": {"id": artifact.id, "title": artifact.title}});
     let (reply, posted) = oneshot::channel();
-    hub.send_cmd(bot, Cmd::PostArtifact { data: artifact.card_entry(), reply })?;
+    hub.send_cmd(
+        bot,
+        Cmd::PostArtifact { group_session: group.map(str::to_owned), data: artifact.card_entry(), reply },
+    )?;
     let posted = tokio::time::timeout(Duration::from_secs(10), posted)
         .await
         .map_err(|_| anyhow!("the artifact was saved, but its card wasn't posted in time"))?

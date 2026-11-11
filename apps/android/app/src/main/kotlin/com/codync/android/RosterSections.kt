@@ -6,7 +6,9 @@ import com.codync.android.core.AppVersion
 import com.codync.android.core.Bot
 import java.text.Collator
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 
 /** One line of the roster as it shows: a bot, a section's header, or the "Bots" label (docs/plans/roster-sections.md). */
@@ -60,6 +62,10 @@ internal fun menuSections(bots: List<Bot>): List<String> = sectionNames(bots.fil
 
 /** The first host version that keeps sections (`section` on bots, `renameSection`). */
 private const val SECTIONS_HOST = "2.32.0"
+
+/** 根据当前群所属 Host 公布的能力显示独立会话入口。 */
+internal val AppState.supportsGroupSessions: Boolean
+    get() = hello?.get("groupSessions")?.jsonPrimitive?.booleanOrNull == true
 
 /** Section controls show only for a host that keeps sections; before its `hello` (offline) they stay hidden. */
 internal val AppState.supportsSections: Boolean

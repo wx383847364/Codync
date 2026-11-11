@@ -74,6 +74,7 @@ host answers and sends it once the host is up.
 |---|---|---|---|
 | `screen_viewed` | host `track` (desktop, TUI), iOS, Android | A screen, sheet or tab is shown | `screen` (see *Screens*) |
 | `bot_created` | host | `createBot` | `kind` (`bot`/`group`), `agent`, `model` or `members` (count) |
+| `bot_created` | host | `createGroupSession` | `kind` (`group`), `source` (`group_session`), `members` (count on success), `outcome` (`created`/`failed`), `error` (`storage`/`other` on failure) |
 | `bots_imported` | host | `importBots` (bots it makes send no `bot_created`) | `source` (`grok-bot`/`openbot`/`other`), `bots`, `groups` (counts) |
 | `bot_updated` | host | `updateBot` | `fields`: the settings that changed, as the bot config's own camelCase keys (`model`, `permission`, `pinned`, `section`, `modelOptions`, `fastMode`, …), never their values |
 | `bots_reordered` | host | `reorderBots` | — |

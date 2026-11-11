@@ -40,6 +40,9 @@ for line in sys.stdin:
     if method == "initialize":
         # Both ways to reopen a session, like codex-acp; only `session/load` is answered, as the host should prefer it.
         capabilities = {"loadSession": True, "sessionCapabilities": {"resume": {}}}
+        # 进程内 ID 会从 s1 重新分配，夹具可模拟无法重开的适配器。
+        if os.path.exists(f"{NAME}.no-reopen"):
+            capabilities = {}
         send({"id": message["id"], "result": {"protocolVersion": 1, "agentCapabilities": capabilities}})
     elif method == "session/new":
         sessions += 1
