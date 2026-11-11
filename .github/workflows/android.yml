@@ -88,7 +88,16 @@ jobs:
           api devices '{}' | jq -e 'any(.devices[]; .connected == true)' >/dev/null
           wait "$approver"
           approver=
-          maestro --device "$DEVICE_ID" test --debug-output "$RUNNER_TEMP/maestro-group" -e HOST_PORT="$HOST_PORT" -e HOST_TOKEN="$HOST_TOKEN" apps/maestro/group-session.yaml
+          mkdir -p "$RUNNER_TEMP/group-evidence"
+          result=0
+          maestro --device "$DEVICE_ID" test --debug-output "$RUNNER_TEMP/maestro-group" -e HOST_PORT="$HOST_PORT" -e HOST_TOKEN="$HOST_TOKEN" apps/maestro/group-session.yaml || result=$?
+          if test -d "$RUNNER_TEMP/maestro-group"; then
+            find "$RUNNER_TEMP/maestro-group" -type f -name '*.png' -exec cp {} "$RUNNER_TEMP/group-evidence/" \;
+          fi
+          if test "$result" -ne 0; then
+            xcrun simctl io "$DEVICE_ID" screenshot "$RUNNER_TEMP/group-evidence/iphone-final.png" || true
+          fi
+          exit "$result"
       - name: Collect iPhone simulator diagnostics
         if: failure()
         run: |
@@ -103,7 +112,7 @@ jobs:
           name: ios-group-evidence
           path: |
             ${{ runner.temp }}/ios-crashes
-            ${{ runner.temp }}/maestro-group
+            ${{ runner.temp }}/group-evidence
             group-session.png
           retention-days: 3
   android-group-session:
@@ -208,12 +217,21 @@ jobs:
           api devices '{}' | jq -e 'any(.devices[]; .connected == true)' >/dev/null
           wait "$approver"
           approver=
-          maestro --device "$DEVICE_ID" test --debug-output "$RUNNER_TEMP/maestro-group" -e HOST_PORT="$HOST_PORT" -e HOST_TOKEN="$HOST_TOKEN" apps/maestro/group-session.yaml
+          mkdir -p "$RUNNER_TEMP/group-evidence"
+          result=0
+          maestro --device "$DEVICE_ID" test --debug-output "$RUNNER_TEMP/maestro-group" -e HOST_PORT="$HOST_PORT" -e HOST_TOKEN="$HOST_TOKEN" apps/maestro/group-session.yaml || result=$?
+          if test -d "$RUNNER_TEMP/maestro-group"; then
+            find "$RUNNER_TEMP/maestro-group" -type f -name '*.png' -exec cp {} "$RUNNER_TEMP/group-evidence/" \;
+          fi
+          if test "$result" -ne 0; then
+            adb -s "$DEVICE_ID" exec-out screencap -p > "$RUNNER_TEMP/group-evidence/android-final.png" || true
+          fi
+          exit "$result"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: android-group-evidence
           path: |
-            ${{ runner.temp }}/maestro-group
+            ${{ runner.temp }}/group-evidence
             group-session.png
           retention-days: 3
