@@ -9,6 +9,7 @@ import type { SlashCommand } from './slash-commands'
 
 interface ComposerMenuState<T> {
   shown: T[]
+  status?: string
   index: number
   hover: (index: number) => void
   pick: (item: T) => void
@@ -21,7 +22,8 @@ interface ComposerMenuState<T> {
  * every key but Escape edits the draft and Return sends.
  */
 /** 统一候选按键；方向键逐次循环，光标离开末尾查询后交回编辑器。 */
-export function useComposerMenu<T>(draft: string, items: T[], pick: (item: T) => void, returnPicks: (item: T, draft: string) => boolean = () => true) {
+export function useComposerMenu<T>(draft: string, items: T[], pick: (item: T) => void, returnPicks: (item: T, draft: string) => boolean = () => true, options: { caret?: number; status?: string; loading?: boolean } = {}) {
+  const { caret = draft.length, status = '', loading = false } = options
   const [highlight, setHighlight] = useState({ draft: '', index: 0 })
   const [dismissed, setDismissed] = useState<string | null>(null)
   if (dismissed !== null && dismissed !== draft) setDismissed(null)
@@ -32,9 +34,16 @@ export function useComposerMenu<T>(draft: string, items: T[], pick: (item: T) =>
   // IME 与组合快捷键交给输入框，确认只消费当前候选。
   const onKey = (e: KeyboardEvent<HTMLTextAreaElement>, composing: boolean): boolean => {
     const picked = shown[index]
-    if (!picked || composing || e.altKey || e.metaKey || e.ctrlKey) return false
+    if (composing || e.altKey || e.metaKey || e.ctrlKey || dismissed === draft) return false
     const { selectionStart, selectionEnd } = e.currentTarget
-    if ((selectionStart !== draft.length || selectionEnd !== draft.length) && e.key !== 'Escape') return false
+    if ((selectionStart !== caret || selectionEnd !== caret) && e.key !== 'Escape') return false
+    if (!picked) {
+      // 等待匹配时按回车不能误发；Esc 可随时返回普通输入。
+      if (e.key === 'Escape' && status) setDismissed(draft)
+      else if (!loading || e.key !== 'Enter' || e.shiftKey) return false
+      e.preventDefault()
+      return true
+    }
     const step = e.key === 'ArrowDown' ? 1 : e.key === 'ArrowUp' ? -1 : 0
     const picks = (e.key === 'Tab' && !e.shiftKey) || (e.key === 'Enter' && !e.shiftKey && returnPicks(picked, draft))
     if (!step && !picks && e.key !== 'Escape') return false
@@ -47,7 +56,7 @@ export function useComposerMenu<T>(draft: string, items: T[], pick: (item: T) =>
     return true
   }
 
-  return { shown, index, hover: (i: number) => setHighlight({ draft, index: i }), pick, onKey }
+  return { shown, index, status: dismissed === draft ? '' : status, hover: (i: number) => setHighlight({ draft, index: i }), pick, onKey }
 }
 
 /** A list over the transcript, above the box: each row's icon, name and what it is. */
@@ -56,7 +65,7 @@ function ComposerMenu<T>({ menu, label, row }: {
   label: string
   row: (item: T) => { key: string; icon: ReactNode; title: string; detail: string; warning?: boolean }
 }) {
-  const open = menu.shown.length > 0
+  const open = menu.shown.length > 0 || !!menu.status
   const { mounted, shown } = usePresence(open)
   const last = useRef(menu.shown)
   if (open) last.current = menu.shown
@@ -70,6 +79,8 @@ function ComposerMenu<T>({ menu, label, row }: {
   return (
     <div className={`composer-menu ${shown ? 'shown' : ''}`} inert={!open}>
       <div className="menu-panel" role="listbox" aria-label={label}>
+        {menu.status && <div className="menu-row" role="status"><Text tone="secondary">{menu.status}</Text></div>}
+        {/* 候选点击和键盘共用同一个插入或执行操作。 */}
         {list.map((item, i) => {
           const { key, icon, title, detail, warning } = row(item)
           return (
@@ -102,8 +113,8 @@ export function CommandMenu({ menu }: { menu: ComposerMenuState<SlashCommand> })
   return <ComposerMenu menu={menu} label={tr('Commands')} row={(c) => ({
     key: `${c.action.kind}:${c.name}`,
     icon: <Icon name={c.icon} size={12} color="var(--secondary)" />,
-    title: tr(c.title),
-    detail: tr(c.detail),
+    title: c.action.kind === 'file' ? c.title : tr(c.title),
+    detail: c.action.kind === 'file' ? c.detail : tr(c.detail),
     warning: c.warning,
   })} />
 }

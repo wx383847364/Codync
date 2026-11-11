@@ -4,12 +4,13 @@ import com.codync.android.core.Bot
 import com.codync.android.core.FastModeState
 import com.codync.android.core.GroupFastMode
 import com.codync.android.core.InstalledSkill
+import com.codync.android.core.WorkspaceFileCandidate
 import com.codync.android.core.fastModeDetail
 import com.codync.android.core.fastModeState
 
 /** A command in the composer's `/` list (iOS `SlashCommand`): Fast mode, or one of the bot's skills. */
 internal data class SlashCommand(val name: String, val icon: String, val title: String, val detail: String, val warning: Boolean,
-    val skill: String? = null, val sessionMode: String? = null)
+    val skill: String? = null, val sessionMode: String? = null, val file: WorkspaceFileCandidate? = null)
 
 /**
  * The composer's `/` commands, listed while the draft is just `/partial`, the same in a group (iOS `SlashCommands`): Fast mode
@@ -19,6 +20,21 @@ internal data class SlashCommand(val name: String, val icon: String, val title: 
 internal object SlashCommands {
     /** The command name being typed after a leading `/`, before any space. */
     fun query(draft: String): String? = if (draft.startsWith("/") && draft.none(Char::isWhitespace)) draft.drop(1) else null
+
+    /** 光标前最后一个斜杠词可以包含路径；词内斜杠和非空选区不打开搜索。 */
+    fun fileRange(draft: String, start: Int, end: Int): IntRange? {
+        if (start != end || start !in 1..draft.length) return null
+        if (start < draft.length && !draft[start].isWhitespace()) return null
+        val from = draft.substring(0, start).indexOfLast(Char::isWhitespace) + 1
+        val token = draft.substring(from, start)
+        return if (token.startsWith("/") && !token.startsWith("//") && token.length <= 256) from until start else null
+    }
+
+    /** 文件候选复用命令行布局，带工作区来源和相对路径。 */
+    fun workspaceFile(candidate: WorkspaceFileCandidate): SlashCommand {
+        val detail = listOf(candidate.source, candidate.file.path).filter(String::isNotEmpty).joinToString(" · ")
+        return SlashCommand(candidate.file.path, "doc", candidate.name, detail, false, file = candidate)
+    }
 
     /** Built-in commands, then the skills the bot has on (a group's: any member's), whose name or title holds `query`. `members` are a group's bots. */
     /** 列出当前聊天适用的命令与会话切换选项。 */

@@ -11,6 +11,7 @@ use super::{
 };
 
 impl App {
+    /// 粘贴只更新当前编辑器，暴露斜杠查询时从当前 Host 刷新候选。
     pub fn on_paste(&mut self, s: &str) {
         if let Some(sh) = self.shell.as_ref().filter(|s| s.exited.is_none()) {
             let _ = sh.input.send(s.as_bytes().to_vec());
@@ -28,6 +29,7 @@ impl App {
             } else {
                 self.drafts.entry(key.clone()).or_default().insert(&s);
                 self.pasted.entry(key).or_default().push(s);
+                self.slash_typed();
             }
         }
     }
@@ -108,6 +110,8 @@ impl App {
         match k.code {
             KeyCode::Esc => self.typing = false,
             KeyCode::Enter if newline => draft.insert("\n"),
+            // 长按确认只选中一次，候选关闭后的重复事件不会发送消息。
+            KeyCode::Enter if k.kind == crossterm::event::KeyEventKind::Repeat => {}
             KeyCode::Char('j') if ctrl => draft.insert("\n"),
             KeyCode::Enter => {
                 let text = draft.text.clone();

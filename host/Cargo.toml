@@ -1,6 +1,6 @@
 [package]
 name = "codync-host"
-version = "2.43.0"
+version = "2.45.0"
 edition = "2024"
 # iroh (codync-network) needs 1.91.
 rust-version = "1.91"
@@ -28,6 +28,8 @@ clap = { version = "4.6.7", features = ["derive", "env"] }
 croner = "3"
 crossterm = { version = "0.29", features = ["event-stream"] }
 dirs = "7.0.0"
+dunce = "1.0.5"
+ignore = "0.4.23"
 ed25519-dalek = "3.0.0"
 flate2 = "1.1.10"
 fs2 = "0.4.3"

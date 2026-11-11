@@ -57,19 +57,29 @@ private struct ComposerListRow<Icon: View>: View {
 /// The `/` list: each command's icon, name and what it does; a tap runs it.
 struct CommandList: View {
     let commands: [SlashCommand]
+    var status = ""
+    var selected = 0
     let pick: (SlashCommand) -> Void
 
+    /// 文件与命令使用同一个列表，键盘高亮始终保持可见。
     var body: some View {
-        ComposerList {
-            ForEach(commands) { command in
-                ComposerListRow(title: command.title, detail: command.detail, warning: command.warning) {
-                    pick(command)
-                } icon: {
-                    Image(systemName: command.icon)
-                        .font(.subheadline)
-                        .foregroundStyle(Palette.secondary)
+        ScrollViewReader { proxy in
+            ComposerList {
+                if !status.isEmpty {
+                    Text(status).font(.subheadline).foregroundStyle(Palette.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading).padding(10)
+                }
+                ForEach(Array(commands.enumerated()), id: \.element.id) { index, command in
+                    ComposerListRow(title: command.title, detail: command.detail, warning: command.warning) {
+                        pick(command)
+                    } icon: {
+                        Image(systemName: command.icon).font(.subheadline).foregroundStyle(Palette.secondary)
+                    }
+                    .background(index == selected ? Palette.surface : .clear, in: RoundedRectangle(cornerRadius: 10))
+                    .id(index)
                 }
             }
+            .onChange(of: selected) { _, index in withAnimation(Motion.layout) { proxy.scrollTo(index) } }
         }
     }
 }

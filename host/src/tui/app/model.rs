@@ -50,6 +50,7 @@ pub enum After {
     Saved,
     Connectors,
     Skills,
+    WorkspaceFiles(uuid::Uuid),
     Installed,
     /// Memory, routines, marketplace, sign-in (`manage`).
     Sheet(Reply),

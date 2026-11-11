@@ -2,8 +2,8 @@
 
 use crate::agent::bot::Cmd;
 use crate::hub::Hub;
-use crate::store::{BotConfig, Entry, EntryKind, Lane};
-use anyhow::{Result, anyhow};
+use crate::store::{BotConfig, Entry, Lane};
+use anyhow::Result;
 use serde_json::Value;
 use std::sync::Arc;
 
@@ -15,6 +15,14 @@ pub fn post(hub: &Arc<Hub>, cfg: &BotConfig, mut data: Value) -> Result<Entry> {
     data["status"] = (if cfg.is_group() { "sent" } else { "queued" }).into();
     let lane = Lane::main(&cfg.id);
     let turn = hub.store.max_turn(&cfg.id) + 1;
+    let mentions: Vec<crate::chat::mentions::Mention> =
+        data.get("mentions").cloned().map(serde_json::from_value).transpose()?.unwrap_or_default();
+    if mentions.iter().any(|mention| mention.workspace_file.is_some()) {
+        // 旧版手机要求 mentions 中每项有 botId，文件引用通过新增字段同步。
+        let (files, members): (Vec<_>, Vec<_>) = mentions.iter().partition(|mention| mention.workspace_file.is_some());
+        data["mentions"] = serde_json::json!(members);
+        data["workspaceFileReferences"] = serde_json::json!(files);
+    }
     // 新旧客户端统一在入库时解析；保存后不再按后来改名重新路由。
     let e = if cfg.is_group() {
         let members = cfg
@@ -27,8 +35,6 @@ pub fn post(hub: &Arc<Hub>, cfg: &BotConfig, mut data: Value) -> Result<Entry> {
             .filter(|r| !r.deleted)
             .map(|r| r.config)
             .collect::<Vec<_>>();
-        let mentions: Vec<crate::chat::mentions::Mention> =
-            data.get("mentions").cloned().map(serde_json::from_value).transpose()?.unwrap_or_default();
         let targets = crate::chat::mentions::targets(
             data["text"].as_str().unwrap_or_default(),
             &mentions,
@@ -39,7 +45,11 @@ pub fn post(hub: &Arc<Hub>, cfg: &BotConfig, mut data: Value) -> Result<Entry> {
         data["resolvedMentions"] = serde_json::json!(targets);
         hub.post_group(&cfg.id, &data, &targets)?
     } else {
-        hub.add_entry(&lane, EntryKind::User, turn, &data).ok_or_else(|| anyhow!("couldn't save the message"))?
+        let (entry, added) = hub.add_user_entry(&lane, turn, &data)?;
+        if !added {
+            return Ok(entry);
+        }
+        entry
     };
     // Before the turn starts, so its reply lands unread.
     if let Err(error) = hub.mark_read(&cfg.id) {

@@ -140,6 +140,13 @@ def prompt(request):
         log.write(json.dumps(text) + "\n")
     with open("prompt-requests.jsonl", "a") as log:
         log.write(json.dumps(request["params"]) + "\n")
+    # 文件引用 E2E 直接读取 Host 提交的路径，并把选中的文件内容回给真实客户端。
+    if re.search(r"(?m)^READ_WORKSPACE_FILE ", text):
+        attached = re.search(r"(?m)^\[Attached files — read them from these paths\]\n- (.+)$", text)
+        reply = pathlib.Path(attached[1]).read_text(encoding="utf-8") if attached else "Workspace file path missing"
+        update({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": reply}})
+        send({"id": request["id"], "result": {"stopReason": "end_turn"}})
+        return
     # 原生维护必须先分流，不能把 /compact 算成普通群接力或用户回复。
     if text.startswith("/compact") and pathlib.Path("group-compact.json").exists():
         compact(request)

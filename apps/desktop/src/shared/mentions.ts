@@ -1,5 +1,8 @@
-/** 选择成员后固定的身份；偏移使用请求正文的 UTF-16 半开区间。 */
-export interface Mention { botId: string; start: number; end: number }
+export interface WorkspaceFileReference { path: string; workspace: string }
+export interface WorkspaceFileCandidate { name: string; source: string; file: WorkspaceFileReference }
+
+/** 固定成员或工作区文件身份，偏移使用请求正文的 UTF-16 半开区间。 */
+export interface Mention { botId?: string; start: number; end: number; workspaceFile?: WorkspaceFileReference }
 
 /** 根据一次文本编辑平移未受影响的绑定；编辑触及片段时解除身份绑定。 */
 export function editMentions(before: string, after: string, mentions: readonly Mention[], replacement?: { start: number; end: number }): Mention[] {

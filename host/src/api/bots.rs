@@ -3,6 +3,7 @@
 use super::devices::Caller;
 use super::str_arg;
 use crate::agent::bot::Cmd;
+use crate::chat::workspace_files;
 use crate::hub::Hub;
 use crate::store::{EntryKind, Lane};
 use anyhow::{Context, Result, anyhow, bail};
@@ -168,6 +169,20 @@ pub(super) async fn call(hub: &Arc<Hub>, caller: &Caller, method: &str, b: Value
                     .await??;
             json!({"data": base64::engine::general_purpose::STANDARD.encode(data), "size": size})
         }
+        "searchWorkspaceFiles" => {
+            static SEARCHES: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(3);
+            let row = hub.store.bot(str_arg(&b, "botId")?)?.filter(|r| !r.deleted).context("unknown chat")?;
+            let query = str_arg(&b, "query")?.to_owned();
+            let sources = workspace_files::sources(&hub.store, &row.config)?;
+            let permit = SEARCHES.acquire().await?;
+            let items = tokio::task::spawn_blocking(move || {
+                // 即使客户端取消请求，也让仍在扫描的任务占用并发槽位。
+                let _permit = permit;
+                workspace_files::search(&sources, &query)
+            })
+            .await??;
+            json!({"items": items})
+        }
         "send" => {
             let bot = str_arg(&b, "botId")?;
             let raw_text = b["text"].as_str().unwrap_or_default();
@@ -210,6 +225,21 @@ pub(super) async fn call(hub: &Arc<Hub>, caller: &Caller, method: &str, b: Value
             }
             let mut data =
                 json!({"text": text, "clientNonce": nonce, "attachments": attachments, "mentions": mentions});
+            if mentions.iter().any(|m| m.workspace_file.is_some()) {
+                let sources = workspace_files::sources(&hub.store, &row.config)?;
+                let message = text.to_owned();
+                // 先完成核验再提交消息；客户端提供的路径不直接进入提示。
+                let paths =
+                    tokio::task::spawn_blocking(move || workspace_files::resolve(&sources, &message, &mentions))
+                        .await??;
+                // 磁盘核验会让出线程；同 nonce 的并发重试可能已完成入库。
+                if !nonce.is_empty()
+                    && let Some(entry) = hub.store.find_by_nonce(bot, nonce)
+                {
+                    return Ok(ControlFlow::Break(json!({"entry": entry})));
+                }
+                data["workspaceFilePaths"] = json!(paths);
+            }
             // What the user pasted rather than typed: memory never takes it as the user's own words.
             let pasted: Vec<&str> = b["pasted"]
                 .as_array()

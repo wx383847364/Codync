@@ -105,7 +105,7 @@ fn render_entry(hub: &Hub, s: &Snapshot, me: &BotConfig, e: &Entry, title: &str)
     let raw = e.data["text"].as_str().unwrap_or_default();
     let attachments = e.data["attachments"].as_array().map_or(&[][..], Vec::as_slice);
     let rendered =
-        crate::chat::prompt::of_message(&hub.store, &me.skills, &crate::chat::uploads::root(&s.room), raw, attachments);
+        crate::chat::prompt::of_message(&hub.store, &me.skills, &crate::chat::uploads::root(&s.room), &e.data);
     let marker = if s.delivery.source_entry_id.as_deref() == Some(e.id.as_str()) {
         "Request (complete original):\n"
     } else {

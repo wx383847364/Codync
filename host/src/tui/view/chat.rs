@@ -254,6 +254,15 @@ pub(super) fn chat(buf: &mut Buffer, r: Rect, app: &mut App, narrow: bool) {
 fn command_menu(buf: &mut Buffer, body: Rect, app: &App) {
     let t = theme();
     let commands = app.slash_commands();
+    if commands.is_empty()
+        && let Some(status) = app.workspace_search_status()
+        && body.height > 0
+    {
+        let y = body.bottom() - 1;
+        fill(buf, Rect::new(body.x, y, body.width, 1), t.panel);
+        put(buf, body.x + 3, y, body.width.saturating_sub(3), status, t.secondary.patch(t.panel));
+        return;
+    }
     let sel = app.slash_selected(commands.len());
     let n = u(commands.len().min(5)).min(body.height);
     let start = sel.saturating_sub(usize::from(n).saturating_sub(1));
@@ -268,14 +277,19 @@ fn command_menu(buf: &mut Buffer, body: Rect, app: &App) {
             y,
             26,
             &truncate(
-                &if c.action == SlashAction::Mention { format!("@{}", c.title) } else { format!("/{}", c.name) },
+                &if matches!(c.action, SlashAction::Mention | SlashAction::File(_)) {
+                    format!("@{}", c.title)
+                } else {
+                    format!("/{}", c.name)
+                },
                 26,
             ),
             name.patch(bg),
         ) + 2;
-        let hint = match (i == sel, c.action) {
+        let hint = match (i == sel, &c.action) {
             (false, _) => "",
             (true, SlashAction::Skill) => "tab fills in",
+            (true, SlashAction::Mention | SlashAction::File(_)) => "↵ inserts",
             (true, _) => "↵ runs",
         };
         let rx = rput(buf, body.right() - 1, y, hint, t.dim.patch(bg));

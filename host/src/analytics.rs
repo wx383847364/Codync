@@ -68,6 +68,8 @@ pub enum Event {
     ImageViewed,
     /// 草稿图片预览使用或解码失败，不包含附件内容。
     AttachmentPreview,
+    /// 搜索结果与失败类别，绝不记录搜索词或文件路径。
+    WorkspaceFilesSearched,
     FileLinkAction,
     BotCreated,
     BotUpdated,
@@ -174,6 +176,7 @@ impl Event {
             Self::FileShared => "file_shared",
             Self::ImageViewed => "image_viewed",
             Self::AttachmentPreview => "attachment_preview",
+            Self::WorkspaceFilesSearched => "workspace_files_searched",
             Self::FileLinkAction => "file_link_action",
             Self::BotCreated => "bot_created",
             Self::BotUpdated => "bot_updated",

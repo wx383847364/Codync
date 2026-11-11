@@ -101,10 +101,16 @@ fn call_event(method: &str, b: &Value, p: &mut Map<String, Value>) -> Option<Eve
             Event::SectionRenamed
         }
         "deleteBot" => Event::BotDeleted,
+        "searchWorkspaceFiles" => Event::WorkspaceFilesSearched,
         "send" => {
             let reply = b["replyTo"].as_str().is_some_and(|t| !t.is_empty());
             p.insert("reply".into(), reply.into());
             p.insert("attachments".into(), b["attachments"].as_array().map_or(0, Vec::len).into());
+            let references =
+                b["mentions"].as_array().into_iter().flatten().filter(|m| m["workspaceFile"].is_object()).count();
+            if references > 0 {
+                p.insert("workspaceFileReferences".into(), references.into());
+            }
             Event::MessageSent
         }
         "stop" => Event::TurnStopped,
@@ -227,6 +233,10 @@ pub fn observe_call(hub: &Hub, caller: &Caller, method: &str, b: &Value) -> Opti
 /// artifact's card went into its bot's chat, and whether a connector edit needed a check. `None`: not an event.
 pub fn answered(event: Event, mut p: Map<String, Value>, answer: &Value) -> Option<Map<String, Value>> {
     match event {
+        Event::WorkspaceFilesSearched => {
+            let found = answer["items"].as_array().is_some_and(|items| !items.is_empty());
+            p.insert("outcome".into(), if found { "found" } else { "empty" }.into());
+        }
         Event::ConnectorsImported => {
             p.insert("count".into(), answer["items"].as_array().map_or(0, Vec::len).into());
         }
@@ -263,6 +273,11 @@ pub fn failed(event: Event, mut p: Map<String, Value>, error: &anyhow::Error) ->
         Event::NetworkJoined | Event::NetworkChanged => {
             p.insert("stage".into(), "action".into());
             Some((Event::NetworkFailed, p))
+        }
+        Event::WorkspaceFilesSearched => {
+            p.insert("outcome".into(), "failed".into());
+            p.insert("error".into(), "search_failed".into());
+            Some((event, p))
         }
         Event::ConnectorUpdated => {
             let category =

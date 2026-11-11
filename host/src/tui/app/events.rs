@@ -162,7 +162,12 @@ impl App {
         }
     }
 
+    /// 将响应交给仍在等待它的界面，过期搜索不影响当前聊天。
     fn on_reply(&mut self, after: After, r: Result<Value, String>) {
+        if let After::WorkspaceFiles(id) = after {
+            self.workspace_files_answered(id, r);
+            return;
+        }
         if let After::Connection(id, step) = after {
             self.connection_reply(&id, step, r);
             return;
@@ -234,6 +239,7 @@ impl App {
         match after {
             After::Nothing
             | After::Tracked
+            | After::WorkspaceFiles(_)
             | After::Answered(_)
             | After::Sheet(_)
             | After::Network(_)
@@ -250,6 +256,9 @@ impl App {
                 self.call("hello", json!({}), After::Hello);
             }
             After::Hello => {
+                self.workspace_file_search = v["workspaceFileSearch"] == true;
+                self.workspace_search = None;
+                self.slash_typed();
                 self.custom_icons = v["icons"].is_object();
                 self.mismatch = crate::compat::check(env!("CARGO_PKG_VERSION"), crate::compat::MIN_HOST, &v);
                 v["name"].as_str().unwrap_or("computer").clone_into(&mut self.host);

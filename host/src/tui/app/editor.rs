@@ -165,14 +165,24 @@ mod tests {
     #[test]
     fn edits_keep_only_unchanged_mention_tokens() {
         let mut e = Editor::with("😀@a tail");
-        e.mentions.push(crate::chat::mentions::Mention { bot_id: "a".into(), start: 2, end: 4 });
+        e.mentions.push(crate::chat::mentions::Mention {
+            bot_id: Some("a".into()),
+            start: 2,
+            end: 4,
+            workspace_file: None,
+        });
         e.cursor = "😀@a".len();
         e.insert("!");
         assert_eq!((e.mentions[0].start, e.mentions[0].end), (2, 4));
         e.cursor = "😀@a".len();
         e.insert("字");
         assert_eq!(e.mentions, []);
-        e.mentions.push(crate::chat::mentions::Mention { bot_id: "a".into(), start: 2, end: 4 });
+        e.mentions.push(crate::chat::mentions::Mention {
+            bot_id: Some("a".into()),
+            start: 2,
+            end: 4,
+            workspace_file: None,
+        });
         e.cursor = "😀@a".len();
         e.key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
         assert_eq!(e.mentions, []);

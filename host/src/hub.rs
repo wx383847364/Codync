@@ -379,6 +379,19 @@ impl Hub {
         }
     }
 
+    /// 在同一写入锁内按 nonce 接受私聊消息，重复请求只返回原消息。
+    pub fn add_user_entry(&self, lane: &Lane, turn: i64, data: &Value) -> Result<(Entry, bool)> {
+        let _guard = self.emit_lock.locked();
+        if let Some(nonce) = data["clientNonce"].as_str().filter(|nonce| !nonce.is_empty())
+            && let Some(entry) = self.store.find_by_nonce(&lane.chat, nonce)
+        {
+            return Ok((entry, false));
+        }
+        let entry = self.store.insert_entry(lane, EntryKind::User, turn, data)?;
+        let _ = self.events.send(json!({"type":"entry","rev":entry.rev,"entry":entry}));
+        Ok((entry, true))
+    }
+
     pub fn add_entry_once(
         &self,
         id: &str,

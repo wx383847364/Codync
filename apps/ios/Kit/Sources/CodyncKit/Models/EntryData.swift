@@ -7,6 +7,7 @@ public struct EntryData: Codable, Hashable, Sendable {
     public var deliveryBody: String?
     public var deliveryRows: [DeliveryRow]?
     public var mentions: [Mention]?
+    public var workspaceFileReferences: [Mention]?
     public var connectionRequest: ConnectionRequest?
     /// A memory line an older host put in the chat. Memory lives in the bot's memory settings, so it isn't shown.
     public var memory: MemoryLine?
@@ -168,14 +169,32 @@ public struct Attachment: Codable, Hashable, Sendable, Identifiable {
 }
 
 
-/// 固定成员身份，偏移始终使用实际请求正文的 UTF-16 半开区间。
+public struct WorkspaceFileReference: Codable, Hashable, Sendable {
+    public var path: String
+    public var workspace: String
+}
+
+public struct WorkspaceFileCandidate: Codable, Hashable, Sendable {
+    public var name: String
+    public var source: String
+    public var file: WorkspaceFileReference
+}
+
+/// 固定成员或工作区文件身份，偏移始终使用实际请求正文的 UTF-16 半开区间。
 public struct Mention: Codable, Hashable, Sendable {
-    public var botId: String
+    public var botId: String?
     public var start: Int
     public var end: Int
 
-    /// 选择成员时创建绑定，名字只保留在正文中。
-    public init(botId: String, start: Int, end: Int) { self.botId = botId; self.start = start; self.end = end }
+    public var workspaceFile: WorkspaceFileReference?
+
+    /// 创建引用绑定，显示名保留在原文中。
+    public init(botId: String? = nil, start: Int, end: Int, workspaceFile: WorkspaceFileReference? = nil) {
+        self.botId = botId
+        self.start = start
+        self.end = end
+        self.workspaceFile = workspaceFile
+    }
 
     /// 编辑触及片段时解除绑定；片段外编辑同步移动偏移。
     public static func edited(from before: String, to after: String, mentions: [Mention], replacement: Range<Int>? = nil) -> [Mention] {
@@ -192,7 +211,7 @@ public struct Mention: Codable, Hashable, Sendable {
             return mentions.compactMap { mention in
                 let extendsName = mention.end == replacement.lowerBound && delta > 0 && nameContinues(at: mention.end)
                 if mention.end <= replacement.lowerBound, !extendsName { return mention }
-                if mention.start >= replacement.upperBound { return Mention(botId: mention.botId, start: mention.start + delta, end: mention.end + delta) }
+                if mention.start >= replacement.upperBound { return Mention(botId: mention.botId, start: mention.start + delta, end: mention.end + delta, workspaceFile: mention.workspaceFile) }
                 return nil
             }
         }
@@ -209,7 +228,7 @@ public struct Mention: Codable, Hashable, Sendable {
         return mentions.compactMap { mention in
             let extendsName = mention.end == earliest && delta > 0 && nameContinues(at: mention.end)
             if mention.end <= earliest, !extendsName { return mention }
-            if mention.start >= latestEnd { return Mention(botId: mention.botId, start: mention.start + delta, end: mention.end + delta) }
+            if mention.start >= latestEnd { return Mention(botId: mention.botId, start: mention.start + delta, end: mention.end + delta, workspaceFile: mention.workspaceFile) }
             return nil
         }
     }
