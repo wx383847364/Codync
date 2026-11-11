@@ -2,6 +2,10 @@ name: Workspace file reference mobile validation
 on:
   workflow_dispatch:
     inputs:
+      windows_baseline:
+        description: Reproduce the failing Windows host tests before the feature
+        type: boolean
+        default: false
       android_only:
         description: Retry only Android
         type: boolean
@@ -15,6 +19,7 @@ permissions:
   actions: read
 jobs:
   mobile:
+    if: ${{ !inputs.windows_baseline }}
     strategy:
       fail-fast: false
       matrix:
@@ -128,3 +133,24 @@ jobs:
             ${{ runner.temp }}/workspace-file-validation/maestro
             ${{ runner.temp }}/workspace-file-validation/host.log
             ${{ runner.temp }}/emulator.log
+
+  windows-baseline:
+    if: inputs.windows_baseline
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: host
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ec0cb19007d22bd278e79fcdcfa2fb1fac8c9117
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: host
+          cache-on-failure: true
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+      - run: cargo nextest run --workspace --profile ci -E 'test(chat::group::tests::context_runtime_tests::) | test(a_new_group_message_reaches_idle_members_while_an_older_turn_is_busy) | test(chat::team::replies::tests::)'
