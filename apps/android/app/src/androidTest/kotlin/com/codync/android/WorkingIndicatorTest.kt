@@ -26,10 +26,11 @@ import org.junit.Test
 class WorkingIndicatorTest {
     @get:Rule val compose = createComposeRule()
 
+    /** 传入当前聊天 ID，展开和收合时检查该聊天的工具步骤。 */
     @Test fun stepsUnfoldFromTheActivity() {
         compose.mainClock.autoAdvance = false
         val step = Entry("tool", 0, "bot", 1, "tool", 1, buildJsonObject { put("title", "npm test"); put("status", "in_progress") })
-        compose.setContent { Hosted { WorkingIndicator(Bot("bot", "Bot", status = "working", activity = "Terminal"), listOf(step), details = true) } }
+        compose.setContent { Hosted { WorkingIndicator(Bot("bot", "Bot", status = "working", activity = "Terminal"), listOf(step), details = true, chatId = "bot") } }
         compose.mainClock.advanceTimeBy(1000)
         compose.onNodeWithText("npm test").assertDoesNotExist()
         compose.onNodeWithText("Terminal").performClick()
@@ -41,9 +42,10 @@ class WorkingIndicatorTest {
     }
 
     /** Claude's thinking text arrives as its thinking ends, so the activity unfolds before the turn has steps. */
+    /** 在当前聊天尚无步骤时检查活动入口。 */
     @Test fun activityUnfoldsBeforeTheTurnHasSteps() {
         compose.mainClock.autoAdvance = false
-        compose.setContent { Hosted { WorkingIndicator(Bot("bot", "Bot", status = "working", activity = "Thinking…"), emptyList(), details = true) } }
+        compose.setContent { Hosted { WorkingIndicator(Bot("bot", "Bot", status = "working", activity = "Thinking…"), emptyList(), details = true, chatId = "bot") } }
         compose.mainClock.advanceTimeBy(1000)
         compose.onNodeWithText("Thinking…").performClick()
         compose.mainClock.advanceTimeBy(1000)
@@ -51,15 +53,17 @@ class WorkingIndicatorTest {
     }
 
     /** Thinking details are off by default: the activity is a plain status line. */
+    /** 当前聊天关闭思考详情时只显示状态。 */
     @Test fun withoutThinkingDetailsTheActivityDoesNotUnfold() {
         compose.mainClock.autoAdvance = false
         val step = Entry("tool", 0, "bot", 1, "tool", 1, buildJsonObject { put("title", "npm test"); put("status", "in_progress") })
-        compose.setContent { Hosted { WorkingIndicator(Bot("bot", "Bot", status = "working", activity = "Terminal"), listOf(step), details = false) } }
+        compose.setContent { Hosted { WorkingIndicator(Bot("bot", "Bot", status = "working", activity = "Terminal"), listOf(step), details = false, chatId = "bot") } }
         compose.mainClock.advanceTimeBy(1000)
         compose.onNodeWithText("Terminal").assertIsDisplayed().assertHasNoClickAction()
         compose.onNodeWithText("npm test").assertDoesNotExist()
     }
 
+    /** 以当前聊天 ID 渲染状态，检查更新时历史位置保持稳定。 */
     @Test fun activityUpdatesWithoutMovingHistory() {
         // The live orb runs a frame loop; advance motion explicitly instead of waiting for it to stop.
         compose.mainClock.autoAdvance = false
@@ -71,7 +75,7 @@ class WorkingIndicatorTest {
                 rememberFollowing(list, "message", 1, working = true, bottom = 0.dp)
                 LazyColumn(Modifier.size(320.dp).testTag("conversation"), state = list, contentPadding = PaddingValues(0.dp)) {
                     items(30) { Box(Modifier.height(48.dp)) { Text("Message $it") } }
-                    item("working") { WorkingIndicator(Bot("bot", "Bot", status = "working", activity = activity.value), emptyList(), details = false) }
+                    item("working") { WorkingIndicator(Bot("bot", "Bot", status = "working", activity = activity.value), emptyList(), details = false, chatId = "bot") }
                 }
             }
         }
