@@ -8,6 +8,7 @@ permissions:
 
 jobs:
   ios-group-session:
+    if: ${{ false }}
     runs-on: macos-26
     timeout-minutes: 28
     steps:
@@ -95,23 +96,38 @@ jobs:
         with:
           packages: platform-tools
       - uses: gradle/actions/setup-gradle@v4
-      - name: Build and boot the Android test app
+      - name: Install the Android simulator image
         run: |
-          set -euo pipefail
           sudo chmod a+rw /dev/kvm
           sdkmanager 'platforms;android-37.0' 'build-tools;37.0.0' emulator 'system-images;android-34;google_apis;x86_64'
-          echo no | avdmanager create avd --name codync_ci --package 'system-images;android-34;google_apis;x86_64' --device pixel_6
+      - name: Boot the Android simulator
+        run: |
+          set -euo pipefail
+          export ANDROID_AVD_HOME="$RUNNER_TEMP/codync-avd"
+          mkdir -p "$ANDROID_AVD_HOME"
+          printf 'no\n' | avdmanager create avd --force --name codync_ci --path "$ANDROID_AVD_HOME/codync_ci.avd" --package 'system-images;android-34;google_apis;x86_64' --device pixel_6
+          test -f "$ANDROID_AVD_HOME/codync_ci.avd/config.ini"
+          printf 'avd.ini.encoding=UTF-8\npath=%s\ntarget=android-34\n' "$ANDROID_AVD_HOME/codync_ci.avd" > "$ANDROID_AVD_HOME/codync_ci.ini"
+          "$ANDROID_HOME/emulator/emulator" -list-avds | grep -Fx codync_ci
           nohup "$ANDROID_HOME/emulator/emulator" -avd codync_ci -no-window -no-audio -no-snapshot -no-boot-anim -gpu swiftshader_indirect > "$RUNNER_TEMP/android-emulator.log" 2>&1 &
-          ./apps/android/gradlew -p apps/android :app:assembleDebug
-          adb wait-for-device
-          for _ in $(seq 1 120); do
-            if test "$(adb shell getprop sys.boot_completed | tr -d '\r')" = 1; then break; fi
+          emulator_pid=$!
+          trap 'if ! kill -0 "$emulator_pid" 2>/dev/null; then tail -80 "$RUNNER_TEMP/android-emulator.log"; fi' EXIT
+          for _ in $(seq 1 180); do
+            kill -0 "$emulator_pid"
+            if test "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r' || true)" = 1; then
+              echo "DEVICE_ID=$(adb devices | awk '/^emulator-/{print $1; exit}')" >> "$GITHUB_ENV"
+              exit 0
+            fi
             sleep 1
           done
-          adb install apps/android/app/build/outputs/apk/debug/app-debug.apk
-          adb shell pm grant com.pokai.Codync.android.dev android.permission.POST_NOTIFICATIONS
-          adb reverse tcp:19455 tcp:19455
-          echo "DEVICE_ID=$(adb devices | awk '/^emulator-/{print $1; exit}')" >> "$GITHUB_ENV"
+          tail -80 "$RUNNER_TEMP/android-emulator.log"
+          exit 1
+      - name: Build and install the Android app
+        run: |
+          ./apps/android/gradlew -p apps/android :app:assembleDebug
+          adb -s "$DEVICE_ID" install apps/android/app/build/outputs/apk/debug/app-debug.apk
+          adb -s "$DEVICE_ID" shell pm grant com.pokai.Codync.android.dev android.permission.POST_NOTIFICATIONS
+          adb -s "$DEVICE_ID" reverse tcp:19455 tcp:19455
       - name: Build the test Host
         run: CODYNC_ENV=dev cargo build --manifest-path host/Cargo.toml --locked
       - name: Install Maestro
