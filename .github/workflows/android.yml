@@ -6,6 +6,10 @@ on:
         description: Retry only Android
         type: boolean
         default: false
+      ios_only:
+        description: Retry only iOS
+        type: boolean
+        default: false
 permissions:
   contents: read
 jobs:
@@ -13,7 +17,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        platform: ${{ fromJSON(inputs.android_only && '["android"]' || '["ios","android"]') }}
+        platform: ${{ fromJSON(inputs.android_only && '["android"]' || inputs.ios_only && '["ios"]' || '["ios","android"]') }}
     runs-on: ${{ matrix.platform == 'ios' && 'macos-26' || 'ubuntu-latest' }}
     timeout-minutes: 35
     steps:
@@ -25,6 +29,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: host
+          cache-on-failure: true
       - name: Build host
         working-directory: host
         run: |
@@ -41,9 +46,12 @@ jobs:
         run: |
           device=$(xcrun simctl list devices available -j | python3 -c 'import json,sys; print(next(d["udid"] for v in json.load(sys.stdin)["devices"].values() for d in v if d["name"].startswith("iPhone")))')
           xcrun simctl bootstatus "$device" -b
-          xcodebuild build -project apps/Codync.xcodeproj -scheme 'iOS Dev' -configuration DevDebug -destination "platform=iOS Simulator,id=$device" -derivedDataPath build/dd CODE_SIGNING_ALLOWED=NO -quiet
+          xcodebuild build -project apps/Codync.xcodeproj -scheme 'iOS Dev' -configuration DevDebug -destination "platform=iOS Simulator,id=$device" -derivedDataPath build/dd CODE_SIGN_IDENTITY=- -quiet
           app=$(find build/dd/Build/Products/DevDebug-iphonesimulator -maxdepth 1 -name '*.app' -print -quit)
           test -n "$app"
+          # 无证书的 simulator ad-hoc 签名仍须包含 Keychain entitlement。
+          codesign -d --entitlements - "$app" > "$RUNNER_TEMP/simulator-entitlements.plist"
+          grep -q keychain-access-groups "$RUNNER_TEMP/simulator-entitlements.plist"
           xcrun simctl install "$device" "$app"
           echo "CODYNC_TEST_DEVICE=$device" >> "$GITHUB_ENV"
       - uses: android-actions/setup-android@v3
@@ -78,6 +86,8 @@ jobs:
           adb shell pm grant com.pokai.Codync.android.dev android.permission.POST_NOTIFICATIONS
           echo 'CODYNC_TEST_DEVICE=emulator-5554' >> "$GITHUB_ENV"
       - name: Exercise the installed client against the host
+        env:
+          MAESTRO_CLI_NO_ANALYTICS: "1"
         run: python3 apps/maestro/validate-workspace-file.py ${{ matrix.platform }}
       - uses: actions/upload-artifact@v4
         if: failure()

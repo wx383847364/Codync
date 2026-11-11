@@ -65,16 +65,16 @@ def run():
         "command": f'python3 -X utf8 -u "{agent}"', "connectors": [], "skills": [], "permission": "auto",
         "notify": False,
     })["bot"]["id"]
-    pairing = api("pairing", {})["pairingUrl"]
-    print(f"::add-mask::{pairing}", flush=True)
-    # 在输入配对链接后才会出现请求，持续等待直到用户界面发起握手。
-    approver = threading.Thread(target=wait_for, args=(approve_pairing, 100), daemon=True)
+    token = (HOST_HOME / "token").read_text().strip()
+    print(f"::add-mask::{token}", flush=True)
+    # Maestro 初始化驱动可能很慢，待 UI 准备好才发短时有效的配对码。
+    approver = threading.Thread(target=wait_for, args=(approve_pairing, 540), daemon=True)
     approver.start()
     subprocess.run([
         str(Path.home() / ".maestro/bin/maestro"), "--device", os.environ["CODYNC_TEST_DEVICE"],
         "test", "--test-output-dir", str(WORK / "maestro"),
-        "-e", f"PAIRING_URL={pairing}", "apps/maestro/workspace-file-validation.yaml",
-    ], check=True)
+        "-e", f"HOST_PORT={PORT}", "-e", f"HOST_TOKEN={token}", "apps/maestro/workspace-file-validation.yaml",
+    ], check=True, timeout=600)
     history = api("history", {"botId": bot})["entries"]
     sent = [entry["data"] for entry in history if entry["kind"] == "user"]
     assert len(sent) == 1 and sent[0]["text"] == "READ_WORKSPACE_FILE @guide.md"

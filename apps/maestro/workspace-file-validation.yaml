@@ -17,7 +17,8 @@ appId: com.pokai.Codync.ios.dev
 - tapOn: "Continue without an account"
 - tapOn: "Continue"
 - tapOn: "Pairing link or code"
-- inputText: ${PAIRING_URL}
+- runScript: workspace-file-pairing.js
+- inputText: ${output.pairingUrl}
 - tapOn: "Pair"
 - extendedWaitUntil:
     visible: "Workspace Reference Check"
