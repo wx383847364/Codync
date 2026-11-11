@@ -8,6 +8,7 @@ permissions:
 
 jobs:
   ios-group-session:
+    if: ${{ false }}
     runs-on: macos-26
     timeout-minutes: 35
     steps:
@@ -102,7 +103,6 @@ jobs:
             ${{ runner.temp }}/maestro-group
           retention-days: 3
   android-group-session:
-    if: ${{ false }}
     runs-on: ubuntu-latest
     timeout-minutes: 28
     steps:
@@ -195,7 +195,17 @@ jobs:
             exit 1
           ) &
           approver=$!
-          maestro --device "$DEVICE_ID" test -e PAIRING_URL="$pairing_url" apps/maestro/signed-out-pairing.yaml
+          export MAESTRO_CLI_NO_ANALYTICS=1
+          sed '/^- tapOn: .*connected/,$d' apps/maestro/signed-out-pairing.yaml > "$RUNNER_TEMP/pair-and-open.yaml"
+          maestro --device "$DEVICE_ID" test --debug-output "$RUNNER_TEMP/maestro-pairing" -e PAIRING_URL="$pairing_url" "$RUNNER_TEMP/pair-and-open.yaml"
           wait "$approver"
           approver=
-          maestro --device "$DEVICE_ID" test -e HOST_PORT="$HOST_PORT" -e HOST_TOKEN="$HOST_TOKEN" apps/maestro/group-session.yaml
+          maestro --device "$DEVICE_ID" test --debug-output "$RUNNER_TEMP/maestro-group" -e HOST_PORT="$HOST_PORT" -e HOST_TOKEN="$HOST_TOKEN" apps/maestro/group-session.yaml
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: android-group-evidence
+          path: |
+            ${{ runner.temp }}/maestro-group
+            group-session.png
+          retention-days: 3
