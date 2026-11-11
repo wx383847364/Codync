@@ -177,8 +177,9 @@ private enum class Trailing { Interrupt, Stop, Call, Send }
     val members = bot.memberBots(state.bots)
     val existingCommands = SlashCommands.query(typed)?.let { SlashCommands.list(bot, it, state.plugins?.skills.orEmpty(), members) }.orEmpty()
     val fileRange = SlashCommands.fileRange(typed, text.selection.start, text.selection.end)
+    val supportsFileSearch = state.hello?.get("workspaceFileSearch")?.jsonPrimitive?.booleanOrNull == true
     val fileQuery = fileRange?.let { typed.substring(it.first + 1, it.last + 1) }
-        ?.takeIf { online && state.hello?.get("workspaceFileSearch")?.jsonPrimitive?.booleanOrNull == true }
+        ?.takeIf { online && supportsFileSearch }
     var fileResults by remember(bot.id, fileQuery) { mutableStateOf<List<WorkspaceFileCandidate>?>(null) }
     var searchFailed by remember(bot.id, fileQuery) { mutableStateOf(false) }
     var dismissedFiles by remember(typed, text.selection) { mutableStateOf(false) }
@@ -335,15 +336,13 @@ private enum class Trailing { Interrupt, Stop, Call, Send }
                 }
                 val highlightedFile = commands.getOrNull(commandIndex.coerceAtMost(commands.lastIndex))?.takeIf { it.file != null }
                 BasicTextField(state = text, inputTransformation = transformation,
-                    // 同一个斜杠词的候选会随输入反复刷新；固定键盘动作以免重启输入连接并丢字。
-                    keyboardOptions = if (fileSearchOpen) KeyboardOptions(imeAction = ImeAction.Done) else KeyboardOptions.Default,
-                    onKeyboardAction = if (fileSearchOpen) KeyboardActionHandler {
-                        // 组合词由输入法提交。有文件则只插入引用，查询结束无文件时保留换行。
+                    // 在输入斜杠之前就配置确认键，开始搜索和刷新候选都不重启输入连接。
+                    keyboardOptions = if (supportsFileSearch) KeyboardOptions(imeAction = ImeAction.Done) else KeyboardOptions.Default,
+                    onKeyboardAction = if (supportsFileSearch) KeyboardActionHandler {
+                        // 组合词由输入法提交；仅选中文件时替换正文，其余情况保留软键盘换行。
                         if (text.composition == null) {
                             if (highlightedFile != null) run(highlightedFile)
-                            else if (fileResults != null || searchFailed) {
-                                text.edit { replace(selection.min, selection.max, "\n") }
-                            }
+                            else text.edit { replace(selection.min, selection.max, "\n") }
                         }
                     } else null, enabled = !queuing, modifier = Modifier.weight(1f).focusRequester(focus).contentReceiver(receiver).then(sendKey).padding(vertical = 10.dp),
                     textStyle = Type.body.copy(color = Palette.text), cursorBrush = SolidColor(Palette.accent),
