@@ -443,7 +443,7 @@ pub fn copy(text: &str) {
     if cfg!(test) {
         return;
     }
-    let mut out = std::io::stdout();
+    let mut out = std::io::stdout().lock();
     let _ = write!(out, "\x1b]52;c;{}\x07", base64::Engine::encode(&base64::engine::general_purpose::STANDARD, text));
     let _ = out.flush();
 }

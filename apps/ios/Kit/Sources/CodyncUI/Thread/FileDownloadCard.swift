@@ -1,10 +1,12 @@
 import CodyncKit
+import QuickLook
 import SwiftUI
 import UIKit
 
 struct FileDownloadCard: View {
     let entry: Entry
     let file: SharedFile
+    let messageItems: () -> [MenuItem]
     @Environment(BotStore.self) private var model
     @State private var viewing = false
 
@@ -15,7 +17,22 @@ struct FileDownloadCard: View {
         }
         .padding(14)
         .background(Palette.bubbleAgent, in: RoundedRectangle(cornerRadius: 16))
+        .contextActions(reactions: model.reactionPick(entry)) { fileItems + messageItems() }
         .codyncSheet(isPresented: $viewing) { AttachmentViewer(shared: file, entryId: entry.id) }
+    }
+
+    private var fileItems: [MenuItem] {
+        let enabled = !busy(model.fileDownloads.states[file.id])
+        return [
+            MenuItem("Open", icon: "arrow.up.right.square", enabled: enabled) { act(.open) },
+            MenuItem("Open with…", icon: "square.and.arrow.up", enabled: enabled) { act(.openWith) },
+            MenuItem("Save as…", icon: "arrow.down.to.line", enabled: enabled) { act(.save) },
+            MenuItem("Copy file contents", icon: "doc.text", enabled: enabled) { act(.copyContents) },
+        ]
+    }
+
+    private func act(_ action: FileDownloads.Action) {
+        model.fileDownloads.save(client: model.client, entry: entry, file: file, action: action)
     }
 
     /// The picture itself; tap for full size.
@@ -76,7 +93,14 @@ extension View {
             guard active, let item = model.fileDownloads.export, item.botId == botId else { return nil }
             return item
         }, set: { if $0 == nil { model.fileDownloads.dismissExport() } })) { item in
-            FileExportSheet(url: item.url) { model.fileDownloads.dismissExport() }
+            switch item.action {
+            case .open where QLPreviewController.canPreview(item.url as NSURL):
+                FileQuickLook(url: item.url)
+            case .save:
+                FileSavePicker(url: item.url) { model.fileDownloads.dismissExport() }
+            default:
+                FileExportSheet(url: item.url) { model.fileDownloads.dismissExport() }
+            }
         }
     }
 }

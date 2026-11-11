@@ -99,6 +99,7 @@ import com.kyant.shapes.Capsule
     val reply = { entry: Entry -> replyId = entry.id }
     // The chat ignores Full conversation over it: it stays put underneath.
     val chatState = state.copy(trace = false)
+    val saveSharedFile = rememberSharedFileSavePicker(store)
     GlassStage(Modifier.fillMaxSize().background(Palette.background), chrome = {
         // Down to just above the header's bottom; the bottom one stops under Jump to latest.
         ScrollEdge(Edge.Top, top + 84.dp)
@@ -124,7 +125,7 @@ import com.kyant.shapes.Capsule
     }) {
         Transcript(bot, chatState, store, connect, PaddingValues(start = 16.dp, end = 16.dp, top = top + 60.dp,
             bottom = with(density) { composerHeight.toDp() } + 8.dp), indicatorTop = top + 50.dp, openRoutine = openRoutine, reply = reply,
-            addFallback = { details = DetailsRequest(botId = it.id) }, openArtifact = { viewing = it }, openCall = { callLine = it }) { peer = it }
+            addFallback = { details = DetailsRequest(botId = it.id) }, openArtifact = { viewing = it }, openCall = { callLine = it }, saveSharedFile = saveSharedFile) { peer = it }
     }
     CodyncDialog("Microphone access is off", micDenied, { micDenied = false },
         message = "Allow the microphone in Android settings to talk to your bot.") {
@@ -220,7 +221,7 @@ private fun AppState.chatEntries(bot: Bot) = entries.filter { it.botId == bot.id
 /** 呈现会话消息与实时活动，向上滚动时加载更早的消息。 */
 @Composable private fun Transcript(bot: Bot, state: AppState, store: AppStore, connect: ConnectionRequestActions, padding: PaddingValues,
     indicatorTop: Dp, openRoutine: (String) -> Unit, reply: (Entry) -> Unit, addFallback: (Bot) -> Unit, openArtifact: (OpenArtifact) -> Unit,
-    openCall: (String) -> Unit, openPeer: (String) -> Unit) {
+    openCall: (String) -> Unit, saveSharedFile: (Entry, SharedFile) -> Unit, openPeer: (String) -> Unit) {
     val entries = state.chatEntries(bot)
     // A call's message that failed to send stays here, to be sent again.
     val pending = state.pending.filter { it.botId == bot.id && (it.call == null || it.status == SendStatus.Failed) }
@@ -264,7 +265,7 @@ private fun AppState.chatEntries(bot: Bot) = entries.filter { it.botId == bot.id
                     else ChatRow(item.entry, item.groupStart, bot, state, store, openTrace = { store.showTrace(true) },
                         // An update card takes the composer's place, so there's nothing to reply with.
                         reply = if (item.entry.isReplyable && state.mismatch == null) { { reply(item.entry) } } else null, connect = connect,
-                        addFallback = addFallback, openArtifact = openArtifact)
+                        addFallback = addFallback, openArtifact = openArtifact, saveSharedFile = saveSharedFile)
                 }
                 is ChatItem.Pending -> PendingBubble(item.send, item.groupStart, state, store)
                 is ChatItem.Exchanges -> BotMessageRow(item.group, state) { openPeer(item.group.peerId) }

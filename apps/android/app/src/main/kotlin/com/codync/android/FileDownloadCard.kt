@@ -29,9 +29,19 @@ import com.kyant.shapes.RoundedRectangle
 
 /** A file a bot shared, as iOS `FileDownloadCard`: an image shows itself (tap for full size), then its name and size, and a
  *  button to download (or cancel). */
-@Composable internal fun FileDownloadCard(entry: Entry, file: SharedFile, state: AppState, store: AppStore) {
+@Composable internal fun FileDownloadCard(entry: Entry, file: SharedFile, state: AppState, store: AppStore,
+    reactions: ReactionPick, saveAs: () -> Unit, messageItems: () -> List<MenuItem>) {
     var viewing by remember { mutableStateOf(false) }
-    Column(Modifier.fillMaxWidth().clip(RoundedRectangle(16.dp)).background(Palette.bubbleAgent).padding(14.dp),
+    val menu = Modifier.contextActions(reactions = reactions) {
+        if (state.fileDownloads[file.id] is FileDownloadState.Downloading) messageItems()
+        else listOf(
+            MenuItem("Open", icon = "arrow.up.right.square") { store.saveFile(entry.id, entry.botId, file, SharedFileAction.Open) },
+            MenuItem("Open with…", icon = "square.and.arrow.up") { store.saveFile(entry.id, entry.botId, file, SharedFileAction.OpenWith) },
+            MenuItem("Save as…", icon = "arrow.down.to.line", action = saveAs),
+            MenuItem("Copy file contents", icon = "doc.text") { store.saveFile(entry.id, entry.botId, file, SharedFileAction.CopyContents) },
+        ) + messageItems()
+    }
+    Column(Modifier.fillMaxWidth().clip(RoundedRectangle(16.dp)).background(Palette.bubbleAgent).then(menu).padding(14.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)) {
         if (file.showsAsImage) SharedImage(file, entry.id, 720, state, store, Modifier.sizeIn(maxHeight = 280.dp)
             .clip(RoundedRectangle(10.dp)).plainButton { viewing = true }.semantics { contentDescription = file.name })
@@ -57,11 +67,11 @@ import com.kyant.shapes.RoundedRectangle
 }
 
 /** A shared file's size, or how its download goes. */
-internal fun detail(file: SharedFile, download: FileDownloadState?): String {
+@Composable internal fun detail(file: SharedFile, download: FileDownloadState?): String {
     val size = formatBytes(file.size)
     return when (download) {
         is FileDownloadState.Downloading -> "${formatBytes(download.received)} of $size"
-        is FileDownloadState.Failed -> "${download.message} Tap to retry."
+        is FileDownloadState.Failed -> "${tr(download.message)} Tap to retry."
         FileDownloadState.Saved -> "$size · Downloaded"
         null -> size
     }

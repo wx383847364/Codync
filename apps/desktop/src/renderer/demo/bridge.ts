@@ -95,7 +95,7 @@ const bridge: CodyncBridge = {
   cloud: { request: async () => ({ ok: false, error: { status: 503, code: 'demo', message: DEMO_UNAVAILABLE } }) },
   updates: { state: async () => updates, onChange: none, check() {}, install() {}, setAutoCheck() {}, setAutoDownload() {} },
   artifacts: { show: async () => {}, openInBrowser: unavailable },
-  files: { begin: unavailable, write: async () => {}, finish: async () => {}, cancel: async () => {} },
+  files: { begin: unavailable, write: async () => {}, finish: async () => 'cancelled', cancel: async () => {}, editors: async () => [] },
   fileLinks: {
     // 网页演示没有本机文件权限。
     act: async () => 'unsupported',

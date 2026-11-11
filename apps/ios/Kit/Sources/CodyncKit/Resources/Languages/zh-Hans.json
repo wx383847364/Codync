@@ -1895,6 +1895,7 @@
   "This file could not be found on this computer.": "找不到此电脑上的文件。",
   "This action is unavailable for this file.": "此文件不支持该操作。",
   "Could not complete the file action.": "未能完成文件操作。",
+  "Copy file contents supports UTF-8 text files up to 256 KiB.": "复制文件内容支持不超过 256 KiB 的 UTF-8 文本文件。",
   "Copy file contents supports UTF-8 text files up to 1 MiB.": "复制文件内容支持不超过 1 MiB 的 UTF-8 文本文件。",
   "File on the host computer": "主机电脑上的文件",
   "Couldn't copy the path.": "未能复制路径。"

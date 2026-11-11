@@ -1,0 +1,36 @@
+appId: com.pokai.Codync.ios.dev
+tags:
+  - attachments
+onFlowComplete:
+  - runScript:
+      file: shared-file-actions.js
+      env:
+        CLEANUP: "true"
+---
+- runScript: shared-file-actions.js
+- runFlow:
+    when:
+      platform: iOS
+    commands:
+      - launchApp:
+          appId: com.pokai.Codync.ios.dev
+          arguments:
+            "-reviewInvitationOff": true
+- runFlow:
+    when:
+      platform: Android
+    commands:
+      - launchApp:
+          appId: com.pokai.Codync.android.dev
+- tapOn: ${output.sharedFileBot.name}
+- extendedWaitUntil:
+    visible: "Retest report.md"
+    timeout: 15000
+- longPressOn: "Retest report.md"
+- assertVisible: "Open"
+- assertVisible: "Open with…"
+- assertVisible: "Save as…"
+- assertVisible: "Copy file contents"
+- tapOn: "Copy file contents"
+- assertVisible: "Retest report.md"
+- assertNotVisible: "Copy file contents supports UTF-8 text files up to .*"

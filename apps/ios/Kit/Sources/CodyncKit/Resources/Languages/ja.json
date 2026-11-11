@@ -1895,6 +1895,7 @@
   "This file could not be found on this computer.": "このコンピューターでファイルが見つかりませんでした。",
   "This action is unavailable for this file.": "このファイルではこの操作を利用できません。",
   "Could not complete the file action.": "ファイル操作を完了できませんでした。",
+  "Copy file contents supports UTF-8 text files up to 256 KiB.": "256 KiB以下のUTF-8テキストファイルの内容をコピーできます。",
   "Copy file contents supports UTF-8 text files up to 1 MiB.": "1 MiB以下のUTF-8テキストファイルの内容をコピーできます。",
   "File on the host computer": "ホストコンピューター上のファイル",
   "Couldn't copy the path.": "パスをコピーできませんでした。"

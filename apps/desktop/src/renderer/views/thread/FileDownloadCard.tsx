@@ -3,7 +3,10 @@ import { showsAsImage, type Entry, type SharedFile } from '@shared/models'
 import { useStore } from '../../store/context'
 import type { DownloadState } from '../../store/file-downloads'
 import { Icon } from '../../components/Icon'
-import { IconButtonBase } from '../../components/Overlay'
+import { isHTMLFileLink, type SharedFileAction } from '@shared/file-links'
+import { analytics } from '../../store/analytics'
+import { useFileActionMenu } from './FileActionMenu'
+import { IconButtonBase, type MenuItem, type ReactionPick } from '../../components/Overlay'
 import { HStack, VStack } from '../../components/Stack'
 import { Text } from '../../components/Text'
 import { AttachmentImage, AttachmentViewer, attachmentSymbol, byteCount, type ImageSource } from './Attachments'
@@ -25,14 +28,29 @@ export function downloadDetail(state: DownloadState | undefined, file: SharedFil
   }
 }
 
-export function FileDownloadCard({ entry, file }: { entry: Entry; file: SharedFile }) {
+export function FileDownloadCard({ entry, file, messageItems, reactions }: {
+  entry: Entry; file: SharedFile; messageItems: () => MenuItem[]; reactions: ReactionPick
+}) {
   const store = useStore()
   const state = store.fileDownloads.states.get(file.id)
   const busy = state?.kind === 'downloading'
   const [action, detail] = [downloadAction(state), downloadDetail(state, file)]
   const [viewing, setViewing] = useState(false)
   const image: ImageSource = { file, entryId: entry.id }
-  return <VStack gap={12} className="file-card">
+  const menu = useFileActionMenu({
+    act: (action) => void act(action),
+    editors: () => window.codync.files.editors(),
+    opensInBrowser: isHTMLFileLink(file.name),
+    quickEditor: true,
+    messageItems,
+    reactions,
+  })
+  async function act(action: SharedFileAction) {
+    const outcome = await store.fileDownloads.save(store.client, entry.id, file, action)
+    analytics.track({ event: 'file_link_action', action, outcome })
+  }
+  return <VStack gap={12} className="file-card" onContextMenu={menu.onContextMenu}>
+    {menu.panel}
     {showsAsImage(file) ? <>
       <button className="file-card-image" aria-label={file.name} onClick={() => setViewing(true)}>
         <AttachmentImage source={image} fit="thumbnail" />
@@ -42,7 +60,10 @@ export function FileDownloadCard({ entry, file }: { entry: Entry; file: SharedFi
     <HStack gap={12}>
       <Icon name={attachmentSymbol(file.name)} size={24} color="var(--secondary)" />
       <VStack grow>
-        <Text as="div" size="subheadline" weight="semibold" truncate title={file.name}>{file.name}</Text>
+        <button ref={menu.anchor} type="button" className="file-card-name" title={file.name}
+          aria-haspopup="menu" aria-expanded={menu.open} onClick={menu.show}>
+          <Text size="subheadline" weight="semibold" truncate>{file.name}</Text>
+        </button>
         <Text as="div" size="caption2" tone={state?.kind === 'failed' ? 'danger' : 'secondary'} role={state?.kind === 'failed' ? 'alert' : 'status'} className="file-card-detail">{detail}</Text>
       </VStack>
       <IconButtonBase title={action} icon={busy ? 'xmark' : 'arrow.down.to.line'} size={36} onClick={() => busy ? store.fileDownloads.cancel(file.id) : void store.fileDownloads.save(store.client, entry.id, file)} />

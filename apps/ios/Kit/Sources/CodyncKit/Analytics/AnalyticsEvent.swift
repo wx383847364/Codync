@@ -36,6 +36,9 @@ public enum AnalyticsEvent: Equatable, Sendable {
     public enum ImageOutcome: String, Sendable { case opened, original, fit, failed }
     case attachmentPreview(PreviewOutcome)
     case fileLinkPathCopied
+    case sharedFileAction(FileAction, FileActionOutcome)
+    public enum FileAction: String, Sendable { case open, save, copyContents = "copy_contents" }
+    public enum FileActionOutcome: String, Sendable { case ok, failed, cancelled, unsupported }
     case reviewRequested(prompts: Int)
     case reviewLinkOpened
     /// A dev server opened, or its address copied; the host reports what it does itself.
@@ -155,7 +158,7 @@ public enum AnalyticsEvent: Equatable, Sendable {
         case .screenViewed: "screen_viewed"
         case .imageViewed: "image_viewed"
         case .attachmentPreview: "attachment_preview"
-        case .fileLinkPathCopied: "file_link_action"
+        case .fileLinkPathCopied, .sharedFileAction: "file_link_action"
         case .reviewRequested: "review_requested"
         case .reviewLinkOpened: "review_link_opened"
         case .devServerAction: "dev_server_action"
@@ -199,6 +202,7 @@ public enum AnalyticsEvent: Equatable, Sendable {
         case let .screenViewed(screen): return ["screen": .string(screen.rawValue)]
         case let .imageViewed(outcome): return ["outcome": .string(outcome.rawValue)]
         case let .attachmentPreview(outcome): return ["outcome": .string(outcome.rawValue)]
+        case let .sharedFileAction(action, outcome): return ["action": .string(action.rawValue), "outcome": .string(outcome.rawValue)]
         case .fileLinkPathCopied: return ["action": .string("copy_path"), "outcome": .string("ok")]
         }
     }
