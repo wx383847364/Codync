@@ -95,6 +95,7 @@ actor FakeRemote: RemoteTransport {
         for s in mailboxSinks { s.yield(event) }
     }
 
+    /// 返回 Host 测试响应并记录客户端的请求，按各方法读取需要的参数。
     private func respond(_ method: String, _ body: Data) throws -> Data {
         guard !isShutdown else { throw HostError.unreachable }
         calls.append(method)
@@ -112,7 +113,9 @@ actor FakeRemote: RemoteTransport {
             readReceipts.append(body)
             return Data("{}".utf8)
         case "send":
-            let b = (try JSONSerialization.jsonObject(with: body) as? [String: String]) ?? [:]
+            // 提及和文件是数组，只提取字符串字段以构造响应。
+            let fields = (try JSONSerialization.jsonObject(with: body) as? [String: Any]) ?? [:]
+            let b = fields.compactMapValues { $0 as? String }
             sent.append(b["text"] ?? "")
             replyTos.append(b["replyTo"])
             let entry = #"{"id":"e\#(sent.count)","seq":\#(sent.count),"botId":"\#(b["botId"] ?? "")","rev":\#(sent.count),"kind":"user","turn":1,"data":{"text":"\#(b["text"] ?? "")","clientNonce":"\#(b["clientNonce"] ?? "")"},"createdAt":1,"updatedAt":1}"#
