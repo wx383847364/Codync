@@ -195,9 +195,10 @@ private enum class Trailing { Interrupt, Stop, Call, Send }
             searchFailed = true
         }
     }
-    val commands = existingCommands + if (dismissedFiles) emptyList() else fileResults.orEmpty().map(SlashCommands::workspaceFile)
+    val fileSearchOpen = fileQuery != null && !dismissedFiles
+    val commands = existingCommands + if (fileSearchOpen) fileResults.orEmpty().map(SlashCommands::workspaceFile) else emptyList()
     val fileStatus = when {
-        fileQuery == null || dismissedFiles -> ""
+        !fileSearchOpen -> ""
         searchFailed -> tr("Could not search workspace files.")
         fileResults == null -> tr("Searching workspace files…")
         commands.isEmpty() -> tr("No matching workspace files")
@@ -312,8 +313,8 @@ private enum class Trailing { Interrupt, Stop, Call, Send }
                         }
                     }
                     // 未组合文字时，文件候选的确认消费回车，不进入发送或换行。
-                    if (e.type == KeyEventType.KeyDown && text.composition == null && fileQuery != null &&
-                        !dismissedFiles && !e.isCtrlPressed && !e.isMetaPressed && !e.isShiftPressed) {
+                    if (e.type == KeyEventType.KeyDown && text.composition == null && fileSearchOpen &&
+                        !e.isCtrlPressed && !e.isMetaPressed && !e.isShiftPressed) {
                         val count = commands.size
                         when (e.key) {
                             Key.DirectionUp, Key.DirectionDown -> if (count > 0) {
@@ -334,11 +335,17 @@ private enum class Trailing { Interrupt, Stop, Call, Send }
                 }
                 val highlightedFile = commands.getOrNull(commandIndex.coerceAtMost(commands.lastIndex))?.takeIf { it.file != null }
                 BasicTextField(state = text, inputTransformation = transformation,
-                    keyboardOptions = if (highlightedFile == null) KeyboardOptions.Default else KeyboardOptions(imeAction = ImeAction.Done),
-                    // 手机软键盘确认只插入高亮文件，不调用发送。
-                    onKeyboardAction = highlightedFile?.let { command ->
-                        KeyboardActionHandler { if (text.composition == null) run(command) }
-                    }, enabled = !queuing, modifier = Modifier.weight(1f).focusRequester(focus).contentReceiver(receiver).then(sendKey).padding(vertical = 10.dp),
+                    // 同一个斜杠词的候选会随输入反复刷新；固定键盘动作以免重启输入连接并丢字。
+                    keyboardOptions = if (fileSearchOpen) KeyboardOptions(imeAction = ImeAction.Done) else KeyboardOptions.Default,
+                    onKeyboardAction = if (fileSearchOpen) KeyboardActionHandler {
+                        // 组合词由输入法提交。有文件则只插入引用，查询结束无文件时保留换行。
+                        if (text.composition == null) {
+                            if (highlightedFile != null) run(highlightedFile)
+                            else if (fileResults != null || searchFailed) {
+                                text.edit { replace(selection.min, selection.max, "\n") }
+                            }
+                        }
+                    } else null, enabled = !queuing, modifier = Modifier.weight(1f).focusRequester(focus).contentReceiver(receiver).then(sendKey).padding(vertical = 10.dp),
                     textStyle = Type.body.copy(color = Palette.text), cursorBrush = SolidColor(Palette.accent),
                     lineLimits = TextFieldLineLimits.MultiLine(maxHeightInLines = 8),
                     decorator = { input -> Box { if (text.text.isEmpty()) Text(placeholder, style = Type.body, color = Palette.tertiary, maxLines = 1, overflow = TextOverflow.Ellipsis); input() } })

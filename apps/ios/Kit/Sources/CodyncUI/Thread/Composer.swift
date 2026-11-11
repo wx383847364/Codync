@@ -118,7 +118,7 @@ struct Composer: View {
         return existing + fileSearch.items(for: fileQuery)
     }
 
-    /// 软键盘只在高亮的是文件时显示确认操作。
+    /// 软键盘只在高亮的是文件时拦截换行并插入引用。
     private var selectsFileOnReturn: Bool {
         guard fileSearch.active(fileQuery), let command = fileSearch.selected(in: commands),
               case .file = command.action else { return false }
@@ -333,6 +333,7 @@ struct Composer: View {
         HStack(alignment: .bottom, spacing: 8) {
             MentionComposerField(input: $input, focused: $focused, placeholder: placeholder,
                                  menuOpen: !suggestions.isEmpty || fileSearch.active(fileQuery),
+                                 fileSearchOpen: fileSearch.active(fileQuery),
                                  selectsFileOnReturn: selectsFileOnReturn, key: composerKeyboard)
                 .overlay(alignment: .topLeading) {
                     if draft.isEmpty { Text(placeholder).foregroundStyle(Palette.tertiary).allowsHitTesting(false) }
