@@ -33,7 +33,9 @@ appId: com.pokai.Codync.ios.dev
 - extendedWaitUntil:
     visible: "guide.md"
     timeout: 20000
-- tapOn: "guide.md"
+- assertVisible: "READ_WORKSPACE_FILE /guide"
+- pressKey: Enter
+- assertNotVisible: "Selected mobile workspace contents"
 - assertVisible: "READ_WORKSPACE_FILE @guide.md.*"
 - tapOn: "Send"
 - extendedWaitUntil:

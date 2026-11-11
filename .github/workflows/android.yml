@@ -50,23 +50,26 @@ jobs:
           xcodebuild build -project apps/Codync.xcodeproj -scheme 'iOS Dev' -configuration DevDebug -destination "platform=iOS Simulator,id=$device" -derivedDataPath build/dd CODE_SIGN_IDENTITY=- -quiet
           app=$(find build/dd/Build/Products/DevDebug-iphonesimulator -maxdepth 1 -name '*.app' -print -quit)
           test -n "$app"
-          # 无证书的 simulator ad-hoc 签名仍须包含 Keychain entitlement。
-          codesign -d --entitlements - "$app" > "$RUNNER_TEMP/simulator-entitlements.plist"
-          grep -q keychain-access-groups "$RUNNER_TEMP/simulator-entitlements.plist"
+          # 先用 Xcode 的模拟器签名，必要时补入其展开的 Keychain entitlement。
+          codesign -d --entitlements - "$app" > "$RUNNER_TEMP/simulator-entitlements.plist" || true
+          if ! grep -q keychain-access-groups "$RUNNER_TEMP/simulator-entitlements.plist"; then
+            simulated_entitlements=$(find build/dd -name 'com.pokai.Codync.ios.dev.xcent' -print -quit)
+            if [ -n "$simulated_entitlements" ] && grep -q keychain-access-groups "$simulated_entitlements"; then
+              codesign --force --sign - --entitlements "$simulated_entitlements" "$app"
+            fi
+          fi
           xcrun simctl install "$device" "$app"
           echo "CODYNC_TEST_DEVICE=$device" >> "$GITHUB_ENV"
       - uses: android-actions/setup-android@v3
         if: matrix.platform == 'android'
         with:
           packages: platform-tools
-      # 复用同一发布候选 Android CI 已通过构建的 APK。
-      - uses: actions/download-artifact@v4
+      - uses: gradle/actions/setup-gradle@v4
         if: matrix.platform == 'android'
-        with:
-          name: codync-android-debug
-          run-id: 43011502071
-          github-token: ${{ github.token }}
-          path: ${{ runner.temp }}/codync-validation-apk
+      - name: Build Android debug app from the validated source
+        if: matrix.platform == 'android'
+        working-directory: apps/android
+        run: ./gradlew :app:assembleDebug --console=plain
       - name: Install Android emulator app
         if: matrix.platform == 'android'
         shell: bash
@@ -91,7 +94,7 @@ jobs:
           adb shell settings put global transition_animation_scale 0
           adb shell settings put global animator_duration_scale 0
           adb shell am broadcast -a android.intent.action.CLOSE_SYSTEM_DIALOGS || true
-          apk=$(find "$RUNNER_TEMP/codync-validation-apk" -name app-debug.apk -print -quit)
+          apk=apps/android/app/build/outputs/apk/debug/app-debug.apk
           test -n "$apk"
           adb install -r "$apk"
           adb reverse tcp:19391 tcp:19391
