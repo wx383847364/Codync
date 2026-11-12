@@ -8,6 +8,7 @@ public struct Bot: Codable, Identifiable, Hashable, Sendable {
     public var kind: String
     /// A group's bots.
     public var members: [String]
+    public var stage: StageGroup?
     public var name: String
     public var description: String
     public var avatarColor: String
@@ -66,6 +67,7 @@ public struct Bot: Codable, Identifiable, Hashable, Sendable {
     /// The harness keeps one memory for all its sessions that Codync can't turn off (Hermes Agent, Gemini CLI):
     /// every bot on it shares it. Nil from an older host.
     public var harnessMemoryShared: Bool?
+    public var stageMemoryShared: Bool?
     /// Moves whenever memory changes, so an open memory screen fetches it again.
     public var memoryRev: Int64?
     /// Created without a name: the host names it after its first few conversations.
@@ -105,12 +107,13 @@ public struct Bot: Codable, Identifiable, Hashable, Sendable {
 }
 
 extension Bot {
-    /// Lenient: a host that is a little newer or older than the app still yields a usable bot.
+    /// 解码群及可选阶段配置，兼容未提供阶段字段的 Host。
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(String.self, forKey: .id)
         kind = try c.decodeIfPresent(String.self, forKey: .kind) ?? "agent"
         members = try c.decodeIfPresent([String].self, forKey: .members) ?? []
+        stage = try c.decodeIfPresent(StageGroup.self, forKey: .stage)
         name = try c.decodeIfPresent(String.self, forKey: .name) ?? "Bot"
         description = try c.decodeIfPresent(String.self, forKey: .description) ?? ""
         avatarColor = try c.decodeIfPresent(String.self, forKey: .avatarColor) ?? "blue"
@@ -146,6 +149,7 @@ extension Bot {
         sharedMemory = try c.decodeIfPresent(Bool.self, forKey: .sharedMemory)
         harnessMemory = try c.decodeIfPresent(Bool.self, forKey: .harnessMemory)
         harnessMemoryShared = try c.decodeIfPresent(Bool.self, forKey: .harnessMemoryShared)
+        stageMemoryShared = try c.decodeIfPresent(Bool.self, forKey: .stageMemoryShared)
         memoryRev = try c.decodeIfPresent(Int64.self, forKey: .memoryRev)
         autoName = try c.decodeIfPresent(Bool.self, forKey: .autoName) ?? false
         createdAt = try c.decodeIfPresent(Int64.self, forKey: .createdAt) ?? 0

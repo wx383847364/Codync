@@ -108,17 +108,18 @@ pub(super) fn chat(buf: &mut Buffer, r: Rect, app: &mut App, narrow: bool) {
     }
 
     // Composer at the bottom.
-    let draft = app.draft();
+    let stage_closed = b.stage.as_ref().is_some_and(|stage| stage.closed_at.is_some());
+    let draft = if stage_closed { Editor::default() } else { app.draft() };
     let inner = usize::from(r.width.saturating_sub(4)).max(1);
     let (clines, cursor) = composer_lines(&draft, inner);
     let ch = u(clines.len().clamp(1, 8));
     // The message it replies to, then attached files: a row each above the text.
-    let quote = app.replying_to().map(Entry::quoted);
+    let quote = (!stage_closed).then(|| app.replying_to().map(Entry::quoted)).flatten();
     let qh = u16::from(quote.is_some());
-    let files = app.draft_files();
+    let files = if stage_closed { &[] } else { app.draft_files() };
     let fh = u16::from(!files.is_empty());
     let box_top = r.bottom().saturating_sub(ch + qh + fh + 2);
-    let typing = app.typing && app.overlays.is_empty();
+    let typing = !stage_closed && app.typing && app.overlays.is_empty();
     let rule = if typing { t.text } else { t.line };
     hline(buf, r.x, box_top, r.width, rule);
     hline(buf, r.x, box_top + qh + fh + ch + 1, r.width, rule);
@@ -155,7 +156,9 @@ pub(super) fn chat(buf: &mut Buffer, r: Rect, app: &mut App, narrow: bool) {
     let mut used = clines.get(first).map_or(0, |l| w(l));
     if draft.text.is_empty() {
         // The apps' wording.
-        let placeholder = if let Some(pick) = &app.pick {
+        let placeholder = if stage_closed && app.pick.is_none() {
+            tr("Stage closed").into_owned()
+        } else if let Some(pick) = &app.pick {
             let artifact = app.lane(&b.id).iter().any(|e| &e.id == pick && e.artifact().is_some());
             if artifact {
                 "j k pick · o open in the browser · f save as HTML · ↵ reply · 1–6 react · c copy · esc"
@@ -166,6 +169,13 @@ pub(super) fn chat(buf: &mut Buffer, r: Rect, app: &mut App, narrow: bool) {
             .to_owned()
         } else if app.reply.is_some() {
             tr("Reply…").into_owned()
+        } else if let Some(stage) = &b.stage {
+            let lead = &stage.leader_id;
+            // 默认负责人失效时提醒明确选人，不显示全体接收。
+            app.bots.get(lead).filter(|_| b.members.contains(lead)).map_or_else(
+                || tr("Choose a recipient with @").into_owned(),
+                |bot| tr("Ask {name} · @ to choose another recipient").replace("{name}", &bot.name),
+            )
         } else if b.group {
             tr("Ask everyone · @ to ask one bot").into_owned()
         } else {
@@ -190,6 +200,8 @@ pub(super) fn chat(buf: &mut Buffer, r: Rect, app: &mut App, narrow: bool) {
         }
     } else if app.pick.is_some() {
         if draft.text.is_empty() { "" } else { "↵ replies to it · esc cancels" }
+    } else if stage_closed {
+        ""
     } else if matches!(b.status, Status::Working | Status::NeedsInput) {
         "s stops"
     } else {
@@ -203,7 +215,21 @@ pub(super) fn chat(buf: &mut Buffer, r: Rect, app: &mut App, narrow: bool) {
         set_cursor(Position::new(r.x + 3 + u(cursor.0), cy.min(comp_top + ch)));
     }
 
-    let strip_top = queue_band(buf, r, app, &b, box_top, typing);
+    let mut strip_top = queue_band(buf, r, app, &b, box_top, typing);
+    if !draft.text.is_empty()
+        && app.reply.is_none()
+        && strip_top > top + 1
+        && let Some(stage) = &b.stage
+    {
+        let lead = &stage.leader_id;
+        // 草稿有正文时仍显示默认接收范围，保留已有任务队列的显示位置。
+        strip_top -= 1;
+        let label = app.bots.get(lead).filter(|_| b.members.contains(lead)).map_or_else(
+            || tr("Choose a recipient with @").into_owned(),
+            |bot| tr("Default recipient · {name}").replace("{name}", &bot.name),
+        );
+        put(buf, r.x + 3, strip_top, r.width.saturating_sub(4), &label, t.dim);
+    }
 
     // Transcript.
     let body = Rect::new(r.x, top + 1, r.width, strip_top.saturating_sub(top + 1));

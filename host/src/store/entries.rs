@@ -222,6 +222,23 @@ impl Store {
         Ok(st.query_map(params![bot_id, limit], row_entry)?.collect::<rusqlite::Result<_>>()?)
     }
 
+    /// 精确查找本群已分享的文件，固定证据不依赖界面列表的页大小。
+    pub(crate) fn stage_shared_file(&self, room: &str, id: &str) -> Result<Option<crate::chat::files::SharedFile>> {
+        let db = self.db.locked();
+        let data: Option<String> = db
+            .query_row(
+                &format!(
+                    "SELECT file.value FROM entries, json_each(entries.data,'$.files') AS file
+            WHERE bot_id=?1 AND kind='agent' AND json_extract(entries.data,'$.final')=1 AND {NOT_REMOVED}
+            AND json_extract(file.value,'$.id')=?2 LIMIT 1"
+                ),
+                params![room, id],
+                |r| r.get(0),
+            )
+            .optional()?;
+        Ok(data.as_deref().map(serde_json::from_str).transpose()?)
+    }
+
     /// Cards still waiting for the user to sign in to agent `backend`, oldest first.
     // ponytail: scans notices without an index; sign-ins are rare, add one if it shows up in profiles.
     pub fn pending_sign_ins(&self, backend: &str) -> Result<Vec<Entry>> {

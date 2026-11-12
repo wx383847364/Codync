@@ -17,6 +17,10 @@ impl Hub {
             (!cfg.is_group() && crate::agent::own_memory::switchable(cfg)).then_some(cfg.harness_memory).into();
         if !cfg.is_group() {
             v["harnessMemoryShared"] = crate::agent::own_memory::shared(cfg).into();
+            // 预览继承整条回退链，任一后端存在全局记忆都应提示。
+            v["stageMemoryShared"] = (0..crate::agent::fallback::steps(cfg))
+                .any(|step| crate::agent::own_memory::shared(&crate::agent::fallback::effective(cfg, step)))
+                .into();
             v["sharedMemory"] = crate::chat::memory::shared(cfg).into();
             v["memoryRev"] = self.store.memory_rev().into();
             v["devServers"] = self.dev_servers.wire(&cfg.id);

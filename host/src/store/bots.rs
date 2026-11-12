@@ -1,10 +1,10 @@
 //! The `bots` table: roster rows, sessions, read marks and unread counts.
 
 use super::entries::NOT_REMOVED;
-use super::model::{BotConfig, BotRow, EntryKind, LastMessage, message_text};
+use super::model::{BotConfig, BotRow, EntryKind, LastMessage, StageGroup, message_text};
 use super::{Store, logged, next_rev};
 use crate::LockExt;
-use anyhow::Result;
+use anyhow::{Context as _, Result};
 use rusqlite::{OptionalExtension, params};
 use serde_json::Value;
 
@@ -31,6 +31,34 @@ const SAVE_BOT: &str = "INSERT INTO bots(id, rev, config) VALUES(?1, ?2, ?3)
      ON CONFLICT(id) DO UPDATE SET rev = ?2, config = ?3 WHERE deleted = 0";
 
 impl Store {
+    /// 阶段变更与本群进行中的投递共用写事务，关闭与并发入队只能有一个先提交。
+    pub(crate) fn update_stage(
+        &self,
+        id: &str,
+        change: impl FnOnce(&mut StageGroup, bool) -> Result<()>,
+    ) -> Result<()> {
+        let mut db = self.db.locked();
+        let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let config: String = tx.query_row("SELECT config FROM bots WHERE id=? AND deleted=0", [id], |r| r.get(0))?;
+        let mut config: BotConfig = serde_json::from_str(&config)?;
+        let stage = config.stage.as_mut().context("not a stage group")?;
+        let pending = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM deliveries WHERE room_id=? AND status IN ('queued','claimed','started'))",
+            [id],
+            |r| r.get(0),
+        )?;
+        change(stage, pending)?;
+        let rev = next_rev(&tx)?;
+        tx.execute(SAVE_BOT, params![id, rev, serde_json::to_string(&config)?])?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// 阶段详情显示投递状态计数与当前待处理成员，读取不会触发调度。
+    pub(crate) fn stage_work(&self, id: &str) -> Result<Value> {
+        stage_work(&self.db.locked(), id)
+    }
+
     pub fn bots(&self) -> Result<Vec<BotRow>> {
         let c = self.db.locked();
         let mut st = c.prepare(&format!("SELECT {BOT_COLS} FROM bots"))?;
@@ -76,11 +104,19 @@ impl Store {
 
     /// Saves several bots in one transaction, each with its own rev: all of them or, on an error, none.
     pub fn save_bots(&self, cfgs: &[BotConfig]) -> Result<()> {
+        self.save_bots_with_creation(cfgs, None)
+    }
+
+    /// 将新群、新成员与创建回执一起保存；请求重传可恢复已提交的身份。
+    pub(crate) fn save_bots_with_creation(&self, cfgs: &[BotConfig], creation: Option<(&str, &str)>) -> Result<()> {
         let mut c = self.db.locked();
         let tx = c.transaction()?;
         for cfg in cfgs {
             let rev = next_rev(&tx)?;
             tx.execute(SAVE_BOT, params![cfg.id, rev, serde_json::to_string(cfg)?])?;
+        }
+        if let Some((key, value)) = creation {
+            tx.execute("INSERT INTO kv(k,v) VALUES(?1,?2)", [key, value])?;
         }
         tx.commit()?;
         Ok(())
@@ -219,11 +255,101 @@ impl Store {
     }
 }
 
+/// 用已有投递行汇总状态；待处理列表只含身份、显示名及状态。
+fn stage_work(c: &rusqlite::Connection, id: &str) -> Result<Value> {
+    let counts = c
+        .prepare("SELECT status,COUNT(*) FROM deliveries WHERE room_id=? GROUP BY status")?
+        .query_map([id], |r| Ok((r.get::<_, String>(0)?, Value::from(r.get::<_, i64>(1)?))))?
+        .collect::<rusqlite::Result<serde_json::Map<_, _>>>()?;
+    let pending = c.prepare("SELECT d.id,COALESCE(json_extract(b.config,'$.name'),d.target_bot_id),d.status
+        FROM deliveries d LEFT JOIN bots b ON b.id=d.target_bot_id
+        WHERE d.room_id=? AND d.status IN ('queued','claimed','started') ORDER BY d.room_seq LIMIT 32")?
+        .query_map([id], |r| Ok(serde_json::json!({"id":r.get::<_, String>(0)?,"name":r.get::<_, String>(1)?,"status":r.get::<_, String>(2)?})))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(serde_json::json!({"counts":counts,"pending":pending}))
+}
+
+/// 在当前投递事务读取阶段快照，避免使用客户端缓存的开关或交接版本。
+pub(super) fn room_stage(c: &rusqlite::Connection, id: &str) -> Result<Option<StageGroup>> {
+    let data = c
+        .query_row("SELECT json_extract(config,'$.stage') FROM bots WHERE id=? AND deleted=0", [id], |r| {
+            r.get::<_, Option<String>>(0)
+        })
+        .optional()?
+        .flatten();
+    Ok(data.as_deref().map(serde_json::from_str).transpose()?)
+}
+
+/// 队列准入只限制已关闭的阶段群，普通群沿用现有规则。
+pub(super) fn stage_closed(c: &rusqlite::Connection, id: &str) -> Result<bool> {
+    Ok(c.query_row(
+        "SELECT json_extract(config,'$.stage.closedAt') IS NOT NULL FROM bots WHERE id=? AND deleted=0",
+        [id],
+        |r| r.get(0),
+    )
+    .optional()?
+    .unwrap_or(false))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::store::model::{BotKind, EntryKind, Lane, Permission};
     use crate::store::tests::temp_store;
+
+    /// 并发结束与发送只能一项成功，晚到结果和显式重试受同一关闭边界约束。
+    #[test]
+    fn stage_close_and_send_are_serialized() {
+        use crate::store::deliveries::Status;
+        use serde_json::json;
+        use std::sync::{Arc, Barrier};
+        let s = Arc::new(temp_store());
+        for cfg in [
+            json!({"id":"a","name":"A"}),
+            json!({"id":"b","name":"B"}),
+            json!({"id":"g","name":"Phase","kind":"group","members":["a","b"],"stage":{"leaderId":"a","goal":"Goal","acceptance":"Check"}}),
+        ] {
+            s.save_bot(&serde_json::from_value(cfg).unwrap()).unwrap();
+        }
+        // 先留一条失败结果，验证关闭后不能从历史重新排队。
+        s.post_group("g", &json!({"text":"first"}), &[]).unwrap();
+        let failed = s.queued_deliveries("g").unwrap().remove(0);
+        s.claim_delivery(&failed.id, "a").unwrap();
+        s.start_delivery(&failed.id, "a").unwrap();
+        s.complete_delivery(&failed.id, Status::Failed, None, Some("test failure"), 1).unwrap();
+        let close = || {
+            s.update_stage("g", |stage, pending| {
+                anyhow::ensure!(!pending, "pending work");
+                stage.closed_at = Some(10);
+                Ok(())
+            })
+        };
+        let barrier = Barrier::new(2);
+        let (closed, sent) = std::thread::scope(|scope| {
+            let writer = scope.spawn(|| {
+                barrier.wait();
+                s.post_group("g", &json!({"text":"race"}), &[])
+            });
+            barrier.wait();
+            (close().is_ok(), writer.join().unwrap().is_ok())
+        });
+        assert_ne!(closed, sent);
+        if sent {
+            s.cancel_deliveries("g", None, "test stop").unwrap();
+            close().unwrap();
+        }
+        assert!(s.post_group("g", &json!({"text":"closed"}), &[]).is_err());
+        assert!(s.retry_delivery(&failed.id).is_err());
+        s.complete_delivery(&failed.id, Status::Completed, Some("@B late"), None, 2).unwrap();
+        assert!(s.queued_deliveries("g").unwrap().is_empty());
+        s.update_stage("g", |stage, _| {
+            stage.closed_at = None;
+            Ok(())
+        })
+        .unwrap();
+        s.retry_delivery(&failed.id).unwrap();
+        assert_eq!(s.delivery(&failed.id).unwrap().unwrap().status, Status::Failed);
+    }
 
     #[test]
     fn rev_sync_and_unread() {
@@ -233,6 +359,7 @@ mod tests {
             kind: BotKind::Agent,
             members: vec![],
             group_session_base: None,
+            stage: None,
             name: "Rev".into(),
             description: String::new(),
             avatar_color: "blue".into(),

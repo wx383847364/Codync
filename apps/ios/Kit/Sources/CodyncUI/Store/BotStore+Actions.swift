@@ -374,6 +374,43 @@ extension BotStore {
         }
     }
 
+    /// 将阶段群加入名单，预填首次任务并打开群。现有草稿优先。
+    public func createStageGroup(_ draft: StageGroupDraft) async throws {
+        let (saved, firstMessage) = try await ready().createStageGroup(draft)
+        let bot = putHostBot(saved)
+        if bot.lastMessage == nil, composerDraft(for: bot.id).isEmpty {
+            setComposerDraft(firstMessage, for: bot.id)
+        }
+        selection = bot.id
+    }
+
+    /// 读取或修改阶段后更新 Host 投影，保留聊天当前选择。
+    public func stageDetails(_ botId: String, change: StageChange? = nil) async throws -> StageDetails {
+        let client = try await ready()
+        let result: StageDetails
+        if let change {
+            result = try await client.call("changeStage", change)
+        } else {
+            struct Request: Encodable { var botId: String }
+            result = try await client.call("stageDetails", Request(botId: botId))
+        }
+        putHostBot(result.bot)
+        return result
+    }
+
+    /// 按需读取阶段用量，独立于阶段详情和写入操作。
+    func stageUsage(_ botId: String) async throws -> StageUsage {
+        struct Request: Encodable { var botId: String }
+        return try await ready().call("stageUsage", Request(botId: botId))
+    }
+
+    /// 手动恢复未发出的首条任务，已有本地草稿继续保留。
+    func restoreStageDraft(_ details: StageDetails) {
+        let id = details.bot.id
+        if composerDraft(for: id).isEmpty { setComposerDraft(details.initialDraft, for: id) }
+        selection = id
+    }
+
     public func updateGroup(_ draft: GroupDraft) async throws {
         putHostBot(try await ready().updateGroup(draft))
     }

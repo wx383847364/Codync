@@ -3,15 +3,17 @@
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
+use ratatui::text::Span;
 
 use super::super::app::{ACTIONS, Action, App, Click, FILTERS, GotoItem, Mark};
 use super::super::l10n::tr;
-use super::super::md::truncate;
+use super::super::md::{truncate, wrap};
 use super::buffer::{centered, frame_box, hline, put, put_line, restyle, rput};
 use super::overlay::field_line;
 use super::roster::preview;
 use super::style::{avatar, glyph, theme};
 
+/// 绘制搜索结果及高亮项目的说明，阶段创建的说明随来源群变化。
 pub(super) fn goto(buf: &mut Buffer, area: Rect, app: &mut App, g: &super::super::app::Goto, items: &[GotoItem]) {
     let t = theme();
     let r = centered(area, 80, 24);
@@ -44,7 +46,8 @@ pub(super) fn goto(buf: &mut Buffer, area: Rect, app: &mut App, g: &super::super
         app.hits.clicks.push((Rect::new(start, inner.y + 2, x - start, 1), Click::Filter(i)));
     }
     let list_top = inner.y + 4;
-    let list_h = usize::from(inner.bottom().saturating_sub(list_top + 3));
+    let footer = inner.bottom().saturating_sub(4);
+    let list_h = usize::from(footer.saturating_sub(list_top));
     let off = g.cursor.saturating_sub(list_h.saturating_sub(1));
     let mut y = list_top;
     let mut shown_actions = false;
@@ -100,15 +103,35 @@ pub(super) fn goto(buf: &mut Buffer, area: Rect, app: &mut App, g: &super::super
             }
         }
         y += 1;
-        if y >= inner.bottom().saturating_sub(3) {
+        if y >= footer {
             break;
         }
     }
     if items.is_empty() {
         put(buf, inner.x, list_top, inner.width, tr("Nothing matches").as_ref(), t.dim.patch(t.panel));
     }
-    hline(buf, inner.x, inner.bottom() - 3, inner.width, t.line.patch(t.panel));
-    if let Some(GotoItem::Bot(id)) = items.get(g.cursor)
+    hline(buf, inner.x, footer, inner.width, t.line.patch(t.panel));
+    // 底栏保留两行提示，窄终端也能读到选中操作的说明。
+    let hint = match items.get(g.cursor) {
+        Some(GotoItem::Action(Action::NewGroupSession)) => Some("Reuse the same bots in a fresh chat."),
+        Some(GotoItem::Action(Action::NewStageGroup)) => {
+            Some(match app.stage_source().and_then(|bot| bot.stage.as_ref()) {
+                None => "Create new bots and choose a lead.",
+                Some(stage) if stage.handoff.as_ref().is_some_and(|handoff| handoff.accepted_at.is_some()) => {
+                    "Create new bots and use the accepted handoff."
+                }
+                Some(_) => "Review and accept a handoff in Stage details first.",
+            })
+        }
+        _ => None,
+    };
+    if let Some(hint) = hint {
+        let spans = [Span::styled(tr(hint).into_owned(), t.secondary.patch(t.panel))];
+        let lines = wrap(&spans, usize::from(inner.width), &[], &[]);
+        for (y, line) in (footer + 1..footer + 3).zip(lines) {
+            put_line(buf, inner.x, y, inner.width, &line);
+        }
+    } else if let Some(GotoItem::Bot(id)) = items.get(g.cursor)
         && let Some(b) = app.bots.get(id)
     {
         let meta = if b.group {

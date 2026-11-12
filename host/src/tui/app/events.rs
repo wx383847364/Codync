@@ -220,6 +220,14 @@ impl App {
                         }
                         _ => {}
                     },
+                    After::StageGroupCreated => {
+                        // 提交失败保留字段及重试身份。
+                        if let Some(Overlay::StageGroup(stage)) = self.overlays.last_mut() {
+                            stage.saving = false;
+                            stage.error = Some(e);
+                        }
+                    }
+                    After::StageDetails { room, .. } | After::StageUsage(room) => self.stage_details_error(&room, e),
                     After::Dirs(id) | After::WorkspaceSelected(id) => {
                         if let Some(Overlay::Folder(p)) = self.overlays.last_mut()
                             && p.request_id == id
@@ -254,6 +262,7 @@ impl App {
             After::Hello => {
                 self.custom_icons = v["icons"].is_object();
                 self.group_sessions = v["groupSessions"] == true;
+                self.stage_groups = v["stageGroups"] == true;
                 self.mismatch = crate::compat::check(env!("CARGO_PKG_VERSION"), crate::compat::MIN_HOST, &v);
                 v["name"].as_str().unwrap_or("computer").clone_into(&mut self.host);
                 v["version"].as_str().unwrap_or_default().clone_into(&mut self.host_version);
@@ -340,6 +349,9 @@ impl App {
                 self.receive_saved_bot(&v["bot"], created);
             }
             After::GroupSessionCreated => self.receive_saved_bot(&v["bot"], true),
+            After::StageGroupCreated => self.receive_stage_group(&v),
+            After::StageDetails { room, saved } => self.receive_stage_details(&room, v, saved),
+            After::StageUsage(room) => self.receive_stage_usage(&room, &v),
             After::Connectors | After::Skills => {
                 let connectors = matches!(after, After::Connectors);
                 let list = self.set_plugins(connectors, v["items"].as_array().cloned().unwrap_or_default());

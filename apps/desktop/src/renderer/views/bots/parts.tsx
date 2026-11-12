@@ -28,8 +28,8 @@ export function SwitchRow({ title, detail, on, onChange }: { title: string; deta
   )
 }
 
-/** A multi-line field that grows with its text between `minRows` and `maxRows` (`axis: .vertical`). */
-export function AutoTextArea({ value, onChange, placeholder, minRows, maxRows, className, onKeyDown }: {
+/** 多行文本框随正文增高，提交期间可禁用输入以保护正在保存的版本。 */
+export function AutoTextArea({ value, onChange, placeholder, minRows, maxRows, className, onKeyDown, disabled }: {
   value: string
   onChange: (v: string) => void
   placeholder?: string
@@ -37,6 +37,7 @@ export function AutoTextArea({ value, onChange, placeholder, minRows, maxRows, c
   maxRows: number
   className?: string
   onKeyDown?: (e: React.KeyboardEvent<HTMLTextAreaElement>) => void
+  disabled?: boolean
 }) {
   const tr = useTr()
   const ref = useRef<HTMLTextAreaElement>(null)
@@ -49,7 +50,7 @@ export function AutoTextArea({ value, onChange, placeholder, minRows, maxRows, c
     el.style.height = '0px'
     el.style.height = `${Math.min(Math.max(el.scrollHeight, line * minRows + pad), line * maxRows + pad)}px`
   }, [value, minRows, maxRows])
-  return <textarea ref={ref} rows={minRows} className={className} value={value} placeholder={placeholder === undefined ? undefined : tr(placeholder)} onChange={(e) => onChange(e.target.value)} onKeyDown={onKeyDown} />
+  return <textarea ref={ref} rows={minRows} className={className} value={value} disabled={disabled} placeholder={placeholder === undefined ? undefined : tr(placeholder)} onChange={(e) => onChange(e.target.value)} onKeyDown={onKeyDown} />
 }
 
 /** The avatar's shape and color: each a wrapping, centered row of choices, ringed when picked. */

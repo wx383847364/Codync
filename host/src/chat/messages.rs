@@ -34,9 +34,9 @@ pub fn post(hub: &Arc<Hub>, cfg: &BotConfig, mut data: Value) -> Result<Entry> {
             &mentions,
             &members,
             data["replyTo"]["author"].as_str(),
-            true,
+            cfg.stage.is_none(),
         )?;
-        data["resolvedMentions"] = serde_json::json!(targets);
+        // 阶段默认负责人在投递事务里按最新群配置校验与绑定。
         hub.post_group(&cfg.id, &data, &targets)?
     } else {
         hub.add_entry(&lane, EntryKind::User, turn, &data).ok_or_else(|| anyhow!("couldn't save the message"))?

@@ -17,6 +17,89 @@ fn store() -> Store {
     store
 }
 
+/// 把现有测试群设为阶段群，默认负责人选第二位以区分名单顺序与默认路由。
+fn stage_store() -> Store {
+    let s = store();
+    let mut group = s.bot("g").unwrap().unwrap().config;
+    group.stage = Some(crate::store::StageGroup {
+        leader_id: "b".into(),
+        goal: "Build a fixture".into(),
+        acceptance: "Verify output".into(),
+        ..Default::default()
+    });
+    s.save_bot(&group).unwrap();
+    s
+}
+
+/// 负责人失效时保留重发机会，显式路由可继续工作，重复 nonce 沿用原接收人。
+#[test]
+fn stage_default_recipient_is_saved_with_the_message() {
+    let s = stage_store();
+    let body = json!({"text":"work", "clientNonce":"stable"});
+    let (saved, _) = s.post_group("g", &body, &[]).unwrap();
+    assert_eq!(saved.data["resolvedMentions"], json!(["b"]));
+    assert_eq!(s.queued_deliveries("g").unwrap()[0].target_bot_id, "b");
+    let directed = json!({"text":"see this", "replyTo":{"author":"removed"}});
+    assert!(s.post_group("g", &directed, &[]).unwrap_err().to_string().contains("quoted member"));
+    assert_eq!(s.post_group("g", &directed, &["a".into()]).unwrap().0.data["resolvedMentions"], json!(["a"]));
+    s.delete_bot("b").unwrap();
+    assert_eq!(s.post_group("g", &body, &[]).unwrap().0.id, saved.id);
+    let before = s.history("g", i64::MAX, 20).unwrap().len();
+    assert!(s.post_group("g", &json!({"text":"invalid"}), &[]).is_err());
+    assert_eq!(s.history("g", i64::MAX, 20).unwrap().len(), before);
+    let (direct, _) = s.post_group("g", &json!({"text":"@a work"}), &["a".into()]).unwrap();
+    assert_eq!(direct.data["resolvedMentions"], json!(["a"]));
+}
+
+/// 显式请求的结果与文字 @ 共用一次继续处理，未请求及无结果的派工只更新状态。
+#[test]
+fn stage_returns_only_requested_final_results_once() {
+    for (source_kind, status, text, file, expected) in [
+        (TOOL_RETURN, Status::Completed, Some("result"), false, 1),
+        (TOOL_RETURN, Status::Completed, Some("@b result"), false, 1),
+        (TOOL_RETURN, Status::Completed, None, true, 1),
+        ("tool", Status::Completed, Some("result"), false, 0),
+        (TOOL_RETURN, Status::NoReply, None, false, 0),
+    ] {
+        let s = stage_store();
+        let mut request = Delivery::speak("g", "unused", "a");
+        request.kind = Kind::Task;
+        request.source_kind = source_kind.into();
+        request.source_entry_id = None;
+        request.source_bot_id = Some("b".into());
+        request.body = Some("review".into());
+        request.idempotency_key = Some("review-1".into());
+        let delivery = s.enqueue_task(&request).unwrap().0;
+        let mut conflict = request;
+        conflict.source_kind = if source_kind == "tool" { TOOL_RETURN } else { "tool" }.into();
+        assert!(s.enqueue_task(&conflict).is_err());
+        s.claim_delivery(&delivery.id, "a").unwrap();
+        s.start_delivery(&delivery.id, "a").unwrap();
+        let source = if file {
+            s.insert_entry(
+                &crate::store::Lane::main("g"),
+                EntryKind::Agent,
+                1,
+                &json!({"deliveryId":delivery.id,"author":"a","final":true,"text":"@c report.md",
+                    "files":[{"id":"snapshot","name":"@c report.md"}]}),
+            )
+            .unwrap()
+            .id
+        } else {
+            format!("delivery-result-{}", delivery.id)
+        };
+        s.complete_delivery(&delivery.id, status, text, None, 1).unwrap();
+        s.complete_delivery(&delivery.id, status, text, None, 1).unwrap();
+        let queued = s.queued_deliveries("g").unwrap();
+        assert_eq!(queued.len(), expected);
+        if let Some(next) = queued.first() {
+            assert_eq!(next.target_bot_id, "b");
+            assert_eq!(next.source_execution_id.as_deref(), Some(delivery.id.as_str()));
+            assert_eq!(next.source_entry_id.as_deref(), Some(source.as_str()));
+        }
+    }
+}
+
 /// started 是重启后不自动重放的边界，claimed 则安全回队。
 #[test]
 fn recovery_preserves_queued_and_interrupts_started() {

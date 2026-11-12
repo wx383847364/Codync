@@ -35,7 +35,8 @@ this computer and the user's other computers (ids like name@computer); search wi
 In group turns, list_bots lists only other current room members. Use message_bot(botId, message, idempotencyKey?) \
 to assign one of those members a self-contained task: it returns when queued, and its result stays in the \
 source group, never your private chat. Group work runs in room order; finish your turn so the room can continue, \
-and do not wait or poll. A group idempotency key is scoped to you, the source group and recipient: reuse it only \
+and do not wait or poll. In a stage group, set returnResult=true only if you need another turn to act on the result. \
+A group idempotency key is scoped to you, the source group and recipient: reuse it only \
 for retransmission of the exact same task; changed text conflicts. Group Stop or member removal cancels related \
 unfinished work. You may also @-mention room members for a conversational answer. \
 In your own chat or a routine, message_bot returns when queued and the recipient's reply reaches your own chat \
@@ -76,6 +77,7 @@ pub fn tools() -> Value {
                     "botId": {"type": "string", "description": "Recipient ID from list_bots. Group turns accept only another current member of that same group; name@computer is for use outside groups."},
                     "message": {"type": "string", "description": "Self-contained task, context, paths and acceptance criteria. State the recipient's deliverable and format separately from your final answer. Request only the evidence needed; retain source material for a full review."},
                     "idempotencyKey": {"type":"string","description":"Group turns only: reuse for identical task retransmission, scoped to sender, source group and target. Changed text conflicts."},
+                    "returnResult": {"type":"boolean","description":"Stage groups: when a successful result needs your follow-up, request one continuation in this group."},
                 },
                 "required": ["botId", "message"],
             },
@@ -419,7 +421,7 @@ fn call(hub: &Arc<Hub>, from: &str, name: &str, args: &Value) -> Result<Value> {
     }
 }
 
-/// 群内派工按可信执行上下文入库；结果只回来源群，不走私聊 `BotRequest`。
+/// 群内派工按可信执行入库，阶段回传标记与原任务一起持久化。
 fn group_message(hub: &Arc<Hub>, from: &str, room: &str, execution: &str, args: &Value) -> Result<Value> {
     let to = args["botId"].as_str().ok_or_else(|| anyhow!("botId is required"))?;
     let message = args["message"].as_str().unwrap_or_default();
@@ -429,7 +431,16 @@ fn group_message(hub: &Arc<Hub>, from: &str, room: &str, execution: &str, args: 
 
     let mut request = crate::store::deliveries::Delivery::speak(room, "", to);
     request.kind = crate::store::deliveries::Kind::Task;
-    request.source_kind = "tool".into();
+    let returns = args
+        .get("returnResult")
+        .map(|value| value.as_bool().ok_or_else(|| anyhow!("invalid returnResult")))
+        .transpose()?
+        .unwrap_or(false);
+    request.source_kind = if returns && hub.store.bot(room)?.is_some_and(|row| row.config.stage.is_some()) {
+        crate::store::deliveries::TOOL_RETURN.into()
+    } else {
+        "tool".into()
+    };
     request.source_entry_id = None;
     request.source_execution_id = Some(execution.into());
     request.source_bot_id = Some(from.into());

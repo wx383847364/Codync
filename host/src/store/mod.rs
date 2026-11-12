@@ -13,6 +13,7 @@ pub(crate) mod group_context;
 mod memory;
 mod model;
 mod schema;
+pub(crate) mod turn_usage;
 mod workspaces;
 
 pub use devices::{Device, DeviceAccount, DeviceSource, Scope};
@@ -20,7 +21,7 @@ pub use model::{
     AVATAR_COLORS, AVATAR_SHAPES, BotConfig, BotKind, BotRow, Entry, EntryKind, Fallback, Lane, Permission,
     message_text, run_session_key,
 };
-pub(crate) use model::{group_session_slot, slotted_group};
+pub(crate) use model::{StageGroup, StageHandoff, group_session_slot, slotted_group};
 
 use crate::LockExt;
 use anyhow::Result;

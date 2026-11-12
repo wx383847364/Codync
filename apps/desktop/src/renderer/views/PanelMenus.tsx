@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
 import { Spinner } from '../components/Controls'
 import { Icon } from '../components/Icon'
 import { IconSlot, VStack } from '../components/Stack'
@@ -30,6 +30,7 @@ export interface PanelItem {
   title: string
   icon: string
   detail?: string | null
+  subtitle?: string
   /** A bundled image in place of the symbol (the Google logo). */
   image?: string
   chevron?: boolean
@@ -112,6 +113,7 @@ export function AccountPanelLayer({ compact, approvals, onDismiss, onUsage, onSe
   )
 }
 
+/** 绘制支持键盘操作的菜单行，副标题作为辅助说明供读屏读取。 */
 export function PanelRows({ items, onDismiss, after, active = true, label, onPoint, onNavigate, onForward, onBack }: {
   items: PanelItem[]
   onDismiss: () => void
@@ -124,6 +126,7 @@ export function PanelRows({ items, onDismiss, after, active = true, label, onPoi
   onBack?: () => void
 }) {
   const tr = useTr()
+  const subtitleId = useId()
   const [highlighted, setHighlighted] = useState(0)
   const pointed = useRef(-1)
   const highlightedRow = useRef<HTMLButtonElement>(null)
@@ -168,12 +171,17 @@ export function PanelRows({ items, onDismiss, after, active = true, label, onPoi
   }, [items, highlighted, onDismiss, active, onNavigate, onForward, onBack])
   return (
     <VStack gap={2} role="menu" aria-label={label} onMouseLeave={() => { pointed.current = -1 }}>
-      {items.map((item, i) => (
-        <div key={`${i}-${item.title}`} role="none">
+      {/* 保持操作标题为读屏名称，另行关联创建结果的说明。 */}
+      {items.map((item, i) => {
+        const title = item.verbatim ? item.title : tr(item.title)
+        const description = item.subtitle ? `${subtitleId}-${i}` : undefined
+        return <div key={`${i}-${item.title}`} role="none">
           <button
             ref={highlighted === i ? highlightedRow : undefined}
-            className={`panel-row ${item.expanded || (active && highlighted === i) ? 'highlight' : ''} ${item.destructive ? 'destructive' : ''}`}
+            className={`panel-row ${item.expanded || (active && highlighted === i) ? 'highlight' : ''} ${item.destructive ? 'destructive' : ''}${item.subtitle ? ' with-subtitle' : ''}`}
             role="menuitem"
+            aria-label={item.subtitle ? title : undefined}
+            aria-describedby={description}
             tabIndex={active && highlighted === i ? 0 : -1}
             aria-haspopup={item.submenu ? 'menu' : undefined}
             aria-expanded={item.submenu ? item.expanded : undefined}
@@ -190,13 +198,16 @@ export function PanelRows({ items, onDismiss, after, active = true, label, onPoi
             <IconSlot width={20}>
               {item.image ? <img src={item.image} alt="" width={14} height={14} /> : <Icon name={item.icon} size={14} />}
             </IconSlot>
-            <Text size="callout" truncate grow>{item.verbatim ? item.title : tr(item.title)}</Text>
+            {item.subtitle ? <span className="menu-title with-detail">
+              <Text size="callout">{title}</Text>
+              <Text size="caption" tone="secondary" id={description}>{tr(item.subtitle)}</Text>
+            </span> : <Text size="callout" truncate grow>{title}</Text>}
             {item.detail ? <Text size="body" tone="secondary">{item.detail}</Text> : null}
             {item.chevron ? <Icon name="chevron.right" size={11} color="var(--secondary)" /> : null}
           </button>
           {after?.(i)}
         </div>
-      ))}
+      })}
     </VStack>
   )
 }

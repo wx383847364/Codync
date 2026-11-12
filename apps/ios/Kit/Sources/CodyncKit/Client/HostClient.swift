@@ -204,6 +204,13 @@ public extension HostClient {
         return res.bot
     }
 
+    /// 提交已确认的阶段配置，返回已保存的群及首条草稿。
+    func createStageGroup(_ draft: StageGroupDraft) async throws -> (Bot, String) {
+        struct Res: Decodable { var bot: Bot; var draft: String }
+        let res: Res = try await call("createStageGroup", draft)
+        return (res.bot, res.draft)
+    }
+
     func updateGroup(_ draft: GroupDraft) async throws -> Bot {
         struct Res: Decodable { var bot: Bot }
         let res: Res = try await call("updateBot", draft)

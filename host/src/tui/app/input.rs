@@ -11,6 +11,7 @@ use super::{
 };
 
 impl App {
+    /// 粘贴到当前输入字段，阶段只读状态不接受新的草稿输入。
     pub fn on_paste(&mut self, s: &str) {
         if let Some(sh) = self.shell.as_ref().filter(|s| s.exited.is_none()) {
             let _ = sh.input.send(s.as_bytes().to_vec());
@@ -19,7 +20,10 @@ impl App {
         let s = s.replace("\r\n", "\n").replace('\r', "\n");
         if let Some(ed) = self.top_editor() {
             ed.insert(&s);
-        } else if let Some(key) = self.selected.clone() {
+        } else if !matches!(self.overlays.last(), Some(Overlay::StageGroup(_) | Overlay::StageDetails(_)))
+            && let Some(key) = self.selected.clone()
+            && self.bots.get(&key).is_none_or(|bot| bot.stage.as_ref().is_none_or(|stage| stage.closed_at.is_none()))
+        {
             self.typing = true;
             self.focus = Focus::Chat;
             // A file dragged onto the terminal pastes its path: attach it.
@@ -32,6 +36,7 @@ impl App {
         }
     }
 
+    /// 仅返回当前可编辑的字段，阶段详情与聊天共用粘贴入口。
     fn top_editor(&mut self) -> Option<&mut Editor> {
         match self.overlays.last_mut()? {
             Overlay::Goto(g) => Some(&mut g.query),
@@ -43,6 +48,10 @@ impl App {
                 GroupField::About => Some(&mut g.about),
                 GroupField::Bots => None,
             },
+            Overlay::StageGroup(g) => g.editor(),
+            Overlay::StageDetails(g) if !g.closed() && g.page == super::StageDetailsPage::Handoff && !g.busy => {
+                Some(g.editor())
+            }
             Overlay::Form(f) => match f.current() {
                 Field::Name => Some(&mut f.name),
                 Field::Instructions => Some(&mut f.instructions),
@@ -91,6 +100,11 @@ impl App {
             self.typing = false;
             return;
         };
+        if self.bots.get(&key).and_then(|bot| bot.stage.as_ref()).is_some_and(|stage| stage.closed_at.is_some()) {
+            self.typing = false;
+            self.flash("Stage closed");
+            return;
+        }
         // Esc 只隐藏当前查询；光标或正文变化后清除旧标记，避免相同查询永远被屏蔽。
         if self.mention_dismissed.as_ref().is_some_and(|(text, cursor)| {
             let draft = self.draft();

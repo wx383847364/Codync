@@ -44,7 +44,8 @@ pub fn root(bot: &str) -> PathBuf {
     crate::service::data_dir().join("bots").join(bot).join("files")
 }
 
-fn path(root: &Path, id: &str) -> Result<PathBuf> {
+/// 将分享文件的 UUID 限制在已确认聊天的快照目录。
+pub(crate) fn path(root: &Path, id: &str) -> Result<PathBuf> {
     let id = uuid::Uuid::parse_str(id).context("invalid file id")?;
     Ok(root.join(id.to_string()))
 }
@@ -78,7 +79,7 @@ pub(crate) fn open_regular(path: &Path) -> Result<File> {
     Ok(file)
 }
 
-/// Blocking, bounded-memory copy. Call on a blocking worker, never the bot actor.
+/// 在阻塞线程复制稳定的本地文件，复制期间变更的源文件不发布。
 pub fn snapshot(
     root: &Path,
     cwd: &Path,
@@ -95,8 +96,72 @@ pub fn snapshot(
     let mut input = open_regular(&source)?;
     let before = input.metadata()?;
     ensure!(before.len() <= MAX_FILE, "file exceeds 100 MiB");
+    write_snapshot(root, uuid::Uuid::new_v4(), display, &mut input, cancelled, |input, size| {
+        let after = input.metadata()?;
+        ensure!(
+            size == before.len() && after.len() == before.len() && after.modified()? == before.modified()?,
+            "source file changed while sharing; retry"
+        );
+        Ok(())
+    })
+}
+
+/// 手工确认的交接以同一不可变快照格式保存，不需要另建临时源文件。
+pub(crate) fn snapshot_bytes(root: &Path, display: &str, mut bytes: &[u8]) -> Result<Snapshot> {
+    write_snapshot(root, uuid::Uuid::new_v4(), name(display)?, &mut bytes, &AtomicBool::new(false), |_, _| Ok(()))
+}
+
+/// 复制已发布的固定文件，保留引用 ID，并核对新群副本的字节和哈希。
+pub(crate) fn copy_shared(room: &str, next: &str, meta: &SharedFile) -> Result<Snapshot> {
+    let mut input = open_regular(&readable_path(room, meta)?)?;
+    let saved = write_snapshot(
+        &root(next),
+        uuid::Uuid::parse_str(&meta.id)?,
+        name(&meta.name)?,
+        &mut input,
+        &AtomicBool::new(false),
+        |_, _| Ok(()),
+    )?;
+    ensure!(
+        saved.meta.sha256 == meta.sha256 && saved.meta.size == meta.size,
+        "Evidence file {} no longer matches its saved version.",
+        meta.name
+    );
+    Ok(saved)
+}
+
+/// 确认固定文件是本群仍可读取的快照，返回当前实例能实际使用的路径。
+pub(crate) fn readable_path(room: &str, meta: &SharedFile) -> Result<PathBuf> {
+    let path = path(&root(room), &meta.id)?;
+    let file = open_regular(&path).with_context(|| format!("Evidence file {} is unavailable.", meta.name))?;
+    ensure!(file.metadata()?.len() == meta.size, "Evidence file {} no longer matches its saved size.", meta.name);
+    Ok(path)
+}
+
+/// 按分片核对固定证据的实际内容，避免等长修改通过大小检查。
+pub(crate) fn verify_shared(room: &str, meta: &SharedFile) -> Result<PathBuf> {
+    let path = readable_path(room, meta)?;
+    let mut file = open_regular(&path)?;
+    let (size, digest) = copy(&mut file, &mut std::io::sink(), &AtomicBool::new(false))?;
+    ensure!(
+        size == meta.size && digest == meta.sha256,
+        "Evidence file {} no longer matches its saved version.",
+        meta.name
+    );
+    Ok(path)
+}
+
+/// 共享快照完成后原子改名；上层事务成功前，析构会移除未发布文件。
+fn write_snapshot<R: std::io::Read>(
+    root: &Path,
+    id: uuid::Uuid,
+    display: String,
+    input: &mut R,
+    cancelled: &AtomicBool,
+    check: impl FnOnce(&mut R, u64) -> Result<()>,
+) -> Result<Snapshot> {
     std::fs::create_dir_all(root).context("creating the shared file folder")?;
-    let id = uuid::Uuid::new_v4().to_string();
+    let id = id.to_string();
     let final_path = path(root, &id)?;
     let partial = final_path.with_extension("partial");
     let mut owned = Snapshot {
@@ -105,13 +170,9 @@ pub fn snapshot(
         committed: false,
     };
     let mut output = OpenOptions::new().write(true).create_new(true).open(&partial)?;
-    let (size, digest) = copy(&mut input, &mut output, cancelled)?;
+    let (size, digest) = copy(input, &mut output, cancelled)?;
     owned.meta.size = size;
-    let after = input.metadata()?;
-    ensure!(
-        owned.meta.size == before.len() && after.len() == before.len() && after.modified()? == before.modified()?,
-        "source file changed while sharing; retry"
-    );
+    check(input, size)?;
     output.sync_all()?;
     drop(output);
     ensure!(!cancelled.load(Ordering::Acquire), "file sharing cancelled");
@@ -156,6 +217,16 @@ pub fn digest_hex(bytes: &[u8]) -> String {
 pub fn read(root: &Path, meta: &SharedFile, offset: u64) -> Result<Vec<u8>> {
     ensure!(meta.size <= MAX_FILE && offset <= meta.size, "invalid file offset or size");
     read_chunk(&path(root, &meta.id)?, meta.size, offset, "shared file is missing or damaged")
+}
+
+/// 读取完整 Markdown 并验证版本，受已有分片长度和交接正文上限约束。
+pub(crate) fn read_markdown(room: &str, meta: &SharedFile) -> Result<String> {
+    let data = read(&root(room), meta, 0).context("The handoff file is unavailable.")?;
+    ensure!(
+        u64::try_from(data.len())? == meta.size && digest_hex(&Sha256::digest(&data)) == meta.sha256,
+        "The handoff file no longer matches its saved version."
+    );
+    Ok(String::from_utf8(data)?)
 }
 
 /// Up to `CHUNK_SIZE` bytes of the stored file `path` from `offset` (at most `size`); fails with `damaged` unless the

@@ -14,6 +14,8 @@ Pick the bots to add, type a name if you like, and choose **Create**. Without a 
 - A group can't contain another group.
 - If an ordinary group with exactly the same bots already exists, this opens that group.
 
+Use **Create new group session** for a fresh chat with your existing bots. Use **Create next stage group** for a new team of bot instances with a designated lead. To continue from a stage group, accept its handoff in **Stage details**, then select **Use accepted handoff** in the creation form.
+
 ## Start a fresh conversation with the same group
 
 - **Desktop:** right-click the group in the sidebar and choose **Create new group session**.
@@ -21,6 +23,26 @@ Pick the bots to add, type a name if you like, and choose **Create**. Without a 
 - **Terminal UI:** select the group and press `Ctrl+K` and choose **Create new group session**.
 
 The new group opens immediately with the same members in the same order. Its name gets the next number, such as **Release 1**, **Release 2**, or **Release 3**. Each member starts a fresh agent session for that group, and later messages in that group use its own conversation. Bots still use their own settings, workspace and long-term memory.
+
+## Start the next stage of a task
+
+Open the source group's menu and choose **Create next stage group**. Right-click on desktop, touch and hold on iPhone or Android, or use `Ctrl+K` in the terminal. Name the stage, enter the goal and acceptance criteria, and select the roles you need. Review their instructions for stable role requirements and choose a stage lead.
+
+The new group starts with fresh bot instances and a draft containing the goal and acceptance criteria. Review the draft and send it when you are ready. New bots get their own workspace by default. You can explicitly reuse an existing project directory for a role. Codync shared memory starts off. The form identifies agents that keep their own shared memory.
+
+Messages without an explicit recipient go to the stage lead. Use `@` to select another member, reply to a member's message, or use `@all` to address everyone. Keep work and revisions for the same stage in this group.
+
+### Save a handoff and close a stage
+
+Choose **Stage details** from the stage group's menu. Edit and save the Markdown handoff, add durable evidence references, and choose **Accept stage** when you have verified the result. Check the delivery statuses for failed, cancelled, or pending work.
+
+For files from an earlier bot's workspace, first share them in its stage group. Select them under **Shared evidence files** to pin their saved versions. The next stage receives its own copy of each selected file.
+
+Choose **Close stage** when its active queue is empty. You can keep reading its messages and handoff. **Reopen stage** lets you send work there again. When creating the next stage, select **Use accepted handoff** to carry its saved version into your first task. **Restore first draft** recovers the goal and acceptance criteria before your first send.
+
+### View stage usage
+
+Open **Stage details** and choose **Stage usage**. Compare deliveries, execution attempts, ACP prompts, new sessions and agent process starts. Token totals include the fields each model reported and show how many attempts reported each field. Missing fields are shown as unavailable. Account usage stays in the existing **Usage** screen.
 
 ## Edit, remove members, delete
 
@@ -38,7 +60,7 @@ In the editor you can rename the group, add or remove members, and fill in **Wha
 
 When you send a message, the group runs a round of answers:
 
-1. **Who is asked.** Selected or uniquely named members, plus the author you reply to. Without a target, or with `@all` / `@everyone`, everyone is asked.
+1. **Who is asked.** Selected or uniquely named members, plus the author you reply to. `@all` and `@everyone` ask everyone. With no target, a stage group asks its lead and other groups ask everyone.
 2. **One at a time per message.** Available members take turns so each can see prior replies. If a member is still working on an earlier message, even in this group, the other recipients can answer first. The busy member keeps each request queued and receives its original message when free.
 3. **Passing.** A member with nothing to add can pass without a message. A pass at the end keeps a result the member already gave in that turn, provided it did not continue tool work. Tool-assigned work that passes without a result shows that it provided no result.
 4. **Continue until handoff.** Members keep doing authorized work and assigning the next action until they deliver the result to you or need your decision, information or approval. Group work has no fixed round, reply-count or handoff-depth cutoff. After ten minutes, the next recipient of the same message can take a turn while the earlier work continues. Busy members keep their accepted work queued. You can still stop the group yourself.

@@ -82,9 +82,12 @@ fn call_event(method: &str, b: &Value, p: &mut Map<String, Value>) -> Option<Eve
             }
             Event::BotCreated
         }
-        "createGroupSession" => {
+        "createGroupSession" | "createStageGroup" => {
             p.insert("kind".into(), "group".into());
-            p.insert("source".into(), "group_session".into());
+            p.insert(
+                "source".into(),
+                (if method == "createStageGroup" { "stage_group" } else { "group_session" }).into(),
+            );
             Event::BotCreated
         }
         "setUsageShown" => {
@@ -100,6 +103,18 @@ fn call_event(method: &str, b: &Value, p: &mut Map<String, Value>) -> Option<Eve
             Event::SettingChanged
         }
         "updateBot" => Event::BotUpdated,
+        "stageUsage" => {
+            // 只记录界面使用，不上传模型数值、阶段身份或本地尝试记录。
+            p.insert("screen".into(), "stage_usage".into());
+            Event::ScreenViewed
+        }
+        "changeStage" => {
+            // 只记录固定动作类别，交接正文与证据引用留在本机。
+            let action =
+                b["action"].as_str().filter(|s| matches!(*s, "saveHandoff" | "accept" | "close" | "reopen"))?;
+            p.insert("stage_action".into(), action.into());
+            Event::BotUpdated
+        }
         "reorderBots" => Event::BotsReordered,
         "renameSection" => {
             // Whether it took the section away; the names never leave the computer.
@@ -234,9 +249,15 @@ pub fn observe_call(hub: &Hub, caller: &Caller, method: &str, b: &Value) -> Opti
 /// 从创建结果统计成员数，群名和成员身份不进入事件。
 pub fn answered(event: Event, mut p: Map<String, Value>, answer: &Value) -> Option<Map<String, Value>> {
     match event {
-        Event::BotCreated if p.get("source").and_then(Value::as_str) == Some("group_session") => {
-            p.insert("members".into(), answer["bot"]["members"].as_array().map_or(0, Vec::len).into());
-            p.insert("outcome".into(), "created".into());
+        Event::BotCreated
+            if matches!(p.get("source").and_then(Value::as_str), Some("group_session" | "stage_group")) =>
+        {
+            let members = answer["createdMembers"].as_array().or_else(|| answer["bot"]["members"].as_array());
+            p.insert("members".into(), members.map_or(0, Vec::len).into());
+            p.insert("outcome".into(), if answer["replayed"] == true { "replayed" } else { "created" }.into());
+        }
+        Event::BotUpdated if p.contains_key("stage_action") => {
+            p.insert("outcome".into(), "saved".into());
         }
         Event::ConnectorsImported => {
             p.insert("count".into(), answer["items"].as_array().map_or(0, Vec::len).into());
@@ -269,10 +290,17 @@ pub fn answered(event: Event, mut p: Map<String, Value>, answer: &Value) -> Opti
 /// What a failed call reports: a `network*` call's failure keeps what it was (`via` or
 /// `action`) as `network_failed` with `stage` `action`, and a connector edit reports its category,
 /// never the message; other failures report nothing.
-/// 创建新会话群失败时只上报预定义类别。
+/// 创建会话群或阶段群失败时只上报预定义类别。
 pub fn failed(event: Event, mut p: Map<String, Value>, error: &anyhow::Error) -> Option<(Event, Map<String, Value>)> {
     match event {
-        Event::BotCreated if p.get("source").and_then(Value::as_str) == Some("group_session") => {
+        Event::BotCreated
+            if matches!(p.get("source").and_then(Value::as_str), Some("group_session" | "stage_group")) =>
+        {
+            p.insert("outcome".into(), "failed".into());
+            p.insert("error".into(), (if error.is::<rusqlite::Error>() { "storage" } else { "other" }).into());
+            Some((event, p))
+        }
+        Event::BotUpdated if p.contains_key("stage_action") => {
             p.insert("outcome".into(), "failed".into());
             p.insert("error".into(), (if error.is::<rusqlite::Error>() { "storage" } else { "other" }).into());
             Some((event, p))

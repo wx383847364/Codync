@@ -7,6 +7,10 @@ import {
   type DirListing,
   type Entry,
   type GroupDraft,
+  type StageGroupDraft,
+  type StageChange,
+  type StageDetails,
+  type StageUsage,
   type Hello,
   type ScreenState,
   type Usage,
@@ -277,6 +281,29 @@ export class BotStore extends BotSending {
       this.onRosterChanged?.()
       this.changed()
     })
+  }
+
+  /** 接收已提交的新群，将首条消息存入本地草稿后打开。 */
+  async createStageGroup(draft: StageGroupDraft) {
+    const res = await (await this.ready()).call<{ bot: Bot; draft: string }>('createStageGroup', draft)
+    const bot = this.putHostBot(normalizeBot(res.bot))
+    if (!bot.lastMessage && !this.composerDrafts.get(bot.id)) this.composerDrafts.set(bot.id, res.draft)
+    this.selection = bot.id
+    this.onRosterChanged?.()
+    this.changed()
+  }
+
+  /** 详情和人工阶段变更使用同一 Host 投影，保留当前聊天位置。 */
+  async stageDetails(botId: string, change?: StageChange): Promise<StageDetails> {
+    const details = await (await this.ready()).call<StageDetails>(change ? 'changeStage' : 'stageDetails', { botId, ...change })
+    this.putHostBot(normalizeBot(details.bot))
+    this.changed()
+    return details
+  }
+
+  /** 阶段用量独立读取，界面故障不会影响交接或关闭。 */
+  async stageUsage(botId: string): Promise<StageUsage> {
+    return (await this.ready()).call<StageUsage>('stageUsage', { botId })
   }
 
   async updateGroup(draft: GroupDraft) {

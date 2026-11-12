@@ -7,12 +7,54 @@ import { normalizeDevServer, type DevServer } from './dev-servers.ts'
 
 export type BotStatus = 'idle' | 'working' | 'needsInput' | 'error'
 
+/** 创建阶段群时由用户确认的配置。 */
+export interface StageGroupDraft {
+  botId: string
+  requestId: string
+  name: string
+  goal: string
+  acceptance: string
+  leaderId: string
+  roles: { botId: string; sourceRev: number; description: string; reuseProject: boolean }[]
+  handoffVersion?: string
+}
+
+export interface StageFile { id: string; name: string; sha256: string; size: number }
+export interface StageGroup {
+  leaderId: string; goal: string; acceptance: string; closedAt?: number
+  handoff?: { file: StageFile; evidence: string; acceptedAt?: number }
+  incoming?: StageFile
+}
+
+export interface StageDetails {
+  bot: Bot
+  sharedFiles: StageFile[]
+  markdown: string | null
+  incomingMarkdown: string | null
+  handoffUnavailable: boolean
+  incomingUnavailable: boolean
+  template: string
+  initialDraft: string
+  work: { counts: Record<string, number>; pending: { id: string; name: string; status: string }[] }
+}
+
+export type StageChange = { action: 'saveHandoff'; markdown: string; evidence: string; previousVersion?: string }
+  | { action: 'accept'; version: string } | { action: 'close' | 'reopen' }
+
+export interface StageUsage {
+  observedSince: number
+  stageCreatedAt: number
+  sections: { label: string; backend?: string; model?: string | null;
+    rows: { label: string; value: number | null; reports?: number; attempts?: number }[] }[]
+}
+
 export interface Bot {
   customIcon?: import('./custom-icons').CustomIcon
   id: string
   /** `agent`, or `group`: several bots and the user in one chat. */
   kind: string
   members: string[]
+  stage?: StageGroup
   name: string
   description: string
   avatarColor: string
@@ -73,6 +115,7 @@ export interface Bot {
   harnessMemory: boolean | null
   /** The harness keeps one memory for all its sessions that Codync can't turn off (Hermes Agent, Gemini CLI): every bot on it shares it. */
   harnessMemoryShared: boolean
+  stageMemoryShared?: boolean
   /** Moves whenever memory changes, so an open memory screen fetches it again. */
   memoryRev: number
   autoName: boolean
@@ -96,6 +139,7 @@ export function normalizeBot(raw: Partial<Bot> & { id: string }): Bot {
     id: raw.id,
     kind: raw.kind ?? 'agent',
     members: raw.members ?? [],
+    stage: raw.stage,
     name: raw.name ?? 'Bot',
     description: raw.description ?? '',
     avatarColor: raw.avatarColor ?? 'blue',
@@ -516,6 +560,7 @@ export function normalizeScreen(raw: Partial<ScreenState> | undefined | null): S
 export interface Hello {
   /** 主机支持创建具有独立模型会话的群。 */
   groupSessions?: boolean
+  stageGroups?: boolean
   /** 主机能按附件身份校验原图尺寸，不包含正文路径读取能力。 */
   fileImageInfo?: boolean
   iconsRevision?: number

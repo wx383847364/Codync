@@ -175,7 +175,12 @@ impl Actor {
             }
             Ok(false) => {}
         }
-        let prepared = crate::chat::group::delivery_prompt(&self.hub, &queued, &self.cfg);
+        // 文件证据可能需要分片校验，构建提示包不阻塞 Tokio 执行线程。
+        let (hub, config, work) = (self.hub.clone(), self.cfg.clone(), queued.clone());
+        let prepared = tokio::task::spawn_blocking(move || crate::chat::group::delivery_prompt(&hub, &work, &config))
+            .await
+            .map_err(anyhow::Error::from)
+            .and_then(std::convert::identity);
         if let Ok(packet) = &prepared {
             let estimated = self.group_prompt_estimate(&packet.prompt, session.as_deref(), slot.is_none()).await;
             match estimated.and_then(|estimate| {

@@ -201,6 +201,7 @@ pub(crate) struct Conn {
     loaded: HashMap<String, Instant>,
     /// 本进程里每个 ACP ID 的会话槽，防止新进程重用 ID 时跨槽加载。
     session_slots: HashMap<String, Option<String>>,
+    confirmed_models: HashMap<String, String>,
     started: Instant,
     /// A `session/new` or `session/load` is waiting for its answer. Still set when a routine's time limit cut it short:
     /// the agent may then open that session, tools and all, under an id the host never learns (`drop_unanswered`).
@@ -383,7 +384,9 @@ impl Actor {
                 inc => self.on_incoming(Some(inc)).await,
             }
         }
-        self.record_usage(&done);
+        if done.is_err() {
+            self.record_usage(&done);
+        }
         // 整理失败只结束维护，不能按业务回退链把 /compact 发给另一模型执行。
         if self.group_compaction.is_none()
             && let Err(error) = &done
@@ -460,7 +463,7 @@ impl Actor {
         self.files.cancel();
         self.hub.team.end_turn(&self.cfg.id);
         self.stop_requested = true;
-        self.record_usage(&Err(anyhow!("shutdown")));
+        self.interrupt_usage();
         self.complete_request(Err(anyhow!("recipient shut down")), true, None);
         self.finish_delivery(crate::store::deliveries::Status::Interrupted, None, Some("bot shut down".into()));
         if let Some(c) = self.conn.take() {

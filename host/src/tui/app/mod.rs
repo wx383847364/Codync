@@ -20,6 +20,7 @@ mod queue;
 mod roster;
 mod section_order;
 mod slash;
+mod stage_group_form;
 mod steps;
 mod ui;
 mod usage_chooser;
@@ -31,6 +32,7 @@ pub use exchange::{ConversationRow, Exchange, Item, Outcome, conversation, group
 pub use model::{After, Entry, Kind, Mark, Msg, Status};
 pub use roster::{RosterLine, cursor_line, rename_fold, roster_lines, stops};
 pub use slash::SlashAction;
+pub use stage_group_form::{StageDetailsForm, StageDetailsPage, StageGroupForm};
 pub(super) use steps::{running_turn, working_steps};
 pub use ui::{
     ACTIONS, Action, COLORS, Click, Confirm, ConfirmAct, Dir, FIELDS, FILTERS, Field, Focus, FolderMode, FolderPicker,
@@ -85,6 +87,7 @@ pub struct App {
     pub backends: Vec<Value>,
     pub custom_icons: bool,
     group_sessions: bool,
+    stage_groups: bool,
     pub selected: Option<String>,
     pub focus: Focus,
     pub typing: bool,
@@ -189,6 +192,7 @@ impl App {
             backends: vec![],
             custom_icons: false,
             group_sessions: false,
+            stage_groups: false,
             selected: None,
             focus: Focus::Roster,
             typing: false,

@@ -93,3 +93,113 @@ test('right-click opens an empty numbered group with its own member sessions', a
     await browser.close()
   }
 })
+
+/** 真实群菜单打开阶段表单，新建后显示新负责人、空白历史和待发送的目标。 */
+test('stage opens with fresh roles, saves a versioned handoff and closes independently', async () => {
+  const { browser, page } = await attach()
+  const ids: string[] = []
+  const name = `Stage fixture ${Date.now()}`
+  try {
+    // 仅保存标准后端配置，新建过程无需安装或调用代理。
+    const { bot: reviewer } = await api<{ bot: Group }>(page, 'createBot', {
+      name: `${name} Reviewer`, backend: 'opencode', description: 'Review requirements', skills: [], connectors: [],
+    })
+    ids.push(reviewer.id)
+    const { bot: lead } = await api<{ bot: Group }>(page, 'createBot', {
+      name: `${name} Lead`, backend: 'opencode', description: 'Coordinate work', skills: [], connectors: [],
+    })
+    ids.push(lead.id)
+    const { bot: original } = await api<{ bot: Group }>(page, 'createBot', {
+      name, kind: 'group', members: [reviewer.id, lead.id],
+    })
+    ids.unshift(original.id)
+    await page.locator('.roster-row').getByText(name, { exact: true }).click({ button: 'right' })
+    // 用户在选择前能看到两种创建方式，读屏也会读出说明。
+    const sessionAction = page.getByRole('menuitem', { name: 'Create new group session', exact: true })
+    const stageAction = page.getByRole('menuitem', { name: 'Create next stage group', exact: true })
+    await expect(sessionAction.getByText('Reuse the same bots in a fresh chat.')).toBeVisible()
+    await expect(sessionAction).toHaveAccessibleDescription('Reuse the same bots in a fresh chat.')
+    await expect(stageAction.getByText('Create new bots and choose a lead.')).toBeVisible()
+    await expect(stageAction).toHaveAccessibleDescription('Create new bots and choose a lead.')
+    await stageAction.click()
+    await page.getByLabel('Stage name').fill(`${name} next`)
+    await page.getByPlaceholder('Stage goal').fill('Build the next phase')
+    await page.getByPlaceholder('Acceptance criteria').fill('A verified result is visible')
+    await page.getByRole('switch', { name: reviewer.name, exact: true }).click()
+    await page.getByRole('switch', { name: lead.name, exact: true }).click()
+    await page.getByRole('button', { name: 'Set as stage lead' }).last().click()
+    await page.getByRole('button', { name: 'Create stage group' }).click()
+    const selected = page.locator('.roster-row[aria-current=true]')
+    await expect(selected.getByText(`${name} next`, { exact: true })).toBeVisible()
+    const id = (await selected.getAttribute('data-roster-row'))!.split('/').at(-1)!
+    ids.unshift(id)
+    const db = new DatabaseSync(join(homedir(), `.codync-dev-${sandbox().name}`, 'codync.db'), { readOnly: true })
+    try {
+      // 确认负责人绑定到新实例，来源成员名单与配置保持原样。
+      const get = db.prepare('SELECT config FROM bots WHERE id = ?')
+      const group = JSON.parse(get.get(id)!.config as string)
+      ids.push(...group.members)
+      expect(group.members).toHaveLength(2)
+      expect(group.members.every((member: string) => member !== reviewer.id && member !== lead.id)).toBe(true)
+      expect(group.stage.leaderId).toBe(group.members[1])
+      expect(JSON.parse(get.get(original.id)!.config as string).members).toEqual([reviewer.id, lead.id])
+      expect(JSON.parse(get.get(group.members[1])!.config as string).sharedMemory).toBe(false)
+    } finally { db.close() }
+    await expect(page.getByText(`Default recipient · ${lead.name}`)).toBeVisible()
+    await expect(page.locator('.composer textarea')).toHaveValue(/Build the next phase[\s\S]*A verified result is visible/)
+    expect((await api<{ entries: unknown[] }>(page, 'history', { botId: id })).entries).toEqual([])
+
+    // 通过真实弹层保存、验收和结束，再选择同一版本创建下一阶段。
+    const stage = page.locator('.roster-row').getByText(`${name} next`, { exact: true })
+    await stage.click({ button: 'right' })
+    await expect(stageAction.getByText('Review and accept a handoff in Stage details first.')).toBeVisible()
+    await page.getByRole('menuitem', { name: 'Stage details' }).click()
+    const handoff = '# Stage result\n\nVerified marker and fixed constraints.'
+    await page.getByPlaceholder('Handoff Markdown').fill(handoff)
+    await page.getByPlaceholder('Durable evidence references').fill('Fixture repository commit abc123')
+    await page.getByRole('button', { name: 'Save handoff' }).click()
+    await expect(page.getByRole('button', { name: 'Accept stage' })).toBeEnabled()
+    // 模拟另一端保存新版，刷新运行状态后旧编辑仍只能用原基准版本提交。
+    const saved = await api<{ bot: { stage: { handoff: { file: { id: string } } } } }>(page, 'stageDetails', { botId: id })
+    await page.getByPlaceholder('Handoff Markdown').fill('Stale editor text')
+    await api(page, 'changeStage', { botId: id, action: 'saveHandoff', markdown: handoff,
+      evidence: 'Fixture repository commit def456', previousVersion: saved.bot.stage.handoff.file.id })
+    await page.getByRole('button', { name: 'Refresh' }).click()
+    await page.getByRole('button', { name: 'Save handoff' }).click()
+    await expect(page.getByText(/The handoff changed on another device/)).toBeVisible()
+    await page.keyboard.press('Escape')
+    await stage.click({ button: 'right' })
+    await page.getByRole('menuitem', { name: 'Stage details' }).click()
+    await page.getByRole('button', { name: 'Accept stage' }).click()
+    await expect(page.getByText('Stage accepted', { exact: true })).toBeVisible()
+    await page.getByRole('button', { name: 'Close stage' }).click()
+    await expect(page.getByRole('button', { name: 'Reopen stage' })).toBeVisible()
+    await page.getByRole('button', { name: 'Stage usage' }).click()
+    await expect(page.getByText('Host attempts · 0', { exact: true })).toBeVisible()
+    await page.keyboard.press('Escape')
+    await expect(page.locator('.composer').getByText('Stage closed', { exact: true })).toBeVisible()
+
+    await stage.click({ button: 'right' })
+    await expect(stageAction.getByText('Create new bots and use the accepted handoff.')).toBeVisible()
+    await expect(stageAction).toHaveAccessibleDescription('Create new bots and use the accepted handoff.')
+    await stageAction.click()
+    await page.getByLabel('Stage name').fill(`${name} successor`)
+    await page.getByPlaceholder('Stage goal').fill('Continue with the confirmed constraints')
+    await page.getByPlaceholder('Acceptance criteria').fill('The current stage verifies its own results')
+    await page.getByRole('switch', { name: 'Use accepted handoff' }).click()
+    await page.getByRole('switch', { name: lead.name, exact: true }).click()
+    await page.getByRole('button', { name: 'Set as stage lead' }).click()
+    await page.getByRole('button', { name: 'Create stage group' }).click()
+    await expect(selected.getByText(`${name} successor`, { exact: true })).toBeVisible()
+    const successor = (await selected.getAttribute('data-roster-row'))!.split('/').at(-1)!
+    ids.unshift(successor)
+    const details = await api<{ bot: Group; incomingMarkdown: string }>(page, 'stageDetails', { botId: successor })
+    ids.push(...details.bot.members)
+    expect(details.incomingMarkdown).toBe(`${handoff}\n\n## Evidence references\n\nFixture repository commit def456\n`)
+    expect((await api<{ entries: unknown[] }>(page, 'history', { botId: successor })).entries).toEqual([])
+  } finally {
+    // 测试结束后回收隔离工作区中的测试群和机器人。
+    for (const id of ids) await api(page, 'deleteBot', { botId: id }).catch(() => {})
+    await browser.close()
+  }
+})

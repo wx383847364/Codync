@@ -13,6 +13,8 @@ struct BotListView: View {
     @State private var creating: NewTarget?
     @State private var editing: EditTarget?
     @State private var editingGroup: GroupTarget?
+    @State private var creatingStage: GroupTarget?
+    @State private var stageDetails: GroupTarget?
     @State private var confirmDelete: RosterItem?
     /// What the section name dialog names while it's open.
     @State private var naming: SectionNaming?
@@ -241,6 +243,18 @@ struct BotListView: View {
                 GroupEditorView(group: target.group).environment(store)
             }
         }
+        .codyncSheet(item: $creatingStage) { target in
+            // 阶段表单使用来源群所在的电脑。
+            if let store = accounts.store(for: target.computerId) {
+                StageGroupView(group: target.group).environment(store)
+            }
+        }
+        .codyncSheet(item: $stageDetails) { target in
+            // 历史、交接及开关都由该群所在的电脑提供。
+            if let store = accounts.store(for: target.computerId) {
+                StageDetailsView(botId: target.group.id).environment(store)
+            }
+        }
         .codyncDialog("Delete \(confirmDelete?.bot.name ?? "bot")?",
                       isPresented: Binding(get: { confirmDelete != nil }, set: { if !$0 { confirmDelete = nil } }),
                       message: confirmDelete?.bot.isGroup == true ? "Its bots and their own chats stay." : "Files it changed on your computer stay as they are.") {
@@ -369,10 +383,29 @@ struct BotListView: View {
                 MenuItem("Mark as read", icon: "checkmark.message") { store.markAllRead(bot.id) },
             ]
             if bot.isGroup && store.supportsGroupSessions {
-                items.append(MenuItem("Create new group session", icon: "bubble.left.and.bubble.right") {
+                items.append(MenuItem("Create new group session", icon: "bubble.left.and.bubble.right",
+                                      detail: "Reuse the same bots in a fresh chat.") {
                     // Host 返回新群后，名单选择会打开其聊天。
                     store.createGroupSession(bot.id)
                 })
+            }
+            if bot.isGroup && store.supportsStageGroups {
+                let detail: String
+                if let stage = bot.stage {
+                    detail = stage.handoff?.acceptedAt == nil ? "Review and accept a handoff in Stage details first."
+                        : "Create new bots and use the accepted handoff."
+                } else {
+                    detail = "Create new bots and choose a lead."
+                }
+                items.append(MenuItem("Create next stage group", icon: "person.2", detail: detail) {
+                    // 阶段选项先打开表单，用户确认角色和交接后再创建。
+                    creatingStage = GroupTarget(computerId: item.ref.computerId, group: bot)
+                })
+                if bot.stage != nil {
+                    items.append(MenuItem("Stage details", icon: "doc.text") {
+                        stageDetails = GroupTarget(computerId: item.ref.computerId, group: bot)
+                    })
+                }
             }
             if !bot.lead && !bot.isGroup && store.supportsLeadChoice {
                 items.append(MenuItem("Make lead agent", icon: "star") { store.setLead(bot) })

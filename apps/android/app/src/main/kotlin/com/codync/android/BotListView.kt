@@ -90,6 +90,8 @@ private class ComputerRoster(private val context: Context, val key: String) {
  */
 @Composable internal fun BotListView(app: AccountContext, states: List<AppState>, accounts: AccountStore, account: () -> Unit, manage: () -> Unit,
     newBot: (String) -> Unit, newGroup: (String) -> Unit, edit: (String, Bot) -> Unit, extensions: (String) -> Unit, bottomInset: Dp) {
+    var stageTarget by remember { mutableStateOf<Pair<String, Bot>?>(null) }
+    var stageDetails by remember { mutableStateOf<Pair<String, Bot>?>(null) }
     var confirmDelete by remember { mutableStateOf<Pair<String, Bot>?>(null) }
     var naming by remember { mutableStateOf<SectionNaming?>(null) }
     val context = LocalContext.current
@@ -174,10 +176,23 @@ private class ComputerRoster(private val context: Context, val key: String) {
                     rename = { name -> naming = SectionNaming("Rename section", name) { renameSection(roster, store, name, it) } },
                     remove = { name -> renameSection(roster, store, name, null) },
                     newSection = { bot -> naming = SectionNaming("New section", "") { store.setSection(bot.id, it) } },
-                    edit = { bot -> edit(id, bot) }, delete = { bot -> confirmDelete = id to bot }))
+                    edit = { bot -> edit(id, bot) }, delete = { bot -> confirmDelete = id to bot },
+                    createStage = { bot -> stageTarget = id to bot }, stageDetails = { bot -> stageDetails = id to bot }))
             }
         }
         }
+    }
+    CodyncSheet(stageTarget, { stageTarget = null }) { (computer, group) ->
+        // 用来源电脑上的成员和连接状态显示阶段表单。
+        val state = states.firstOrNull { it.computer.id == computer }
+        val store = accounts.store(computer)
+        if (state != null && store != null) StageGroupEditor(group, state, store)
+    }
+    CodyncSheet(stageDetails, { stageDetails = null }) { (computer, group) ->
+        // 阶段详情使用来源电脑，关群不会影响其它电脑或私聊。
+        val state = states.firstOrNull { it.computer.id == computer }
+        val store = accounts.store(computer)
+        if (state != null && store != null) StageDetailsEditor(group.id, state, store)
     }
     val deleting = confirmDelete?.second
     CodyncDialog("Delete ${deleting?.name ?: "bot"}?", deleting != null, { confirmDelete = null },
@@ -204,7 +219,8 @@ private class ComputerRoster(private val context: Context, val key: String) {
 
 /** What a computer's rows and section headings ask of the roster. */
 private class RosterActions(val toggleSection: (String) -> Unit, val rename: (String) -> Unit, val remove: (String) -> Unit,
-    val newSection: (Bot) -> Unit, val edit: (Bot) -> Unit, val delete: (Bot) -> Unit)
+    val newSection: (Bot) -> Unit, val edit: (Bot) -> Unit, val delete: (Bot) -> Unit,
+    val createStage: (Bot) -> Unit, val stageDetails: (Bot) -> Unit)
 
 /** One computer's bots: pinned ones, then each section's heading with its bots (none while folded), then the bots in no section. */
 private fun LazyListScope.botLines(state: AppState, store: AppStore, roster: ComputerRoster, folded: Set<String>, grouped: Boolean,
@@ -233,7 +249,8 @@ private fun LazyListScope.botLines(state: AppState, store: AppStore, roster: Com
                     .then(if (lifted) Modifier.zIndex(1f).graphicsLayer { translationY = reorder.offset; scaleX = 1.02f; scaleY = 1.02f }
                         else Modifier.animateItem())) {
                     BotRowItem(bot, state, store, reorder.handle(bot.id) { store.reorder(it) }, sections, grouped, agent, edit = { actions.edit(bot) },
-                        delete = { actions.delete(bot) }, newSection = { actions.newSection(bot) })
+                        delete = { actions.delete(bot) }, newSection = { actions.newSection(bot) },
+                        createStage = { actions.createStage(bot) }, stageDetails = { actions.stageDetails(bot) })
                 }
             }
         }
@@ -301,7 +318,8 @@ private fun Bot.movesWith(other: Bot) = band == other.band && (pinned || section
 
 /** 显示群所属电脑支持的操作；新群创建成功后由 Store 打开。 */
 @Composable private fun BotRowItem(bot: Bot, state: AppState, store: AppStore, drag: ContextDrag, sections: List<String>, grouped: Boolean,
-    agent: AgentMark?, edit: () -> Unit, delete: () -> Unit, newSection: () -> Unit) {
+    agent: AgentMark?, edit: () -> Unit, delete: () -> Unit, newSection: () -> Unit, createStage: () -> Unit,
+    stageDetails: () -> Unit) {
     Box(Modifier.fillMaxWidth().contextActions(onClick = { store.openBot(bot.id) }, reorder = drag, preview = {
         Box(Modifier.padding(horizontal = 8.dp)) { BotRow(bot, state, agent) }
     }) {
@@ -313,11 +331,23 @@ private fun Bot.movesWith(other: Bot) = band == other.band && (pinned || section
             if (bot.kind == "group") MenuItem("Edit group", icon = "person.2", action = edit)
             else MenuItem("Edit profile", icon = "pencil", action = edit),
             if (bot.kind == "group" && state.supportsGroupSessions) {
-                MenuItem("Create new group session", icon = "bubble.left.and.bubble.right") {
+                MenuItem("Create new group session", icon = "bubble.left.and.bubble.right",
+                    detail = "Reuse the same bots in a fresh chat.") {
                     // 仅发送来源群 ID，名单和编号由 Host 确定。
                     store.createGroupSession(bot.id)
                 }
             } else null,
+            if (bot.kind == "group" && state.supportsStageGroups) {
+                val stage = bot.stage
+                val detail = when {
+                    stage == null -> "Create new bots and choose a lead."
+                    stage.handoff?.acceptedAt == null -> "Review and accept a handoff in Stage details first."
+                    else -> "Create new bots and use the accepted handoff."
+                }
+                MenuItem("Create next stage group", icon = "person.2", detail = detail, action = createStage)
+            } else null,
+            if (bot.stage != null && state.supportsStageGroups)
+                MenuItem("Stage details", icon = "doc.text", action = stageDetails) else null,
             MenuItem("Mark as read", icon = "checkmark.message") {
                 store.command("markRead", buildJsonObject { put("botId", bot.id) }, "roster:" + bot.id)
             },
