@@ -198,9 +198,13 @@ public extension HostClient {
     }
 
     /// 从指定群创建独立会话群，返回 Host 分配的新群。
-    func createGroupSession(_ botId: String) async throws -> Bot {
+    func createGroupSession(_ botId: String, members: [String]? = nil, groupLeaderId: String? = nil) async throws -> Bot {
         struct Res: Decodable { var bot: Bot }
-        let res: Res = try await call("createGroupSession", ["botId": botId])
+        struct Selection: Encodable { var members: [String]; var groupLeaderId: String? }
+        struct Request: Encodable { var botId: String; var selection: Selection? }
+        // 没有选择对象时由 Host 复制来源名单，选择对象内空负责人表示明确不设置。
+        let request = Request(botId: botId, selection: members.map { Selection(members: $0, groupLeaderId: groupLeaderId) })
+        let res: Res = try await call("createGroupSession", request)
         return res.bot
     }
 

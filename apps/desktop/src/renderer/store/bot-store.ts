@@ -261,9 +261,9 @@ export class BotStore extends BotSending {
     this.perform((c) => c.call('deleteBot', { botId: bot.id }), true)
   }
 
-  /** Creates a group chat (or opens the one these bots already share) and selects it. */
-  async createGroup(name: string, description: string, members: string[]) {
-    const draft: GroupDraft = { kind: 'group', name, description, members }
+  /** 创建或打开匹配名单与负责人的群聊，再选中新聊天。 */
+  async createGroup(name: string, description: string, members: string[], groupLeaderId?: string) {
+    const draft: GroupDraft = { kind: 'group', name, description, members, groupLeaderId }
     const res = await (await this.ready()).call<{ bot: Bot }>('createBot', draft)
     const bot = this.putHostBot(normalizeBot(res.bot))
     this.selection = bot.id
@@ -275,12 +275,15 @@ export class BotStore extends BotSending {
   /** 复制群设置并通过新群的 ID 打开空白会话，失败沿用现有错误提示。 */
   createGroupSession(botId: string) {
     // 新群的创建不能自动重放，避免断线时提交成功却又多建一个。
-    return this.perform(async (client) => {
-      const res = await client.call<{ bot: Bot }>('createGroupSession', { botId })
-      this.selection = this.putHostBot(normalizeBot(res.bot)).id
-      this.onRosterChanged?.()
-      this.changed()
-    })
+    return this.perform(() => this.saveGroupSession(botId))
+  }
+
+  /** 提交确认的成员与负责人，失败交回表单保留输入。 */
+  async saveGroupSession(botId: string, selection?: Pick<GroupDraft, 'members' | 'groupLeaderId'>) {
+    const res = await (await this.ready()).call<{ bot: Bot }>('createGroupSession', { botId, selection })
+    this.selection = this.putHostBot(normalizeBot(res.bot)).id
+    this.onRosterChanged?.()
+    this.changed()
   }
 
   /** 接收已提交的新群，将首条消息存入本地草稿后打开。 */

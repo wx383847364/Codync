@@ -164,16 +164,12 @@ fn matching_end(text: &str, start: usize, handle: &str) -> Option<usize> {
 }
 
 /// 结构化片段按 ID 路由，其余正文接受唯一名称；未知 @ 是普通文本。
-pub fn targets(
-    text: &str,
-    mentions: &[Mention],
-    members: &[BotConfig],
-    quoted: Option<&str>,
-    default_all: bool,
-) -> Result<Vec<String>> {
+pub fn targets(text: &str, mentions: &[Mention], members: &[BotConfig], quoted: Option<&str>) -> Result<Vec<String>> {
     let mut mask = masked(text);
     let mut targets: Vec<String> = Vec::new();
     for m in mentions {
+        // 成员可能在输入校验后离群，显式提及失效时不能改发给默认接收人。
+        ensure!(members.iter().any(|member| member.id == m.bot_id), "提及成员已不在群内，请重新选择成员");
         let range: Range<usize> = byte_offset(text, m.start).ok_or_else(|| anyhow::anyhow!("invalid mention"))?
             ..byte_offset(text, m.end).ok_or_else(|| anyhow::anyhow!("invalid mention"))?;
         mask[range].fill(true);
@@ -225,9 +221,6 @@ pub fn targets(
     }
     if let Some(id) = quoted.filter(|id| members.iter().any(|m| m.id == *id)) {
         targets.push(id.to_owned());
-    }
-    if targets.is_empty() && default_all {
-        targets.extend(members.iter().map(|m| m.id.clone()));
     }
     // 保持成员名单顺序，重复文字或结构化提及只形成一条派发。
     Ok(members.iter().filter(|m| targets.contains(&m.id)).map(|m| m.id.clone()).collect())

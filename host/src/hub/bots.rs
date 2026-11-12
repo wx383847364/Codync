@@ -4,7 +4,7 @@ use super::{Hub, patch, sections, validate};
 use crate::LockExt;
 use crate::agent::bot::Cmd;
 use crate::store::BotConfig;
-use anyhow::{Result, anyhow};
+use anyhow::{Result, anyhow, ensure};
 use serde_json::{Value, json};
 use std::sync::Arc;
 
@@ -21,12 +21,8 @@ impl Hub {
         if cfg.auto_name {
             crate::chat::naming::PLACEHOLDER.clone_into(&mut cfg.name);
         }
-        if cfg.is_group() {
-            cfg.members = crate::chat::group::valid_members(&self.store, &cfg.id, &cfg.members)?;
-            // The same bots again: open the group they already share (Grok Bot's rule).
-            if let Some(existing) = crate::chat::group::with_members(&self.store, &cfg.members)? {
-                return Ok(self.bot_value(&existing).unwrap_or(Value::Null));
-            }
+        if !cfg.is_group() {
+            cfg.group_leader_id = None;
         }
         crate::agent::fallback::tidy(&mut cfg);
         cfg.section = sections::normalize_section(cfg.section.as_deref())?;
@@ -34,6 +30,19 @@ impl Hub {
         crate::agent::workspace::prepare(&mut cfg)?;
         {
             let _g = self.emit_lock.locked();
+            if cfg.is_group() {
+                cfg.members = crate::chat::group::valid_members(&self.store, &cfg.id, &cfg.members)?;
+                ensure!(
+                    cfg.group_leader_id.as_ref().is_none_or(|id| cfg.members.contains(id)),
+                    "Choose a lead from the selected members."
+                );
+                // 名单与负责人一致时打开既有群，避免改变已有会话的默认接收人。
+                if let Some(existing) =
+                    crate::chat::group::with_members(&self.store, &cfg.members, cfg.group_leader_id.as_deref())?
+                {
+                    return Ok(self.bot_value(&existing).unwrap_or(Value::Null));
+                }
+            }
             self.store.save_bot(&cfg)?;
         }
         crate::network::publish(self);
@@ -56,6 +65,7 @@ impl Hub {
             let mut cfg = patch::patched(&row.config, patch)?;
             if cfg.is_group() {
                 cfg.members = crate::chat::group::valid_members(&self.store, &cfg.id, &cfg.members)?;
+                cfg.clear_departed_group_leader();
             }
             crate::agent::fallback::tidy(&mut cfg);
             cfg.section = sections::normalize_section(cfg.section.as_deref())?;

@@ -10,6 +10,7 @@ pub struct StageGroupForm {
     pub name: Editor,
     pub goal: Editor,
     pub acceptance: Editor,
+    pub query: Editor,
     pub roles: Vec<StageRole>,
     pub cursor: usize,
     pub field: usize,
@@ -32,15 +33,29 @@ pub struct StageRole {
 }
 
 impl StageGroupForm {
-    /// 粘贴只写入当前选中的字段，角色名单本身无需文本输入。
+    /// 粘贴写入当前文本字段，搜索和角色说明独立。
     pub(super) fn editor(&mut self) -> Option<&mut Editor> {
         match self.field {
             0 => Some(&mut self.name),
-            1 => Some(&mut self.goal),
-            2 => Some(&mut self.acceptance),
-            4 => self.roles.get_mut(self.cursor).filter(|role| role.selected).map(|role| &mut role.instructions),
+            1 => Some(&mut self.query),
+            4 => Some(&mut self.goal),
+            5 => Some(&mut self.acceptance),
+            6 => self.roles.get_mut(self.cursor).filter(|role| role.selected).map(|role| &mut role.instructions),
             _ => None,
         }
+    }
+
+    /// 返回与搜索词匹配的来源角色下标，保持角色与已填配置的绑定。
+    pub(in crate::tui) fn role_indices(&self, app: &App) -> Vec<usize> {
+        let query = self.query.text.trim().to_lowercase();
+        self.roles
+            .iter()
+            .enumerate()
+            .filter(|(_, role)| {
+                query.is_empty() || app.bots.get(&role.id).is_some_and(|bot| bot.name.to_lowercase().contains(&query))
+            })
+            .map(|(index, _)| index)
+            .collect()
     }
 }
 
@@ -74,6 +89,15 @@ impl StageDetailsForm {
     /// 关闭后的交接仅浏览，草稿输入和保存均不可用。
     pub(in crate::tui) fn closed(&self) -> bool {
         self.state.as_ref().is_some_and(|v| v["bot"]["stage"]["closedAt"].is_number())
+    }
+
+    /// 只有存在待恢复文本且仍可首次发送时才提供首条草稿。
+    pub(in crate::tui) fn first_draft(&self) -> Option<&str> {
+        self.state
+            .as_ref()
+            .filter(|state| !self.closed() && state["bot"]["lastMessage"].is_null())
+            .and_then(|state| state["initialDraft"].as_str())
+            .filter(|draft| !draft.is_empty())
     }
 
     /// 选择当前可见的 Markdown 或证据编辑器，用于输入和移动光标。
@@ -117,6 +141,7 @@ impl App {
             name: Editor::default(),
             goal: Editor::default(),
             acceptance: Editor::default(),
+            query: Editor::default(),
             roles,
             cursor: 0,
             field: 0,
@@ -134,64 +159,82 @@ impl App {
         })));
     }
 
-    /// Tab 切换表单字段，角色列表上的快捷键只修改本次预览。
+    /// 搜索只缩小角色列表，已加入角色和负责人保留。
     pub(super) fn stage_group_key(&mut self, mut form: Box<StageGroupForm>, key: KeyEvent) -> Option<Overlay> {
         if form.saving {
             return Some(Overlay::StageGroup(form));
         }
+        let rows = form.role_indices(self);
+        let current = rows.iter().position(|index| *index == form.cursor);
+        // 搜索隐藏旧角色后，将指令编辑目标同步到当前匹配项。
+        if current.is_none() {
+            form.cursor = rows.first().copied().unwrap_or(form.roles.len());
+        }
         match key.code {
             KeyCode::Esc => return None,
-            KeyCode::Tab => form.field = (form.field + 1) % 5,
-            KeyCode::BackTab => form.field = (form.field + 4) % 5,
+            KeyCode::Tab => form.field = (form.field + 1) % 7,
+            KeyCode::BackTab => form.field = (form.field + 6) % 7,
             KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => self.save_stage_group(&mut form),
             KeyCode::F(2) if form.handoff.is_some() => form.use_handoff = !form.use_handoff,
-            KeyCode::Up if form.field == 3 => form.cursor = form.cursor.saturating_sub(1),
-            KeyCode::Down if form.field == 3 => form.cursor = (form.cursor + 1).min(form.roles.len().saturating_sub(1)),
-            _ => match form.field {
-                0 => {
-                    form.name.key(key);
+            KeyCode::Enter if form.field == 1 => form.field = 2,
+            KeyCode::Up | KeyCode::Down if form.field == 2 => {
+                let row = current
+                    .map_or(0, |index| if key.code == KeyCode::Up { index.saturating_sub(1) } else { index + 1 })
+                    .min(rows.len().saturating_sub(1));
+                if let Some(index) = rows.get(row) {
+                    form.cursor = *index;
                 }
-                1 => {
-                    form.goal.key(key);
+            }
+            KeyCode::Left | KeyCode::Right if form.field == 3 => {
+                let choices: Vec<_> = form.roles.iter().filter(|role| role.selected).map(|role| &role.id).collect();
+                if !choices.is_empty() {
+                    let left = key.code == KeyCode::Left;
+                    let next = choices
+                        .iter()
+                        .position(|id| form.leader.as_ref() == Some(*id))
+                        .map_or(if left { choices.len() - 1 } else { 0 }, |i| {
+                            (i + if left { choices.len() - 1 } else { 1 }) % choices.len()
+                        });
+                    form.leader = Some(choices[next].clone());
                 }
-                2 => {
-                    form.acceptance.key(key);
-                }
-                3 => {
-                    if let Some(role) = form.roles.get_mut(form.cursor) {
-                        match key.code {
-                            KeyCode::Char(' ') => {
-                                role.selected = !role.selected;
-                                if !role.selected && form.leader.as_ref() == Some(&role.id) {
-                                    form.leader = None;
-                                }
-                            }
-                            KeyCode::Char('l') if role.selected => form.leader = Some(role.id.clone()),
-                            KeyCode::Char('p') if role.selected && role.project.is_some() => {
-                                role.reuse_project = !role.reuse_project;
-                            }
-                            _ => {}
+            }
+            KeyCode::Char(' ' | 'p') if form.field == 2 => {
+                if let Some(index) = current.and_then(|i| rows.get(i)).or_else(|| rows.first()) {
+                    form.cursor = *index;
+                    let role = &mut form.roles[*index];
+                    if key.code == KeyCode::Char(' ') {
+                        role.selected = !role.selected;
+                        if !role.selected && form.leader.as_ref() == Some(&role.id) {
+                            form.leader = None;
                         }
+                    } else if role.selected && role.project.is_some() {
+                        role.reuse_project = !role.reuse_project;
                     }
                 }
-                _ => {
-                    if let Some(role) = form.roles.get_mut(form.cursor).filter(|role| role.selected) {
-                        role.instructions.key(key);
-                    }
+            }
+            _ => {
+                if let Some(editor) = form.editor() {
+                    editor.key(key);
                 }
-            },
+            }
         }
         Some(Overlay::StageGroup(form))
     }
 
     /// 使用原请求 ID 保存，失败后保持表单可重试。
     fn save_stage_group(&mut self, form: &mut StageGroupForm) {
-        let Some(lead) = form
-            .leader
-            .as_ref()
-            .filter(|_| [&form.name, &form.goal, &form.acceptance].iter().all(|field| !field.text.trim().is_empty()))
-        else {
-            form.error = Some("Enter a name, goal, acceptance criteria, and choose a stage lead.".into());
+        let valid = !form.name.text.trim().is_empty()
+            && (self.group_member_picker
+                || [&form.goal, &form.acceptance].iter().all(|field| !field.text.trim().is_empty()));
+        let Some(lead) = form.leader.as_ref().filter(|_| valid) else {
+            form.error = Some(
+                if self.group_member_picker {
+                    "Enter a stage name and choose a lead."
+                } else {
+                    "Enter a name, goal, acceptance criteria, and choose a stage lead."
+                }
+                .into(),
+            );
             return;
         };
         if form.from_stage && !form.use_handoff {
@@ -326,8 +369,8 @@ impl App {
             KeyCode::F(5) if form.state.is_some() => {
                 Some((json!({"botId":room,"action":if closed {"reopen"} else {"close"}}), false))
             }
-            KeyCode::F(6) if !closed && state["bot"]["lastMessage"].is_null() => {
-                if let Some(draft) = state["initialDraft"].as_str() {
+            KeyCode::F(6) => {
+                if let Some(draft) = form.first_draft() {
                     self.drafts.entry(room).or_insert_with(|| Editor::with(draft));
                     return None;
                 }

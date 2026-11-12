@@ -90,6 +90,7 @@ private class ComputerRoster(private val context: Context, val key: String) {
  */
 @Composable internal fun BotListView(app: AccountContext, states: List<AppState>, accounts: AccountStore, account: () -> Unit, manage: () -> Unit,
     newBot: (String) -> Unit, newGroup: (String) -> Unit, edit: (String, Bot) -> Unit, extensions: (String) -> Unit, bottomInset: Dp) {
+    var sessionTarget by remember { mutableStateOf<Pair<String, Bot>?>(null) }
     var stageTarget by remember { mutableStateOf<Pair<String, Bot>?>(null) }
     var stageDetails by remember { mutableStateOf<Pair<String, Bot>?>(null) }
     var confirmDelete by remember { mutableStateOf<Pair<String, Bot>?>(null) }
@@ -177,10 +178,16 @@ private class ComputerRoster(private val context: Context, val key: String) {
                     remove = { name -> renameSection(roster, store, name, null) },
                     newSection = { bot -> naming = SectionNaming("New section", "") { store.setSection(bot.id, it) } },
                     edit = { bot -> edit(id, bot) }, delete = { bot -> confirmDelete = id to bot },
+                    createSession = { bot -> sessionTarget = id to bot },
                     createStage = { bot -> stageTarget = id to bot }, stageDetails = { bot -> stageDetails = id to bot }))
             }
         }
         }
+    }
+    CodyncSheet(sessionTarget, { sessionTarget = null }) { (computer, group) ->
+        val state = states.firstOrNull { it.computer.id == computer }
+        val store = accounts.store(computer)
+        if (state != null && store != null) NewGroupView(state, store, source = group)
     }
     CodyncSheet(stageTarget, { stageTarget = null }) { (computer, group) ->
         // 用来源电脑上的成员和连接状态显示阶段表单。
@@ -220,7 +227,7 @@ private class ComputerRoster(private val context: Context, val key: String) {
 /** What a computer's rows and section headings ask of the roster. */
 private class RosterActions(val toggleSection: (String) -> Unit, val rename: (String) -> Unit, val remove: (String) -> Unit,
     val newSection: (Bot) -> Unit, val edit: (Bot) -> Unit, val delete: (Bot) -> Unit,
-    val createStage: (Bot) -> Unit, val stageDetails: (Bot) -> Unit)
+    val createSession: (Bot) -> Unit, val createStage: (Bot) -> Unit, val stageDetails: (Bot) -> Unit)
 
 /** One computer's bots: pinned ones, then each section's heading with its bots (none while folded), then the bots in no section. */
 private fun LazyListScope.botLines(state: AppState, store: AppStore, roster: ComputerRoster, folded: Set<String>, grouped: Boolean,
@@ -250,7 +257,7 @@ private fun LazyListScope.botLines(state: AppState, store: AppStore, roster: Com
                         else Modifier.animateItem())) {
                     BotRowItem(bot, state, store, reorder.handle(bot.id) { store.reorder(it) }, sections, grouped, agent, edit = { actions.edit(bot) },
                         delete = { actions.delete(bot) }, newSection = { actions.newSection(bot) },
-                        createStage = { actions.createStage(bot) }, stageDetails = { actions.stageDetails(bot) })
+                        createSession = { actions.createSession(bot) }, createStage = { actions.createStage(bot) }, stageDetails = { actions.stageDetails(bot) })
                 }
             }
         }
@@ -318,7 +325,7 @@ private fun Bot.movesWith(other: Bot) = band == other.band && (pinned || section
 
 /** 显示群所属电脑支持的操作；新群创建成功后由 Store 打开。 */
 @Composable private fun BotRowItem(bot: Bot, state: AppState, store: AppStore, drag: ContextDrag, sections: List<String>, grouped: Boolean,
-    agent: AgentMark?, edit: () -> Unit, delete: () -> Unit, newSection: () -> Unit, createStage: () -> Unit,
+    agent: AgentMark?, edit: () -> Unit, delete: () -> Unit, newSection: () -> Unit, createSession: () -> Unit, createStage: () -> Unit,
     stageDetails: () -> Unit) {
     Box(Modifier.fillMaxWidth().contextActions(onClick = { store.openBot(bot.id) }, reorder = drag, preview = {
         Box(Modifier.padding(horizontal = 8.dp)) { BotRow(bot, state, agent) }
@@ -332,9 +339,9 @@ private fun Bot.movesWith(other: Bot) = band == other.band && (pinned || section
             else MenuItem("Edit profile", icon = "pencil", action = edit),
             if (bot.kind == "group" && state.supportsGroupSessions) {
                 MenuItem("Create new group session", icon = "bubble.left.and.bubble.right",
-                    detail = "Reuse the same bots in a fresh chat.") {
+                    detail = if (state.supportsGroupMemberPicker) "Original members are preselected. You can change them." else "Reuse the same bots in a fresh chat.") {
                     // 仅发送来源群 ID，名单和编号由 Host 确定。
-                    store.createGroupSession(bot.id)
+                    if (state.supportsGroupMemberPicker) createSession() else store.createGroupSession(bot.id)
                 }
             } else null,
             if (bot.kind == "group" && state.supportsStageGroups) {

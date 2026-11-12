@@ -51,6 +51,24 @@ fn stage_default_recipient_is_saved_with_the_message() {
     assert_eq!(direct.data["resolvedMentions"], json!(["a"]));
 }
 
+/// 普通群有负责人时默认定向，移除负责人后恢复按成员顺序询问。
+#[test]
+fn ordinary_group_default_recipient_yields_to_explicit_mentions() {
+    let s = store();
+    let mut cfg = s.bot("g").unwrap().unwrap().config;
+    cfg.group_leader_id = Some("b".into());
+    s.save_bot(&cfg).unwrap();
+    let body = json!({"text":"review the result"});
+    assert_eq!(s.post_group("g", &body, &[]).unwrap().0.data["resolvedMentions"], json!(["b"]));
+    assert_eq!(s.post_group("g", &body, &["c".into()]).unwrap().0.data["resolvedMentions"], json!(["c"]));
+    assert_eq!(
+        s.post_group("g", &body, &["a".into(), "b".into(), "c".into()]).unwrap().0.data["resolvedMentions"],
+        json!(["a", "b", "c"])
+    );
+    s.delete_bot("b").unwrap();
+    assert_eq!(s.post_group("g", &body, &[]).unwrap().0.data["resolvedMentions"], json!(["a", "c"]));
+}
+
 /// 显式请求的结果与文字 @ 共用一次继续处理，未请求及无结果的派工只更新状态。
 #[test]
 fn stage_returns_only_requested_final_results_once() {

@@ -15,6 +15,7 @@ data class Bot(
     val kind: String = "agent",
     val members: List<String> = emptyList(),
     val stage: StageGroup? = null,
+    val groupLeaderId: String? = null,
     val description: String = "",
     val avatarColor: String = "blue",
     val avatarShape: String = "blob",

@@ -110,8 +110,11 @@ pub(super) async fn call(hub: &Arc<Hub>, caller: &Caller, method: &str, b: Value
         }
         "createGroupSession" => {
             let id = str_arg(&b, "botId")?.to_owned();
+            let selection: Option<crate::hub::GroupSessionSelection> =
+                serde_json::from_value(b["selection"].clone()).context("invalid group session selection")?;
             let hub = hub.clone();
-            json!({"bot": tokio::task::spawn_blocking(move || hub.create_group_session(&id)).await??})
+            // 旧请求省略 selection，由 Host 沿用来源群成员和普通群负责人。
+            json!({"bot": tokio::task::spawn_blocking(move || hub.create_group_session(&id, selection)).await??})
         }
         "createStageGroup" => {
             // 用户发送前只返回草稿，连接器凭据由 Host 既有凭据库保管。

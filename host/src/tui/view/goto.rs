@@ -113,7 +113,11 @@ pub(super) fn goto(buf: &mut Buffer, area: Rect, app: &mut App, g: &super::super
     hline(buf, inner.x, footer, inner.width, t.line.patch(t.panel));
     // 底栏保留两行提示，窄终端也能读到选中操作的说明。
     let hint = match items.get(g.cursor) {
-        Some(GotoItem::Action(Action::NewGroupSession)) => Some("Reuse the same bots in a fresh chat."),
+        Some(GotoItem::Action(Action::NewGroupSession)) => Some(if app.group_member_picker {
+            "Original members are preselected. You can change them."
+        } else {
+            "Reuse the same bots in a fresh chat."
+        }),
         Some(GotoItem::Action(Action::NewStageGroup)) => {
             Some(match app.stage_source().and_then(|bot| bot.stage.as_ref()) {
                 None => "Create new bots and choose a lead.",

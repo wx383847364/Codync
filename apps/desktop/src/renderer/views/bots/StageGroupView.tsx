@@ -1,35 +1,47 @@
 import { useEffect, useState } from 'react'
 import type { Bot, StageChange, StageDetails, StageGroupDraft, StageUsage } from '@shared/models'
+import { GroupAvatar } from '../../components/Avatar'
 import { Button, Switch } from '../../components/Controls'
-import { ModalHeader, SheetPage, useDismiss } from '../../components/Overlay'
+import { Icon } from '../../components/Icon'
+import { ModalHeader, Sheet, SheetPage, useDismiss } from '../../components/Overlay'
 import { Text } from '../../components/Text'
 import { useTr } from '../../lib/use-language'
 import { useStore } from '../../store/context'
 import { errorText } from './drafts'
 import { AutoTextArea } from './parts'
+import { CreateLayout } from './NewBotView'
+import { GroupBotPicker, GroupMemberPicker } from './GroupMemberPicker'
 import './bots.css'
 
 /** 预览角色与项目目录，确认后创建独立阶段和首条草稿。 */
 export function StageGroupView({ group }: { group: Bot }) {
   const store = useStore()
-  const dismiss = useDismiss()
   const tr = useTr()
   const [requestId] = useState(() => crypto.randomUUID())
   const [name, setName] = useState('')
   const [goal, setGoal] = useState('')
   const [acceptance, setAcceptance] = useState('')
-  const [leaderId, setLeader] = useState('')
+  const [leaderId, setLeader] = useState<string>()
   const [roles, setRoles] = useState<StageGroupDraft['roles']>([])
-  const [saving, setSaving] = useState(false)
-  const [error, setError] = useState('')
+  const [roleEditor, setRoleEditor] = useState<string>()
   const [handoffVersion, setHandoffVersion] = useState<string>()
   const handoff = group.stage?.handoff?.acceptedAt ? group.stage.handoff : undefined
+  const bots = store.members(group)
+  const picked = bots.filter((bot) => roles.some((role) => role.botId === bot.id))
+  const editingBot = picked.find((bot) => bot.id === roleEditor)
+  const editingRole = roles.find((role) => role.botId === editingBot?.id)
+  const leader = picked.find((bot) => bot.id === leaderId)
+  const accepted = handoff && handoffVersion === handoff.file.id
+  const optional = store.hasGroupMemberPicker
 
-  /** 在原名单中明确启用角色，取消时清除同一角色的负责人选择。 */
-  function select(bot: Bot, on: boolean) {
-    if (!on && leaderId === bot.id) setLeader('')
-    setRoles(on ? [...roles, { botId: bot.id, sourceRev: bot.rev, description: bot.description, reuseProject: false }]
-      : roles.filter((role) => role.botId !== bot.id))
+  /** 只复制来源群已选角色，移除角色时同步清空其负责人选择。 */
+  function select(bot: Bot) {
+    if (roles.some((role) => role.botId === bot.id)) {
+      if (leaderId === bot.id) setLeader(undefined)
+      setRoles(roles.filter((role) => role.botId !== bot.id))
+    } else {
+      setRoles([...roles, { botId: bot.id, sourceRev: bot.rev, description: bot.description, reuseProject: false }])
+    }
   }
 
   /** 更新确认表中的角色字段，源机器人的资料由原聊天管理。 */
@@ -37,60 +49,59 @@ export function StageGroupView({ group }: { group: Bot }) {
     setRoles(roles.map((role) => role.botId === id ? { ...role, ...patch } : role))
   }
 
-  /** 断线后保留表单和创建 ID，重试可取回同一次提交。 */
+  /** 固定来源成员顺序与创建 ID，连接失败时由共用表单保留输入。 */
   async function save() {
-    setSaving(true)
-    setError('')
-    try {
-      await store.createStageGroup({ botId: group.id, requestId, name, goal, acceptance, leaderId, handoffVersion,
-        roles: group.members.flatMap((id) => roles.filter((role) => role.botId === id)) })
-      dismiss()
-    } catch (e) {
-      setError(errorText(e))
-    } finally {
-      setSaving(false)
-    }
+    if (!leader) return
+    await store.createStageGroup({
+      botId: group.id, requestId, name, goal, acceptance, leaderId: leader.id,
+      handoffVersion: accepted ? handoff.file.id : undefined,
+      roles: group.members.flatMap((id) => roles.filter((role) => role.botId === id)),
+    })
   }
 
-  return <SheetPage>
-    <ModalHeader icon="person.2" title={tr('Create next stage group')} />
-    <div className="group-scroll">
-      <div className="group-form">
-        <input className="field-box" value={name} placeholder={tr('Stage name')} aria-label={tr('Stage name')}
-          onChange={(event) => setName(event.target.value)} />
-        <AutoTextArea className="field-box" value={goal} placeholder="Stage goal" minRows={2} maxRows={5} onChange={setGoal} />
-        <AutoTextArea className="field-box" value={acceptance} placeholder="Acceptance criteria" minRows={2} maxRows={5} onChange={setAcceptance} />
-        {group.stage && (handoff
-          ? <Switch label="Use accepted handoff" on={handoffVersion === handoff.file.id} disabled={saving}
+  return <>
+    <CreateLayout title="Create next stage group" group
+      preview={<GroupAvatar members={picked} size={80} />}
+      name={name} placeholder="Stage name" onName={setName} create={save}
+      canCreate={!!leader && !!name.trim() && (optional || (!!goal.trim() && !!acceptance.trim())) && (!group.stage || !!accepted)}>
+      <GroupMemberPicker bots={bots} picked={picked} onToggle={select} />
+      <GroupBotPicker bots={picked} selected={leader?.id} onChange={setLeader} label="Group lead" />
+      <AutoTextArea className="field-box" value={goal} placeholder={optional ? 'Stage goal (optional)' : 'Stage goal'} minRows={2} maxRows={5} onChange={setGoal} />
+      <AutoTextArea className="field-box" value={acceptance} placeholder={optional ? 'Acceptance criteria (optional)' : 'Acceptance criteria'} minRows={2} maxRows={5} onChange={setAcceptance} />
+      {group.stage && (handoff
+        ? <div className="stage-handoff-choice">
+          <Switch label="Use accepted handoff" on={!!accepted}
             onChange={(on) => setHandoffVersion(on ? handoff.file.id : undefined)}>{tr('Use accepted handoff')} · {handoff.file.sha256.slice(0, 12)}</Switch>
-          : <Text size="footnote" tone="secondary">{tr('Review and accept a handoff in Stage details first.')}</Text>)}
-        <Text size="footnote" tone="secondary">{tr('New bots start with their own workspace and Codync shared memory off.')}</Text>
-        <Text size="footnote" tone="secondary">{tr('Keep only stable instructions for the selected roles.')}</Text>
-        {/* 名单顺序由来源群给出，用户仅确认此次沿用的角色内容。 */}
-        {store.members(group).map((bot) => {
-          const role = roles.find((candidate) => candidate.botId === bot.id)
-          return <section key={bot.id}>
-            <Switch label={bot.name} on={!!role} disabled={saving} onChange={(on) => select(bot, on)}>{bot.name}</Switch>
-            {role && <>
-              <Text as="div" size="caption" tone="secondary">{[bot.backend, bot.model].filter(Boolean).join(' · ')}</Text>
-              <AutoTextArea className="field-box" value={role.description} placeholder="Role instructions" minRows={2} maxRows={6}
-                onChange={(description) => update(bot.id, { description })} />
-              {bot.cwd && !bot.managedWorkspace && <Switch label="Reuse project folder" on={role.reuseProject} disabled={saving}
-                onChange={(reuseProject) => update(bot.id, { reuseProject })}>{tr('Reuse project folder')} · {bot.cwd}</Switch>}
-              {bot.stageMemoryShared && <Text as="div" size="caption" tone="secondary">{tr('This agent shares its own memory across sessions.')}</Text>}
-              <Button kind="secondary" disabled={saving || leaderId === bot.id} onClick={() => setLeader(bot.id)}>
-                {leaderId === bot.id ? 'Stage lead' : 'Set as stage lead'}
-              </Button>
-            </>}
-          </section>
-        })}
-        {error && <Text size="footnote" tone="danger">{error}</Text>}
-        <Button disabled={saving || !leaderId || !name.trim() || !goal.trim() || !acceptance.trim() || (!!group.stage && !handoffVersion)} onClick={() => void save()}>
-          {saving ? 'Creating…' : 'Create stage group'}
-        </Button>
-      </div>
-    </div>
-  </SheetPage>
+        </div>
+        : <Text as="div" size="footnote" tone="secondary" className="create-group-note">{tr('Review and accept a handoff in Stage details first.')}</Text>)}
+      <button type="button" className="field-box stage-role-settings" disabled={!picked.length}
+        onClick={() => setRoleEditor(picked[0]?.id)}>
+        {tr('Role settings')}
+        <Icon name="chevron.right" size={12} />
+      </button>
+    </CreateLayout>
+    <Sheet open={!!editingBot && !!editingRole} onClose={() => setRoleEditor(undefined)} width={400}>
+      {editingBot && editingRole && <SheetPage>
+        <ModalHeader title={tr('Role settings')} />
+        <div className="group-scroll">
+          <div className="stage-role-form">
+            <GroupBotPicker bots={picked} selected={editingBot.id} onChange={setRoleEditor} label="Role settings" showsLabel={false} />
+            <Text as="div" size="caption" tone="secondary">{[editingBot.backend, editingBot.model].filter(Boolean).join(' · ')}</Text>
+            <Text as="div" size="footnote" tone="secondary">{tr('Keep only stable instructions for the selected roles.')}</Text>
+            <AutoTextArea className="field-box" value={editingRole.description} placeholder="Role instructions" minRows={3} maxRows={8}
+              onChange={(description) => update(editingBot.id, { description })} />
+            {editingBot.cwd && !editingBot.managedWorkspace &&
+              <Switch label="Reuse project folder" on={!!editingRole.reuseProject}
+                onChange={(reuseProject) => update(editingBot.id, { reuseProject })}>{tr('Reuse project folder')} · {editingBot.cwd}</Switch>}
+            <Text as="div" size="footnote" tone="secondary">{tr('New bots start with their own workspace and Codync shared memory off.')}</Text>
+            {editingBot.stageMemoryShared &&
+              <Text as="div" size="caption" tone="secondary">{tr('This agent shares its own memory across sessions.')}</Text>}
+            <Button onClick={() => setRoleEditor(undefined)}>Done</Button>
+          </div>
+        </div>
+      </SheetPage>}
+    </Sheet>
+  </>
 }
 
 /** 人工编辑 Markdown、核对执行记录，并分开验收与控制群准入。 */
@@ -160,7 +171,7 @@ export function StageDetailsView({ botId }: { botId: string }) {
         <Button kind="secondary" disabled={busy || (!stage.closedAt && !!pending.length)} onClick={() => void load({ action: stage.closedAt ? 'reopen' : 'close' })}>
           {stage.closedAt ? 'Reopen stage' : 'Close stage'}
         </Button>
-        {!details.bot.lastMessage && !stage.closedAt && !store.composerDrafts.get(botId) && <Button kind="secondary" onClick={() => {
+        {!!details.initialDraft && !details.bot.lastMessage && !stage.closedAt && !store.composerDrafts.get(botId) && <Button kind="secondary" onClick={() => {
           store.composerDrafts.set(botId, details.initialDraft)
           store.setSelection(botId)
           dismiss()

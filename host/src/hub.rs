@@ -21,6 +21,7 @@ use tokio::sync::{broadcast, watch};
 mod bots;
 mod deliveries;
 mod groups;
+pub(crate) use groups::GroupSessionSelection;
 mod lead;
 mod order;
 mod patch;

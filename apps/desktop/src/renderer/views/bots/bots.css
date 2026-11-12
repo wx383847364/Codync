@@ -135,15 +135,115 @@ textarea.field-box {
   font-size: var(--text-title3);
   padding: 10px 12px;
 }
+.create-group-sheet {
+  width: min(400px, calc(100vw - 48px));
+  min-height: 0;
+}
+.create-group-sheet .create-body > * {
+  flex-shrink: 0;
+}
+.create-group-sheet .field-box {
+  background: var(--field);
+}
+.create-group-sheet .create-name.field-box {
+  text-align: start;
+}
+.create-group-note {
+  align-self: stretch;
+}
 .create-members {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
   width: 100%;
+}
+.group-member-picker,
+.group-member-search,
+.stage-handoff-choice {
+  width: 100%;
+}
+.group-member-search,
+.group-bot-choice,
+.stage-role-settings {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text);
+}
+.group-member-search {
+  padding: 0 0 0 10px;
+}
+.group-member-search:has(:focus-visible) {
+  outline: 1px solid var(--text);
+  outline-offset: 2px;
+}
+.group-member-search input {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  outline: none;
+  padding: 9px 0;
+  color: var(--text);
+  background: transparent;
+  font: inherit;
+}
+.group-member-search button {
+  display: grid;
+  place-items: center;
+  align-self: stretch;
+  flex: 0 0 34px;
+}
+.group-member-picker .group-bot-options {
+  margin-top: 4px;
+  max-height: 188px;
+  overflow-y: auto;
+  background: var(--sheet);
+  border-radius: var(--radius-m);
+  box-shadow: var(--shadow-m);
+}
+.group-bot-option-mark {
+  margin-inline-start: auto;
+}
+.group-bot-option-spacer {
+  flex: 0 0 22px;
+}
+.group-member-empty {
+  padding: 8px;
+}
+.group-bot-choice,
+.stage-role-settings {
+  text-align: start;
+  user-select: none;
+}
+.group-bot-choice:not(:disabled),
+.stage-role-settings:not(:disabled) {
+  cursor: pointer;
+}
+.group-bot-choice.field-box {
+  background: var(--field);
+}
+.group-bot-choice-label {
+  flex: 1 0 auto;
+}
+.stage-role-settings {
+  justify-content: space-between;
+}
+.stage-role-form {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 12px;
+  padding: 8px 24px 20px;
+}
+.stage-role-form > button:last-child {
+  align-self: end;
 }
 .create-member {
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 4px;
-  width: 68px;
+  min-width: 0;
   padding: 2px 0;
   transition: transform var(--press);
 }

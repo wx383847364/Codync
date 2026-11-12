@@ -359,6 +359,7 @@ pub(super) mod tests {
             id: id.into(),
             kind: BotKind::Agent,
             members: vec![],
+            group_leader_id: None,
             group_session_base: None,
             stage: None,
             name: name.into(),

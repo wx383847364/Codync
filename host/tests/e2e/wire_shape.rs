@@ -164,6 +164,12 @@ async fn wire_shape_matches_the_snapshot() {
     let server =
         host.call("chatCall", json!({"botId": lead, "name": "start_dev_server", "arguments": arguments})).await;
     assert_eq!(server["ports"][0]["port"], port, "{server}");
+    // 普通群的负责人通过 Bot 事件返回，保持可选字段的线协议记录。
+    host.call(
+        "createBot",
+        json!({"kind":"group", "name":"Fixture group", "members":[bot, lead], "groupLeaderId":lead}),
+    )
+    .await;
     // A bot in a roster section: its `section`.
     host.call("updateBot", json!({"id": bot, "section": "Work"})).await;
 

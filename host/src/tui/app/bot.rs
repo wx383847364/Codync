@@ -85,6 +85,7 @@ pub struct Bot {
     /// A group chat: several bots and the user, no agent of its own.
     pub group: bool,
     pub members: Vec<String>,
+    pub group_leader_id: Option<String>,
     pub(crate) stage: Option<crate::store::StageGroup>,
     /// Where the running turn talks: a chat (`None` = its own).
     pub working_chat: Option<String>,
@@ -141,6 +142,15 @@ impl AgentModel {
 }
 
 impl Bot {
+    /// 解析普通群或阶段群的负责人，只返回仍属于群的成员 ID。
+    pub(in crate::tui) fn group_leader(&self) -> Option<&str> {
+        self.stage
+            .as_ref()
+            .map(|stage| stage.leader_id.as_str())
+            .or(self.group_leader_id.as_deref())
+            .filter(|id| self.members.iter().any(|member| member == id))
+    }
+
     /// An agent bot unless its agent said it has no Fast mode (an unknown one may: its first
     /// session settles it), or one that has it on (so it can be turned off).
     pub fn fast_shown(&self) -> bool {
@@ -235,6 +245,7 @@ impl Bot {
             last_at: v["lastAt"].as_i64().unwrap_or(0),
             group: v["kind"] == "group",
             members: strs(&v["members"]),
+            group_leader_id: v["groupLeaderId"].as_str().map(str::to_owned),
             stage: serde_json::from_value(v["stage"].clone()).unwrap_or_default(),
             working_chat: v["workingChat"].as_str().map(str::to_owned),
         })
