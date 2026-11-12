@@ -276,25 +276,24 @@ impl Form {
 pub enum GroupField {
     Name,
     About,
+    Search,
     Bots,
+    Leader,
 }
 
 impl GroupField {
-    /// The field after this one; a new group has no About (it is written afterwards, in the editor).
-    pub(super) fn next(self, about: bool) -> Self {
-        match self {
-            Self::Name if about => Self::About,
-            Self::Name | Self::About => Self::Bots,
-            Self::Bots => Self::Name,
-        }
-    }
-
-    pub(super) fn prev(self, about: bool) -> Self {
-        match self {
-            Self::Name => Self::Bots,
-            Self::Bots if about => Self::About,
-            Self::About | Self::Bots => Self::Name,
-        }
+    /// 资料编辑保持原有字段，新建表单增加搜索与可选负责人。
+    pub(super) fn step(self, about: bool, lead: bool, backward: bool) -> Self {
+        let fields: &[Self] = if about {
+            &[Self::Name, Self::About, Self::Bots]
+        } else if lead {
+            &[Self::Name, Self::Search, Self::Bots, Self::Leader]
+        } else {
+            &[Self::Name, Self::Search, Self::Bots]
+        };
+        let index = fields.iter().position(|field| *field == self).unwrap_or_default();
+        let step = if backward { fields.len() - 1 } else { 1 };
+        fields[(index + step) % fields.len()]
     }
 }
 
@@ -302,6 +301,10 @@ impl GroupField {
 pub struct GroupForm {
     /// The group being edited; `None` creates one.
     pub group_id: Option<String>,
+    pub session_source: Option<String>,
+    pub query: Editor,
+    pub leader: Option<String>,
+    pub show_leader: bool,
     pub name: Editor,
     /// What the group is for; sent as `description`, shown to its members. Edited only:
     /// a new group starts without one.

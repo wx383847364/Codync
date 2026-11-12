@@ -238,6 +238,7 @@ public struct Hello: Codable, Sendable {
     /// Host 支持创建具有独立模型会话的群。
     public var groupSessions: Bool?
     public var stageGroups: Bool?
+    public var groupMemberPicker: Bool?
     public var icons: [String: CustomIcon]?
     public var iconsRevision: Int64?
     public var hostId: String
@@ -299,12 +300,15 @@ public struct GroupDraft: Codable, Hashable, Sendable {
     /// What the group is for; its bots are told.
     public var description = ""
     public var members: [String]
+    public var groupLeaderId: String?
     public var pinned: Bool?
 
-    public init(name: String, description: String = "", members: [String]) {
+    /// 普通建群可指定一位已加入成员作为默认接收人。
+    public init(name: String, description: String = "", members: [String], groupLeaderId: String? = nil) {
         self.name = name
         self.description = description
         self.members = members
+        self.groupLeaderId = groupLeaderId
     }
 
     public init(_ group: Bot) {

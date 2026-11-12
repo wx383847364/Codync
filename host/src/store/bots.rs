@@ -269,17 +269,6 @@ fn stage_work(c: &rusqlite::Connection, id: &str) -> Result<Value> {
     Ok(serde_json::json!({"counts":counts,"pending":pending}))
 }
 
-/// 在当前投递事务读取阶段快照，避免使用客户端缓存的开关或交接版本。
-pub(super) fn room_stage(c: &rusqlite::Connection, id: &str) -> Result<Option<StageGroup>> {
-    let data = c
-        .query_row("SELECT json_extract(config,'$.stage') FROM bots WHERE id=? AND deleted=0", [id], |r| {
-            r.get::<_, Option<String>>(0)
-        })
-        .optional()?
-        .flatten();
-    Ok(data.as_deref().map(serde_json::from_str).transpose()?)
-}
-
 /// 队列准入只限制已关闭的阶段群，普通群沿用现有规则。
 pub(super) fn stage_closed(c: &rusqlite::Connection, id: &str) -> Result<bool> {
     Ok(c.query_row(
@@ -358,6 +347,7 @@ mod tests {
             id: "b1".into(),
             kind: BotKind::Agent,
             members: vec![],
+            group_leader_id: None,
             group_session_base: None,
             stage: None,
             name: "Rev".into(),

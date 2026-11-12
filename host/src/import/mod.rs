@@ -159,7 +159,7 @@ impl Importer {
 
     /// A new group of `members`, or None when a group of the same bots exists (creating would open that one).
     fn group(&self, group: &manifest::Group, members: &[String]) -> Result<Option<String>> {
-        if crate::chat::group::with_members(&self.hub.store, members)?.is_some() {
+        if crate::chat::group::with_members(&self.hub.store, members, None)?.is_some() {
             return Ok(None);
         }
         let b = json!({"kind": "group", "name": group.name, "description": group.description, "members": members});

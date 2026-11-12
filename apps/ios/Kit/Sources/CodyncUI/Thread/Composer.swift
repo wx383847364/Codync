@@ -56,7 +56,7 @@ struct Composer: View {
 
     /// 通过群成员解析默认负责人，已移除的角色不再显示为接收人。
     private var stageLead: Bot? {
-        guard let id = bot?.stage?.leaderId else { return nil }
+        guard let id = bot?.stage?.leaderId ?? bot?.groupLeaderId else { return nil }
         return members.first { $0.id == id }
     }
 
@@ -65,10 +65,10 @@ struct Composer: View {
         let name = bot?.name ?? ""
         if let artifact { return L10n.tr("Message about “{title}”").replacingOccurrences(of: "{title}", with: artifact.title) }
         if replyingTo != nil { return L10n.tr("Reply…") }
-        if bot?.stage != nil {
-            guard let lead = stageLead else { return L10n.tr("Choose a recipient with @") }
+        if let lead = stageLead {
             return L10n.tr("Ask {name} · @ to choose another recipient").replacingOccurrences(of: "{name}", with: lead.name)
         }
+        if bot?.stage != nil { return L10n.tr("Choose a recipient with @") }
         if bot?.isGroup == true { return L10n.tr("Ask everyone · @ to ask one bot") }
         let key = working ? "Queue a message for {name}" : "Ask {name}"
         return L10n.tr(key).replacingOccurrences(of: "{name}", with: name)
@@ -134,7 +134,7 @@ struct Composer: View {
     /// 已开放的群沿用现有草稿、选择与发送操作。
     private var editor: some View {
         VStack(alignment: .leading, spacing: 6) {
-            if bot?.stage != nil && !draft.isEmpty && replyingTo == nil && artifact == nil {
+            if (bot?.stage != nil || stageLead != nil) && !draft.isEmpty && replyingTo == nil && artifact == nil {
                 Text(stageLead.map { L10n.tr("Default recipient · {name}").replacingOccurrences(of: "{name}", with: $0.name) }
                      ?? L10n.tr("Choose a recipient with @"))
                     .font(.footnote).foregroundStyle(Palette.secondary)

@@ -85,16 +85,15 @@ function DestinationComposer({ botId, reply, about, cancelReply, onCall, onInter
 
   const name = bot?.name ?? ''
   // 保留默认接收范围提示，首条草稿预填时也能看到。
-  const stageLead = members.find((member) => member.id === bot?.stage?.leaderId)
-  const stageRoute = stageLead ? tr('Default recipient · {name}').replace('{name}', stageLead.name) : tr('Choose a recipient with @')
+  const leader = members.find((member) => member.id === (bot?.stage?.leaderId ?? bot?.groupLeaderId))
+  const route = leader ? tr('Default recipient · {name}').replace('{name}', () => leader.name) : tr('Choose a recipient with @')
   const placeholder = about
     ? tr('Message about “{title}”').replace('{title}', about.title)
     : reply
     ? tr('Reply…')
     : bot && isGroup(bot)
-      ? bot.stage
-        ? stageLead ? tr('Ask {name} · @ to choose another recipient').replace('{name}', stageLead.name) : tr('Choose a recipient with @')
-        : tr('Ask everyone · @ to ask one bot')
+      ? leader ? tr('Ask {name} · @ to choose another recipient').replace('{name}', () => leader.name)
+        : bot.stage ? tr('Choose a recipient with @') : tr('Ask everyone · @ to ask one bot')
       : working
         ? tr('Queue a message for {name}').replace('{name}', name)
         : tr('Ask {name}').replace('{name}', name)
@@ -230,7 +229,7 @@ function DestinationComposer({ botId, reply, about, cancelReply, onCall, onInter
         <div className="composer-surface">
           <MentionMenu menu={{ ...mentionMenu, pick: mentionMenu.choose }} />
           <CommandMenu menu={commandMenu} />
-          {bot?.stage && draft && !reply && !about && <div className="composer-reply">{stageRoute}</div>}
+          {(leader || bot?.stage) && draft && !reply && !about && <div className="composer-reply">{route}</div>}
           <ComposerReveal open={!!reply}>
             {reply ? (
               <HStack gap={4} className="composer-reply">

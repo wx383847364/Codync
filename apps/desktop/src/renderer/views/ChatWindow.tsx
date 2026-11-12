@@ -182,7 +182,7 @@ interface BotTarget {
   store: BotStore
 }
 
-type EditTarget = { id: string; store: BotStore } & ({ draft: BotDraft } | { stage: Bot } | { stageDetails: Bot })
+type EditTarget = { id: string; store: BotStore } & ({ draft: BotDraft } | { stage: Bot } | { stageDetails: Bot } | { groupSession: Bot })
 
 /** A new bot or group chat being made, and the computer it goes to. */
 interface CreateTarget {
@@ -304,10 +304,12 @@ function ChatSplitView() {
     { title: 'Edit Profile…', icon: 'square.and.pencil', action: () => setEditing({ id: crypto.randomUUID(), draft: draftOf(bot), store }) },
     ...(bot.kind === 'group' && store.hasGroupSessions ? [{
       title: 'Create new group session',
-      detail: 'Reuse the same bots in a fresh chat.',
+      detail: store.hasGroupMemberPicker ? 'Original members are preselected. You can change them.' : 'Reuse the same bots in a fresh chat.',
       icon: 'bubble.left.and.bubble.right',
-      // 由 Host 复制成员和分配编号。
-      action: () => store.createGroupSession(bot.id),
+      // 新 Host 接收表单确认的成员，旧 Host 保留直接复制的入口。
+      action: () => store.hasGroupMemberPicker
+        ? setEditing({ id: crypto.randomUUID(), groupSession: bot, store })
+        : store.createGroupSession(bot.id),
     }] : []),
     // 复用资料弹层承载阶段预览，来源群及电脑在打开时固定。
     ...(bot.kind === 'group' && store.hasStageGroups ? [{ title: 'Create next stage group', icon: 'person.2',
@@ -471,11 +473,15 @@ function ChatSplitView() {
       ) : null}
 
       <SearchPalette open={searching} items={visibleRoster} onPick={(ref) => app.select(ref)} onClose={() => setSearching(false)} />
-      <Sheet open={editing !== null} onClose={() => setEditing(null)} width={520} height={Math.min(680, sheetHeight)}>
+      <Sheet open={editing !== null} onClose={() => setEditing(null)}
+        {...(editing && ('stage' in editing || 'groupSession' in editing)
+          ? { maxHeight: sheetHeight } : { width: 520, height: Math.min(680, sheetHeight) })}>
         {editing ? (
           <StoreContext.Provider value={editing.store}>
             {'stageDetails' in editing ? <StageDetailsView key={editing.id} botId={editing.stageDetails.id} />
-              : 'stage' in editing ? <StageGroupView key={editing.id} group={editing.stage} /> : <BotEditorView key={editing.id} draft={editing.draft} />}
+              : 'stage' in editing ? <StageGroupView key={editing.id} group={editing.stage} />
+              : 'groupSession' in editing ? <NewGroupView key={editing.id} source={editing.groupSession} />
+              : <BotEditorView key={editing.id} draft={editing.draft} />}
           </StoreContext.Provider>
         ) : null}
       </Sheet>

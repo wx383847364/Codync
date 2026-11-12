@@ -10,7 +10,9 @@ public struct StageGroupView: View {
     @State private var name = ""
     @State private var goal = ""
     @State private var acceptance = ""
-    @State private var leaderId = ""
+    @State private var leaderId: String?
+    @State private var showingRoles = false
+    @State private var editingRole: String?
     @State private var handoffVersion: String?
     @State private var roles: [String: StageGroupDraft.Role] = [:]
     @State private var saving = false
@@ -19,81 +21,108 @@ public struct StageGroupView: View {
     /// 将表单绑定到来源群，成员变更由所属电脑同步。
     public init(group: Bot) { self.group = group }
 
-    /// 预览阶段配置，提交成功后由 Store 打开聊天。
+    private var candidates: [Bot] { group.members.compactMap { store.bots[$0] } }
+    private var picked: [Bot] { candidates.filter { roles[$0.id] != nil } }
+    private var optional: Bool { store.supportsGroupMemberPicker }
+
+    /// 阶段群沿用统一的成员布局，交接和角色配置在成员区后面。
     public var body: some View {
-        VStack(spacing: 0) {
-            ModalHeader("Create next stage group")
-            ScrollView {
-                VStack(alignment: .leading, spacing: 14) {
-                    TextField(L10n.tr("Stage name"), text: $name).fieldBox(fill: Palette.surface)
-                    TextField(L10n.tr("Stage goal"), text: $goal, axis: .vertical).fieldBox(fill: Palette.surface)
-                    TextField(L10n.tr("Acceptance criteria"), text: $acceptance, axis: .vertical).fieldBox(fill: Palette.surface)
-                    if let stage = group.stage {
-                        if let handoff = stage.handoff, handoff.acceptedAt != nil {
-                            Toggle(isOn: Binding(get: { handoffVersion == handoff.file.id },
-                                set: { handoffVersion = $0 ? handoff.file.id : nil })) {
-                                Text("\(L10n.tr("Use accepted handoff")) · \(handoff.file.sha256.prefix(12))")
-                            }.toggleStyle(.codync)
-                        } else {
-                            Text(L10n.tr("Review and accept a handoff in Stage details first."))
-                                .font(.footnote).foregroundStyle(Palette.secondary)
-                        }
+        let validFields = !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && (optional || [goal, acceptance].allSatisfy { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
+        CreateForm(title: "Create next stage group", placeholder: "Stage name", name: $name, saving: saving,
+                   canCreate: !saving && validFields && picked.contains { $0.id == leaderId }
+                       && (group.stage == nil || handoffVersion != nil),
+                   error: error, create: save, group: true) {
+            GroupAvatar(members: picked, size: 80)
+        } content: {
+            VStack(alignment: .leading, spacing: 12) {
+                GroupMemberPicker(bots: candidates, picked: picked, toggle: toggleRole)
+                GroupBotPicker(bots: picked, selection: $leaderId, label: "Group lead")
+                TextField(L10n.tr(optional ? "Stage goal (optional)" : "Stage goal"), text: $goal, axis: .vertical)
+                    .lineLimit(2...5).fieldBox(fill: Palette.surface)
+                TextField(L10n.tr(optional ? "Acceptance criteria (optional)" : "Acceptance criteria"), text: $acceptance, axis: .vertical)
+                    .lineLimit(2...5).fieldBox(fill: Palette.surface)
+                if let stage = group.stage {
+                    if let handoff = stage.handoff, handoff.acceptedAt != nil {
+                        Toggle(isOn: Binding(get: { handoffVersion == handoff.file.id },
+                            set: { handoffVersion = $0 ? handoff.file.id : nil })) {
+                            Text("\(L10n.tr("Use accepted handoff")) · \(handoff.file.sha256.prefix(12))")
+                        }.toggleStyle(.codync)
+                    } else {
+                        Text(L10n.tr("Review and accept a handoff in Stage details first."))
+                            .font(.footnote).foregroundStyle(Palette.secondary)
                     }
-                    Text(L10n.tr("New bots start with their own workspace and Codync shared memory off."))
-                        .font(.footnote).foregroundStyle(Palette.secondary)
-                    Text(L10n.tr("Keep only stable instructions for the selected roles."))
-                        .font(.footnote).foregroundStyle(Palette.secondary)
-                    ForEach(group.members.compactMap { store.bots[$0] }) { bot in
-                        // 保留来源顺序，勾选时才展示可编辑的角色配置。
-                        roleFields(bot)
-                    }
-                    if let error { Text(L10n.tr(error)).font(.footnote).foregroundStyle(Palette.danger) }
-                    Button(L10n.tr(saving ? "Creating…" : "Create stage group")) { save() }
-                        .buttonStyle(.primary)
-                        .disabled(saving || leaderId.isEmpty || (group.stage != nil && handoffVersion == nil)
-                            || [name, goal, acceptance].contains { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
                 }
-                .padding(20)
+                Button {
+                    // 设置页始终从第一个有效角色打开。
+                    editingRole = picked.first?.id
+                    showingRoles = true
+                } label: {
+                    HStack {
+                        Text(L10n.tr("Role settings"))
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                    }.fieldBox(fill: Palette.surface)
+                }.buttonStyle(.plain).disabled(picked.isEmpty)
             }
         }
-        .background(Palette.background)
+        .codyncSheet(isPresented: $showingRoles) {
+            VStack(spacing: 0) {
+                ModalHeader("Role settings")
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 12) {
+                        GroupBotPicker(bots: picked, selection: $editingRole, label: "Role settings", showsLabel: false)
+                        if let bot = picked.first(where: { $0.id == editingRole }) {
+                            roleFields(bot)
+                        }
+                    }.padding(20)
+                }
+            }.background(Palette.background)
+        }
     }
 
-    /// 角色说明可在创建前确认，项目目录仅在用户选择时继承。
-    private func roleFields(_ bot: Bot) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Toggle(bot.name, isOn: Binding(get: { roles[bot.id] != nil }, set: { on in
-                // 取消当前负责人时要求用户重新明确选择。
-                if !on && leaderId == bot.id { leaderId = "" }
-                roles[bot.id] = on ? StageGroupDraft.Role(botId: bot.id, sourceRev: bot.rev, description: bot.description) : nil
-            })).toggleStyle(.codync)
+    /// 只复制当前选中的来源角色，移除角色时清除其负责人身份。
+    private func toggleRole(_ bot: Bot) {
+        withAnimation(Motion.layout) {
             if roles[bot.id] != nil {
-                Text([bot.backend, bot.model ?? ""].filter { !$0.isEmpty }.joined(separator: " · "))
-                    .font(.caption).foregroundStyle(Palette.secondary)
-                TextField(L10n.tr("Role instructions"), text: Binding(
-                    get: { roles[bot.id]?.description ?? "" },
-                    set: { roles[bot.id]?.description = $0 }
-                ), axis: .vertical).fieldBox(fill: Palette.surface)
-                if !bot.cwd.isEmpty && !bot.managedWorkspace {
-                    Toggle(L10n.tr("Reuse project folder"), isOn: Binding(
-                        get: { roles[bot.id]?.reuseProject ?? false },
-                        set: { roles[bot.id]?.reuseProject = $0 }
-                    )).toggleStyle(.codync)
-                    Text(bot.cwd).font(.caption).foregroundStyle(Palette.secondary)
-                }
-                if bot.stageMemoryShared == true {
-                    Text(L10n.tr("This agent shares its own memory across sessions."))
-                        .font(.caption).foregroundStyle(Palette.secondary)
-                }
-                Button(L10n.tr(leaderId == bot.id ? "Stage lead" : "Set as stage lead")) { leaderId = bot.id }
-                    .buttonStyle(.secondary).disabled(leaderId == bot.id)
+                roles[bot.id] = nil
+                if leaderId == bot.id { leaderId = nil }
+            } else {
+                roles[bot.id] = StageGroupDraft.Role(botId: bot.id, sourceRev: bot.rev, description: bot.description)
             }
         }
-        .disabled(saving)
+    }
+
+    /// 编辑角色职责和目录继承，源机器人资料保持独立。
+    private func roleFields(_ bot: Bot) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text([bot.backend, bot.model ?? ""].filter { !$0.isEmpty }.joined(separator: " · "))
+                .font(.caption).foregroundStyle(Palette.secondary)
+            Text(L10n.tr("Keep only stable instructions for the selected roles."))
+                .font(.footnote).foregroundStyle(Palette.secondary)
+            TextField(L10n.tr("Role instructions"), text: Binding(
+                get: { roles[bot.id]?.description ?? "" },
+                set: { roles[bot.id]?.description = $0 }
+            ), axis: .vertical).fieldBox(fill: Palette.surface)
+            if !bot.cwd.isEmpty && !bot.managedWorkspace {
+                Toggle(L10n.tr("Reuse project folder"), isOn: Binding(
+                    get: { roles[bot.id]?.reuseProject ?? false },
+                    set: { roles[bot.id]?.reuseProject = $0 }
+                )).toggleStyle(.codync)
+                Text(bot.cwd).font(.caption).foregroundStyle(Palette.secondary)
+            }
+            Text(L10n.tr("New bots start with their own workspace and Codync shared memory off."))
+                .font(.footnote).foregroundStyle(Palette.secondary)
+            if bot.stageMemoryShared == true {
+                Text(L10n.tr("This agent shares its own memory across sessions."))
+                    .font(.caption).foregroundStyle(Palette.secondary)
+            }
+        }
     }
 
     /// 用同一个创建 ID 重试，失败时保留预览字段。
     private func save() {
+        guard let leaderId, picked.contains(where: { $0.id == leaderId }), !saving else { return }
         let draft = StageGroupDraft(botId: group.id, requestId: requestId, name: name, goal: goal, acceptance: acceptance,
                                     leaderId: leaderId, roles: group.members.compactMap { roles[$0] }, handoffVersion: handoffVersion)
         saving = true
@@ -188,7 +217,7 @@ public struct StageDetailsView: View {
         Button(L10n.tr(closed ? "Reopen stage" : "Close stage")) {
             Task { await load(StageChange(botId: botId, action: closed ? .reopen : .close)) }
         }.buttonStyle(.secondary).disabled(busy || (!closed && pending))
-        if !closed && details.bot.lastMessage == nil && store.composerDraft(for: botId).isEmpty {
+        if !details.initialDraft.isEmpty && !closed && details.bot.lastMessage == nil && store.composerDraft(for: botId).isEmpty {
             Button(L10n.tr("Restore first draft")) { store.restoreStageDraft(details); dismiss() }.buttonStyle(.secondary)
         }
     }

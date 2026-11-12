@@ -54,6 +54,7 @@ export interface Bot {
   /** `agent`, or `group`: several bots and the user in one chat. */
   kind: string
   members: string[]
+  groupLeaderId?: string
   stage?: StageGroup
   name: string
   description: string
@@ -139,6 +140,7 @@ export function normalizeBot(raw: Partial<Bot> & { id: string }): Bot {
     id: raw.id,
     kind: raw.kind ?? 'agent',
     members: raw.members ?? [],
+    groupLeaderId: raw.groupLeaderId,
     stage: raw.stage,
     name: raw.name ?? 'Bot',
     description: raw.description ?? '',
@@ -561,6 +563,7 @@ export interface Hello {
   /** 主机支持创建具有独立模型会话的群。 */
   groupSessions?: boolean
   stageGroups?: boolean
+  groupMemberPicker?: boolean
   /** 主机能按附件身份校验原图尺寸，不包含正文路径读取能力。 */
   fileImageInfo?: boolean
   iconsRevision?: number
@@ -775,5 +778,6 @@ export interface GroupDraft {
   name: string
   description: string
   members: string[]
+  groupLeaderId?: string
   pinned?: boolean
 }

@@ -34,9 +34,8 @@ pub fn post(hub: &Arc<Hub>, cfg: &BotConfig, mut data: Value) -> Result<Entry> {
             &mentions,
             &members,
             data["replyTo"]["author"].as_str(),
-            cfg.stage.is_none(),
         )?;
-        // 阶段默认负责人在投递事务里按最新群配置校验与绑定。
+        // 无显式接收人时，由投递事务读取最新群配置决定默认接收范围。
         hub.post_group(&cfg.id, &data, &targets)?
     } else {
         hub.add_entry(&lane, EntryKind::User, turn, &data).ok_or_else(|| anyhow!("couldn't save the message"))?

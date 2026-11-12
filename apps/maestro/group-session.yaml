@@ -38,6 +38,8 @@ onFlowComplete:
     timeout: 60000
 - longPressOn: ${output.group}
 - tapOn: "Create new group session"
+- assertVisible: "Search or add bots"
+- tapOn: "Create"
 - assertVisible: "${output.group} 1"
 - assertVisible: "Ask everyone.*"
 - takeScreenshot: group-session

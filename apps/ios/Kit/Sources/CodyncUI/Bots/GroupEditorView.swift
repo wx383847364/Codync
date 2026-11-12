@@ -97,7 +97,9 @@ public struct GroupEditorView: View {
                             }
                             .buttonStyle(PressScale())
                         }
-                        Text(L10n.tr("Everyone answers in turn unless you @mention someone."))
+                        let lead = picked.first { $0.id == (group.stage?.leaderId ?? group.groupLeaderId) }
+                        Text(lead.map { L10n.tr("Ask {name} · @ to choose another recipient").replacingOccurrences(of: "{name}", with: $0.name) }
+                             ?? L10n.tr(group.stage != nil ? "Choose a recipient with @" : "Everyone answers in turn unless you @mention someone."))
                             .font(.caption)
                             .foregroundStyle(Palette.tertiary)
                             .padding(.top, 10)

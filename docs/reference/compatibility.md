@@ -47,6 +47,11 @@ Apps older than 2.41.0 on a computer in no account lose the relay: `hello.cloud`
 Apps older than 2.39.0 don't read `removed`: a queued message taken back on a newer client (`unqueue`) stays in their
 chat as *Not sent — stopped*. Nothing breaks and the message never went out, so it raises no floor.
 
+Hosts that advertise `groupMemberPicker` accept a group's optional `groupLeaderId` and
+an optional member selection for `createGroupSession`. Updated clients show the default
+recipient in the composer. Earlier clients show their generic group prompt and can still
+choose recipients with `@`. The host applies the saved group lead to unaddressed messages.
+
 ## Changing what crosses the wire
 
 The policy is to move people forward rather than carry old formats: a breaking change ships

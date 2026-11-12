@@ -1,12 +1,16 @@
 package com.codync.android
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -16,6 +20,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.codync.android.core.*
@@ -27,68 +32,89 @@ import java.text.NumberFormat
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 
-/** 确认阶段目标和角色，完成后保留首条草稿供用户发送。 */
+/** 选择来源角色和负责人，阶段字段可选填，创建后打开空白或预填草稿。 */
 @Composable internal fun StageGroupEditor(group: Bot, state: AppState, store: AppStore) {
     val dismiss = LocalDismissModal.current
     val requestId = remember(group.id) { UUID.randomUUID().toString() }
     var name by remember { mutableStateOf("") }
     var goal by remember { mutableStateOf("") }
     var acceptance by remember { mutableStateOf("") }
-    var leader by remember { mutableStateOf("") }
+    var leader by remember { mutableStateOf<String?>(null) }
     var roles by remember { mutableStateOf(emptyMap<String, StageGroupDraft.Role>()) }
     var handoffVersion by remember { mutableStateOf<String?>(null) }
-    val saving = "stage-group" in state.busy
+    var editingRole by remember { mutableStateOf<String?>(null) }
+    val candidates = group.memberBots(state.bots)
+    val picked = candidates.filter { it.id in roles }
+    val selectedLead = picked.firstOrNull { it.id == leader }
+    val optional = state.supportsGroupMemberPicker
+    val handoff = group.stage?.handoff?.takeIf { it.acceptedAt != null }
+    val accepted = handoff != null && handoffVersion == handoff.file.id
 
-    Column(Modifier.fillMaxSize().background(Palette.background)) {
-        ModalHeader("Create next stage group")
-        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp)) {
-            FieldBox(name, { name = it }, "Stage name", fill = Palette.surface)
-            PlainTextField(goal, { goal = it }, Modifier.fillMaxWidth(), "Stage goal", maxLines = 5)
-            PlainTextField(acceptance, { acceptance = it }, Modifier.fillMaxWidth(), "Acceptance criteria", maxLines = 5)
-            if (group.stage != null) {
-                val handoff = group.stage?.handoff?.takeIf { it.acceptedAt != null }
-                if (handoff == null) {
-                    Text(tr("Review and accept a handoff in Stage details first."), style = Type.footnote, color = Palette.secondary)
-                } else {
-                    CodyncSwitch(handoffVersion == handoff.file.id, { on -> handoffVersion = handoff.file.id.takeIf { on } }, enabled = !saving) {
-                        Text(tr("Use accepted handoff") + " · " + handoff.file.sha256.take(12), style = Type.body)
-                    }
+    CreateLayout(state, "Create next stage group", name, { name = it }, "Stage name",
+        selectedLead != null && name.isNotBlank() && (optional || (goal.isNotBlank() && acceptance.isNotBlank())) &&
+            (group.stage == null || accepted),
+        {
+            // 固定来源顺序与请求 ID，Host 可识别重试。
+            selectedLead?.let {
+                val draft = StageGroupDraft(group.id, requestId, name, goal, acceptance, it.id,
+                    group.members.mapNotNull(roles::get), handoffVersion)
+                store.createStageGroup(draft) { dismiss() }
+            }
+        }, { GroupAvatar(picked.map { AvatarFace(it.avatarShape, it.avatarColor, it.status) }, 80.dp) },
+        group = true, busyKey = "stage-group") {
+        GroupMemberPicker(candidates, picked, state.bots) { bot ->
+            // 角色退出后清空同一成员的负责人选择。
+            if (bot.id in roles) {
+                roles = roles - bot.id
+                if (leader == bot.id) leader = null
+            } else roles = roles + (bot.id to StageGroupDraft.Role(bot.id, bot.rev, bot.description))
+        }
+        GroupBotPicker(picked, state.bots, selectedLead?.id, "Group lead") { leader = it }
+        FieldBox(goal, { goal = it }, if (optional) "Stage goal (optional)" else "Stage goal",
+            minLines = 2, maxLines = 5, fill = Palette.surface)
+        FieldBox(acceptance, { acceptance = it }, if (optional) "Acceptance criteria (optional)" else "Acceptance criteria",
+            minLines = 2, maxLines = 5, fill = Palette.surface)
+        if (group.stage != null) {
+            if (handoff == null) {
+                Text(tr("Review and accept a handoff in Stage details first."), style = Type.footnote, color = Palette.secondary)
+            } else {
+                CodyncSwitch(accepted, { on -> handoffVersion = handoff.file.id.takeIf { on } }) {
+                    Text(tr("Use accepted handoff") + " · " + handoff.file.sha256.take(12), style = Type.body)
                 }
             }
-            Text(tr("New bots start with their own workspace and Codync shared memory off."), style = Type.footnote, color = Palette.secondary)
-            Text(tr("Keep only stable instructions for the selected roles."), style = Type.footnote, color = Palette.secondary)
-            for (bot in group.memberBots(state.bots)) {
-                val role = roles[bot.id]
-                // 取消角色时清理负责人，要求用户重新选择。
-                CodyncSwitch(role != null, { on ->
-                    if (!on && leader == bot.id) leader = ""
-                    roles = if (on) roles + (bot.id to StageGroupDraft.Role(bot.id, bot.rev, bot.description)) else roles - bot.id
-                }, enabled = !saving) { Text(bot.name, style = Type.body) }
-                if (role != null) {
+        }
+        Row(Modifier.fillMaxWidth().background(Palette.surface, RoundedCornerShape(12.dp))
+            .clickable(enabled = picked.isNotEmpty()) { editingRole = picked.firstOrNull()?.id }.padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically) {
+            Text(tr("Role settings"), style = Type.body, color = if (picked.isEmpty()) Palette.secondary else Palette.text)
+            Spacer(Modifier.weight(1f))
+            Symbol("chevron.right", size = 12.dp, tint = Palette.secondary)
+        }
+    }
+    CodyncSheet(editingRole != null, { editingRole = null }) {
+        val bot = picked.firstOrNull { it.id == editingRole }
+        val role = bot?.let { roles[it.id] }
+        Column(Modifier.fillMaxSize().background(Palette.background)) {
+            ModalHeader("Role settings")
+            Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                GroupBotPicker(picked, state.bots, editingRole, "Role settings", showsLabel = false) { editingRole = it }
+                if (bot != null && role != null) {
                     Text(listOfNotNull(bot.backend, bot.model).joinToString(" · "), style = Type.caption, color = Palette.secondary)
-                    PlainTextField(role.description, { roles = roles + (bot.id to role.copy(description = it)) },
-                        Modifier.fillMaxWidth(), "Role instructions", maxLines = 6)
+                    Text(tr("Keep only stable instructions for the selected roles."), style = Type.footnote, color = Palette.secondary)
+                    FieldBox(role.description, { roles = roles + (bot.id to role.copy(description = it)) },
+                        "Role instructions", minLines = 3, maxLines = 8, fill = Palette.surface)
                     if (bot.cwd.isNotEmpty() && !bot.managedWorkspace) {
-                        CodyncSwitch(role.reuseProject, { reuse -> roles = roles + (bot.id to role.copy(reuseProject = reuse)) },
-                            enabled = !saving) { Text(tr("Reuse project folder"), style = Type.body) }
+                        CodyncSwitch(role.reuseProject, { reuse -> roles = roles + (bot.id to role.copy(reuseProject = reuse)) }) {
+                            Text(tr("Reuse project folder"), style = Type.body)
+                        }
                         Text(bot.cwd, style = Type.caption, color = Palette.secondary)
                     }
+                    Text(tr("New bots start with their own workspace and Codync shared memory off."), style = Type.footnote, color = Palette.secondary)
                     if (bot.stageMemoryShared == true) {
                         Text(tr("This agent shares its own memory across sessions."), style = Type.caption, color = Palette.secondary)
                     }
-                    LinkButton(if (leader == bot.id) "Stage lead" else "Set as stage lead", enabled = !saving && leader != bot.id) {
-                        leader = bot.id
-                    }
                 }
-            }
-            state.error?.let { Text(tr(it), style = Type.footnote, color = Palette.danger) }
-            PrimaryButton(if (saving) "Creating…" else "Create stage group", enabled = !saving && leader.isNotEmpty() &&
-                name.isNotBlank() && goal.isNotBlank() && acceptance.isNotBlank() && (group.stage == null || handoffVersion != null)) {
-                // 固定来源成员顺序和请求 ID，保留失败后的安全重试。
-                val draft = StageGroupDraft(group.id, requestId, name, goal, acceptance, leader,
-                    group.members.mapNotNull(roles::get), handoffVersion)
-                store.createStageGroup(draft) { dismiss() }
             }
         }
     }
@@ -170,7 +196,7 @@ import kotlinx.coroutines.launch
                 SecondaryButton(if (closed) "Reopen stage" else "Close stage", enabled = !busy && (closed || !pending)) {
                     scope.launch { load(StageChange(botId, if (closed) "reopen" else "close")) }
                 }
-                if (!closed && current.bot.lastMessage == null && state.drafts[botId]?.text.isNullOrEmpty()) {
+                if (current.initialDraft.isNotEmpty() && !closed && current.bot.lastMessage == null && state.drafts[botId]?.text.isNullOrEmpty()) {
                     SecondaryButton("Restore first draft") {
                         store.editDraft(botId, current.initialDraft)
                         store.openBot(botId)

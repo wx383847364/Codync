@@ -94,11 +94,20 @@ fun AppStore.saveGroup(draft: GroupDraft, onSaved: () -> Unit) = action("editor"
 }
 
 /** 创建独立会话群，将 Host 返回的新群加入名单并打开聊天。 */
-fun AppStore.createGroupSession(botId: String) = action("groupSession:$botId") {
-    // 创建请求直接发送一次，断线时沿用现有错误提示。
-    val response = ready().call("createGroupSession", body("botId" to botId))
+fun AppStore.createGroupSession(botId: String, members: List<String>? = null, leader: String? = null,
+    saved: () -> Unit = {}) = action("groupSession:$botId") {
+    // 旧入口省略 selection，新表单传入确认的名单与可选负责人。
+    val payload = buildJsonObject {
+        put("botId", botId)
+        if (members != null) put("selection", buildJsonObject {
+            put("members", JsonArray(members.map(::JsonPrimitive)))
+            leader?.let { put("groupLeaderId", it) }
+        })
+    }
+    val response = ready().call("createGroupSession", payload)
     receiveReply(response)
     openBot(response.jsonObject.getValue("bot").jsonObject.getValue("id").jsonPrimitive.content)
+    saved()
 }
 
 /** 创建已确认的阶段群，保存首条草稿并打开，失败沿用 Store 的错误反馈。 */

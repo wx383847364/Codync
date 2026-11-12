@@ -23,6 +23,10 @@ impl App {
         if b.group {
             self.overlays.push(Overlay::Group(GroupForm {
                 group_id: Some(b.id.clone()),
+                session_source: None,
+                query: Editor::default(),
+                leader: b.group_leader().map(str::to_owned),
+                show_leader: false,
                 name: Editor::with(&b.name),
                 about: Editor::with(&b.description),
                 members: b.members.clone(),

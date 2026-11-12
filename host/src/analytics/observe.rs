@@ -61,7 +61,7 @@ pub fn observe(caller: &Caller, method: &str, b: &Value) -> Option<(Event, Map<S
 }
 
 /// The rest of `observe`: one arm per method.
-/// 复制群会话沿用建群事件，只添加操作来源。
+/// 记录建群入口和是否设置负责人，避免收集成员身份。
 fn call_event(method: &str, b: &Value, p: &mut Map<String, Value>) -> Option<Event> {
     Some(match method {
         "setCloudUrl" => {
@@ -76,6 +76,7 @@ fn call_event(method: &str, b: &Value, p: &mut Map<String, Value>) -> Option<Eve
             p.insert("kind".into(), (if group { "group" } else { "bot" }).into());
             if group {
                 p.insert("members".into(), b["members"].as_array().map_or(0, Vec::len).into());
+                p.insert("group_lead_set".into(), b["groupLeaderId"].is_string().into());
             } else {
                 p.insert("agent".into(), b["backend"].clone());
                 p.insert("model".into(), b["model"].clone());
@@ -84,6 +85,10 @@ fn call_event(method: &str, b: &Value, p: &mut Map<String, Value>) -> Option<Eve
         }
         "createGroupSession" | "createStageGroup" => {
             p.insert("kind".into(), "group".into());
+            if b["selection"].is_object() {
+                p.insert("members".into(), b["selection"]["members"].as_array().map_or(0, Vec::len).into());
+                p.insert("group_lead_set".into(), b["selection"]["groupLeaderId"].is_string().into());
+            }
             p.insert(
                 "source".into(),
                 (if method == "createStageGroup" { "stage_group" } else { "group_session" }).into(),

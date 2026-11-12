@@ -92,6 +92,9 @@ pub struct BotConfig {
     /// A group's bots, in the order they were added.
     #[serde(default)]
     pub members: Vec<String>,
+    /// 普通群默认接收消息的成员 ID。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group_leader_id: Option<String>,
     /// 新会话群的编号基名。存在时，成员按群使用独立的模型会话。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) group_session_base: Option<String>,
@@ -191,6 +194,18 @@ pub struct BotConfig {
 }
 
 impl BotConfig {
+    /// 返回当前群的默认负责人，阶段群继续使用阶段内的身份。
+    pub(crate) fn group_leader(&self) -> Option<&str> {
+        self.stage.as_ref().map(|stage| stage.leader_id.as_str()).or(self.group_leader_id.as_deref())
+    }
+
+    /// 普通群的负责人离群时，同时清除其默认接收身份。
+    pub(crate) fn clear_departed_group_leader(&mut self) {
+        if self.group_leader_id.as_ref().is_some_and(|id| !self.members.contains(id)) {
+            self.group_leader_id = None;
+        }
+    }
+
     pub fn is_group(&self) -> bool {
         self.kind == BotKind::Group
     }

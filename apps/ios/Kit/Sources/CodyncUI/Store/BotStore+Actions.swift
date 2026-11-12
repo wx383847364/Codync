@@ -359,9 +359,10 @@ extension BotStore {
         perform(replay: true) { try await $0.deleteBot(bot.id) }
     }
 
-    /// Creates a group chat (or opens the one these bots already share) and selects it.
-    public func createGroup(name: String, description: String = "", members: [String]) async throws -> Bot {
-        let group = putHostBot(try await ready().createGroup(GroupDraft(name: name, description: description, members: members)))
+    /// 创建匹配名单和负责人的群聊并打开。
+    public func createGroup(name: String, description: String = "", members: [String], groupLeaderId: String? = nil) async throws -> Bot {
+        let draft = GroupDraft(name: name, description: description, members: members, groupLeaderId: groupLeaderId)
+        let group = putHostBot(try await ready().createGroup(draft))
         selection = group.id
         return group
     }
@@ -372,6 +373,12 @@ extension BotStore {
         perform { client in
             self.selection = self.putHostBot(try await client.createGroupSession(botId)).id
         }
+    }
+
+    /// 提交新会话表单，失败由表单保留选择和展示错误。
+    func saveGroupSession(_ botId: String, members: [String], groupLeaderId: String?) async throws {
+        let bot = try await ready().createGroupSession(botId, members: members, groupLeaderId: groupLeaderId)
+        selection = putHostBot(bot).id
     }
 
     /// 将阶段群加入名单，预填首次任务并打开群。现有草稿优先。

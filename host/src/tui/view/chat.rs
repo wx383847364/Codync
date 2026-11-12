@@ -169,13 +169,10 @@ pub(super) fn chat(buf: &mut Buffer, r: Rect, app: &mut App, narrow: bool) {
             .to_owned()
         } else if app.reply.is_some() {
             tr("Reply…").into_owned()
-        } else if let Some(stage) = &b.stage {
-            let lead = &stage.leader_id;
-            // 默认负责人失效时提醒明确选人，不显示全体接收。
-            app.bots.get(lead).filter(|_| b.members.contains(lead)).map_or_else(
-                || tr("Choose a recipient with @").into_owned(),
-                |bot| tr("Ask {name} · @ to choose another recipient").replace("{name}", &bot.name),
-            )
+        } else if let Some(lead) = b.group_leader().and_then(|id| app.bots.get(id)) {
+            tr("Ask {name} · @ to choose another recipient").replace("{name}", &lead.name)
+        } else if b.stage.is_some() {
+            tr("Choose a recipient with @").into_owned()
         } else if b.group {
             tr("Ask everyone · @ to ask one bot").into_owned()
         } else {
@@ -219,12 +216,11 @@ pub(super) fn chat(buf: &mut Buffer, r: Rect, app: &mut App, narrow: bool) {
     if !draft.text.is_empty()
         && app.reply.is_none()
         && strip_top > top + 1
-        && let Some(stage) = &b.stage
+        && (b.group_leader().is_some() || b.stage.is_some())
     {
-        let lead = &stage.leader_id;
         // 草稿有正文时仍显示默认接收范围，保留已有任务队列的显示位置。
         strip_top -= 1;
-        let label = app.bots.get(lead).filter(|_| b.members.contains(lead)).map_or_else(
+        let label = b.group_leader().and_then(|id| app.bots.get(id)).map_or_else(
             || tr("Choose a recipient with @").into_owned(),
             |bot| tr("Default recipient · {name}").replace("{name}", &bot.name),
         );

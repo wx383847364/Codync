@@ -19,7 +19,9 @@ struct Draft {
     bot_id: String,
     request_id: String,
     name: String,
+    #[serde(default)]
     goal: String,
+    #[serde(default)]
     acceptance: String,
     leader_id: String,
     roles: Vec<Role>,
@@ -105,10 +107,8 @@ impl Hub {
                 "a stage name is required (512 bytes maximum)"
             );
             ensure!(
-                !draft.goal.trim().is_empty()
-                    && !draft.acceptance.trim().is_empty()
-                    && draft.goal.len() + draft.acceptance.len() <= 24_000,
-                "a goal and acceptance criteria are required (24,000 bytes combined)"
+                draft.goal.len() + draft.acceptance.len() <= 24_000,
+                "goal and acceptance criteria exceed 24,000 bytes combined"
             );
             let source = self
                 .store
@@ -437,7 +437,13 @@ fn stage_result(bot: &Value, members: &[String], replayed: bool) -> Value {
 
 /// 从持久阶段信息重建首条草稿，调用方可在断线后恢复该内容。
 fn initial_draft(goal: &str, acceptance: &str) -> String {
-    format!("{goal}\n\nAcceptance criteria\n{acceptance}")
+    let goal = goal.trim();
+    let acceptance = acceptance.trim();
+    match (goal.is_empty(), acceptance.is_empty()) {
+        (_, true) => goal.to_owned(),
+        (true, false) => format!("Acceptance criteria\n{acceptance}"),
+        (false, false) => format!("{goal}\n\nAcceptance criteria\n{acceptance}"),
+    }
 }
 
 /// 证据引用固定在交接文件里，下一阶段读取的是同一个版本。

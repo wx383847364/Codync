@@ -3,12 +3,21 @@
 use super::{BotStatus, Hub, Runtime};
 use crate::LockExt;
 use crate::store::BotConfig;
-use anyhow::{Result, anyhow};
+use anyhow::{Result, anyhow, ensure};
+use serde::Deserialize;
 use serde_json::{Value, json};
 
+/// 新会话的显式成员选择。省略整个对象时沿用来源群配置。
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct GroupSessionSelection {
+    members: Vec<String>,
+    group_leader_id: Option<String>,
+}
+
 impl Hub {
-    /// 沿用来源成员与顺序开启独立会话，阶段工作流仍属于来源群。
-    pub fn create_group_session(&self, id: &str) -> Result<Value> {
+    /// 从来源群开启独立会话，编号与确认后的成员配置在同一锁内保存。
+    pub(crate) fn create_group_session(&self, id: &str, selection: Option<GroupSessionSelection>) -> Result<Value> {
         let bot = {
             // 在同一把锁下读取、分配编号、保存和广播，避免多端创建同名或看到过期名单。
             let _guard = self.emit_lock.locked();
@@ -38,11 +47,26 @@ impl Hub {
                 .ok_or_else(|| anyhow!("group session number exhausted"))?;
             cfg.group_session_base = Some(base);
             cfg.stage = None;
+            // 旧客户端没有提交选择。新客户端可明确选择空负责人或调整成员。
+            let explicit = selection.is_some();
+            if let Some(selection) = selection {
+                cfg.members = selection.members;
+                cfg.group_leader_id = selection.group_leader_id;
+            }
             cfg.id = uuid::Uuid::new_v4().to_string();
             cfg.created_at = crate::store::now_ms();
             cfg.position = self.new_bot_position()?;
             cfg.hidden = false;
-            cfg.members = crate::chat::group::valid_members(&self.store, &cfg.id, &cfg.members)?;
+            let members = crate::chat::group::valid_members(&self.store, &cfg.id, &cfg.members)?;
+            ensure!(!explicit || members == cfg.members, "A member is no longer available. Remove it before saving.");
+            cfg.members = members;
+            if explicit {
+                ensure!(
+                    cfg.group_leader_id.as_ref().is_none_or(|id| cfg.members.contains(id)),
+                    "Choose a lead from the selected members."
+                );
+            }
+            cfg.clear_departed_group_leader();
             self.store.save_bot(&cfg)?;
             let bot = self.bot_value(&cfg.id).ok_or_else(|| anyhow!("new group could not be read"))?;
             let _ = self.events.send(json!({"type":"bot","rev":bot["rev"],"bot":bot}));
@@ -99,6 +123,7 @@ impl Hub {
                 match self.store.bot(&group)?.filter(|r| !r.deleted) {
                     Some(mut row) if row.config.members.iter().any(|m| m == id) => {
                         row.config.members.retain(|m| m != id);
+                        row.config.clear_departed_group_leader();
                         self.store.save_bot(&row.config)?;
                         true
                     }
@@ -137,7 +162,7 @@ mod tests {
         let create = || {
             // 两个阻塞请求同时提交，必须各自得到新的群记录。
             let hub = hub.clone();
-            tokio::task::spawn_blocking(move || hub.create_group_session("g").unwrap())
+            tokio::task::spawn_blocking(move || hub.create_group_session("g", None).unwrap())
         };
         let (a, b) = tokio::join!(create(), create());
         let groups = [a.unwrap(), b.unwrap()];
@@ -151,12 +176,12 @@ mod tests {
             assert_eq!(group["section"], "Work");
             assert!(hub.store.history(group["id"].as_str().unwrap(), i64::MAX, 10).unwrap().is_empty());
         }
-        assert_eq!(hub.create_group_session(groups[0]["id"].as_str().unwrap()).unwrap()["name"], "Crew 3");
+        assert_eq!(hub.create_group_session(groups[0]["id"].as_str().unwrap(), None).unwrap()["name"], "Crew 3");
         assert_eq!(
-            crate::chat::group::with_members(&hub.store, &["a".into(), "b".into()]).unwrap().as_deref(),
+            crate::chat::group::with_members(&hub.store, &["a".into(), "b".into()], None).unwrap().as_deref(),
             Some("g")
         );
-        assert!(hub.create_group_session("a").is_err());
+        assert!(hub.create_group_session("a", None).is_err());
         std::fs::remove_dir_all(dir).unwrap();
     }
 

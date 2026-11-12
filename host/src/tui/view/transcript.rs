@@ -5,6 +5,7 @@ use ratatui::text::{Line, Span};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use super::super::app::{App, Bot, Click, Entry, Exchange, Item, Kind, Outcome, Status, group};
+use super::super::l10n::tr;
 use super::super::md::{self, truncate, width as w};
 use super::buffer::u;
 use super::chat::with_bg;
@@ -116,8 +117,13 @@ fn intro(out: &mut Built, app: &App, b: &Bot, width: usize) {
         let names: Vec<String> = b.members.iter().map(|m| app.author_name(Some(m))).collect();
         (
             format!("group · {}", names.join(", ")),
-            "Everyone answers in turn unless you @mention someone. Each bot works in its own folder with its own tools."
-                .to_owned(),
+            b.group_leader().and_then(|id| app.bots.get(id)).map_or_else(
+                || {
+                    tr(if b.stage.is_some() { "Choose a recipient with @" } else { "Ask everyone · @ to ask one bot" })
+                        .into_owned()
+                },
+                |bot| tr("Ask {name} · @ to choose another recipient").replace("{name}", &bot.name),
+            ),
         )
     } else {
         (
