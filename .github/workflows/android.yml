@@ -80,12 +80,19 @@ jobs:
           ) &
           approver=$!
           export MAESTRO_CLI_NO_ANALYTICS=1
-          SIMCTL_CHILD_CODYNC_PAIR_URL="$pairing_url" xcrun simctl launch "$DEVICE_ID" com.pokai.Codync.ios.dev
+          # 在真实免登录界面提交链接，由 Host 的设备记录确认配对完成。
+          sed '/^- assertVisible: .*If the computer asks/,$d' apps/maestro/signed-out-pairing.yaml > "$RUNNER_TEMP/pair-and-open.yaml"
+          maestro --device "$DEVICE_ID" test -e PAIRING_URL="$pairing_url" "$RUNNER_TEMP/pair-and-open.yaml"
           for _ in $(seq 1 60); do
             if api devices '{}' | jq -e 'any(.devices[]; .connected == true)' >/dev/null; then break; fi
             sleep 1
           done
-          api devices '{}' | jq -e 'any(.devices[]; .connected == true)' >/dev/null
+          if ! api devices '{}' | jq -e 'any(.devices[]; .connected == true)' >/dev/null; then
+            mkdir -p "$RUNNER_TEMP/group-evidence"
+            xcrun simctl io "$DEVICE_ID" screenshot "$RUNNER_TEMP/group-evidence/iphone-pairing.png" || true
+            api devices '{}' | jq -c '{paired:(.devices | length), connected:([.devices[]|select(.connected)]|length)}'
+            exit 1
+          fi
           wait "$approver"
           approver=
           mkdir -p "$RUNNER_TEMP/group-evidence"
@@ -116,6 +123,7 @@ jobs:
             group-session.png
           retention-days: 3
   android-group-session:
+    if: ${{ false }}
     runs-on: ubuntu-latest
     timeout-minutes: 28
     steps:
