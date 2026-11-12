@@ -11,6 +11,9 @@ use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+/// 投递来源中记录发起人需要处理最终结果，重启后保持相同回传意图。
+pub(crate) const TOOL_RETURN: &str = "tool_return";
+
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum Kind {
@@ -138,6 +141,7 @@ pub(super) fn eligible(c: &Connection, room: &str, target: &str, source: Option<
 
 /// 同一写事务内分配顺序、写入投递，避免跨房间或重试分配冲突。
 fn insert(c: &Connection, delivery: &Delivery) -> Result<Delivery> {
+    ensure!(!super::bots::stage_closed(c, &delivery.room_id)?, "This stage is closed. Reopen it to send work.");
     ensure!(
         eligible(c, &delivery.room_id, &delivery.target_bot_id, delivery.source_bot_id.as_deref())?,
         "成员已不在群内"
@@ -270,7 +274,7 @@ impl Store {
             .collect::<rusqlite::Result<_>>()?)
     }
 
-    /// 用户 entry 与全部 speak 在同一事务提交，提交失败不会留下半条指派。
+    /// 在投递事务内绑定阶段群负责人，并一次提交消息与所有目标。
     pub fn post_group(&self, room: &str, data: &Value, targets: &[String]) -> Result<(Entry, Vec<Entry>)> {
         let mut c = self.db.locked();
         let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -289,8 +293,48 @@ impl Store {
         {
             return Ok((entry, vec![]));
         }
+        ensure!(
+            tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM bots WHERE id=? AND deleted=0 AND json_extract(config,'$.kind')='group')",
+                [room],
+                |r| r.get::<_, bool>(0)
+            )?,
+            "The group is no longer available."
+        );
+        let stage = super::bots::room_stage(&tx, room)?;
+        ensure!(
+            stage.as_ref().is_none_or(|stage| stage.closed_at.is_none()),
+            "This stage is closed. Reopen it to send work."
+        );
+        let leader = stage.as_ref().filter(|_| targets.is_empty()).map(|stage| vec![stage.leader_id.clone()]);
+        if let Some(ids) = &leader {
+            // 引用已离群成员的定向回复不能隐式改发给负责人。
+            ensure!(
+                data["replyTo"]["author"].as_str().is_none_or(|author| author == "user"),
+                "The quoted member is unavailable. Choose a recipient with @."
+            );
+            ensure!(eligible(&tx, room, &ids[0], None)?, "The stage lead is unavailable. Choose a recipient with @.");
+        }
+        let targets = leader.as_deref().unwrap_or(targets);
+        let mut data = data.clone();
+        // 首次主动发送携带已确认的交接副本；历史、查看交接和重复发送不创建工作。
+        if let Some(crate::store::StageGroup { incoming: Some(file), incoming_files, .. }) = stage
+            && !tx.query_row("SELECT EXISTS(SELECT 1 FROM entries WHERE bot_id=? AND kind='user')", [room], |r| {
+                r.get::<_, bool>(0)
+            })?
+        {
+            crate::chat::files::read_markdown(room, &file)?;
+            data["stageHandoff"] = serde_json::to_value(file)?;
+            if !incoming_files.is_empty() {
+                for file in &incoming_files {
+                    crate::chat::files::readable_path(room, file)?;
+                }
+                data["stageEvidence"] = serde_json::to_value(incoming_files)?;
+            }
+        }
+        data["resolvedMentions"] = serde_json::json!(targets);
         let turn = tx.query_row("SELECT COALESCE(MAX(turn),0)+1 FROM entries WHERE bot_id=?", [room], |r| r.get(0))?;
-        let entry = completion::entry(&tx, &uuid::Uuid::new_v4().to_string(), room, EntryKind::User, turn, data)?;
+        let entry = completion::entry(&tx, &uuid::Uuid::new_v4().to_string(), room, EntryKind::User, turn, &data)?;
         let mut cards = Vec::new();
         for target in targets {
             insert(&tx, &Delivery::speak(room, &entry.id, target))?;
@@ -310,7 +354,10 @@ impl Store {
             let original = tx.query_row(&format!("SELECT {COLS} FROM deliveries WHERE source_bot_id=?1 AND room_id=?2 AND target_bot_id=?3 AND idempotency_key=?4"),
                 params![request.source_bot_id,request.room_id,request.target_bot_id,key], row).optional()?;
             if let Some(original) = original {
-                ensure!(original.body == request.body, "幂等键已用于另一个任务");
+                ensure!(
+                    original.body == request.body && original.source_kind == request.source_kind,
+                    "幂等键已用于另一个任务"
+                );
                 let card = completion::card(&tx, &original)?;
                 tx.commit()?;
                 return Ok((original, card));
@@ -341,6 +388,7 @@ impl Store {
         if delivery.status != Status::Queued || delivery.target_bot_id != bot {
             return Ok((None, vec![]));
         }
+        ensure!(!super::bots::stage_closed(&tx, &delivery.room_id)?, "This stage is closed. Reopen it to send work.");
         if !eligible(&tx, &delivery.room_id, bot, delivery.source_bot_id.as_deref())? {
             tx.execute("UPDATE deliveries SET status='cancelled',finished_at=?2,last_error='已不在群内' WHERE id=?1 AND status='queued'", params![id,now_ms()])?;
             let card = completion::card(&tx, &delivery)?;
@@ -395,6 +443,7 @@ impl Store {
         let mut c = self.db.locked();
         let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let Some(d) = get(&tx, id)? else { return Ok((false, vec![])) };
+        ensure!(!super::bots::stage_closed(&tx, &d.room_id)?, "This stage is closed. Reopen it to send work.");
         if !eligible(&tx, &d.room_id, bot, d.source_bot_id.as_deref())? {
             bail!("已不在群内");
         }
@@ -440,6 +489,7 @@ impl Store {
         let mut c = self.db.locked();
         let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let mut d = get(&tx, id)?.ok_or_else(|| anyhow::anyhow!("unknown delivery"))?;
+        ensure!(!super::bots::stage_closed(&tx, &d.room_id)?, "This stage is closed. Reopen it to send work.");
         ensure!(matches!(d.status, Status::Failed | Status::Interrupted | Status::NoReply), "投递不可重试");
         if let Some(existing) = tx
             .query_row(

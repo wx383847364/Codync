@@ -36,6 +36,10 @@ impl App {
                     .iter()
                     // 操作作用于当前聊天中的群，普通机器人没有该入口。
                     .filter(|(_, _, action)| *action != Action::NewGroupSession || self.selected_group_id().is_some())
+                    .filter(|(_, _, action)| *action != Action::NewStageGroup || self.stage_source().is_some())
+                    .filter(|(_, _, action)| {
+                        *action != Action::StageDetails || self.stage_source().is_some_and(|bot| bot.stage.is_some())
+                    })
                     .filter(|(label, _, _)| {
                         let translated = super::super::l10n::tr(label);
                         fuzzy(q, &[label, translated.as_ref()])
@@ -52,6 +56,8 @@ impl App {
             Action::NewBot => self.new_bot(),
             Action::NewGroup => self.new_group(),
             Action::NewGroupSession => self.create_group_session(),
+            Action::NewStageGroup => self.open_stage_group(),
+            Action::StageDetails => self.open_stage_details(),
             Action::Market => self.open_market(),
             Action::Memory => self.open_memory(),
             Action::Details => self.open_routines(),
@@ -123,6 +129,8 @@ impl App {
             Overlay::Folder(p) => self.folder_key(p, k),
             Overlay::Form(f) => self.form_key(f, k),
             Overlay::Group(g) => self.group_key(g, k),
+            Overlay::StageGroup(g) => self.stage_group_key(g, k),
+            Overlay::StageDetails(g) => self.stage_details_key(g, k),
             Overlay::Memory(m) => self.memory_key(m, k),
             Overlay::BotChat(c) => Self::bot_chat_key(c, k),
             Overlay::DevServers(sheet) => self.dev_servers_key(sheet, k),

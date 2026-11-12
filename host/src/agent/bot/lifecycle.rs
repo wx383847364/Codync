@@ -119,6 +119,7 @@ impl Actor {
         }
     }
 
+    /// 回收已结束的会话能力和确认模型，避免后续重用会话 ID 时沿用旧归属。
     async fn close_session(&mut self, sid: &str) {
         let closed = self.session_request("session/close", json!({ "sessionId": sid })).await;
         let Some(conn) = self.conn.as_mut() else { return };
@@ -130,6 +131,7 @@ impl Actor {
                 conn.modes.remove(sid);
                 conn.mode_set.remove(sid);
                 conn.usage.remove(sid);
+                conn.confirmed_models.remove(sid);
                 conn.renamed.remove(sid);
                 self.applied_system.remove(sid);
             }

@@ -35,6 +35,10 @@ quotes itself.
 | `send` | `botId, text, clientNonce, replyTo?, mentions?: [{botId,start,end}]` | `botId` is a bot or a group. `replyTo`: the id of a user message or final reply in that chat; anything else is refused. Works in the relay mailbox too. |
 | `createBot` | `{kind:"group", name, description?, members}` | Returns the existing ordinary group when these exact bots already share one. |
 | `createGroupSession` | `{botId}` | Opens a new, numbered group with the same settings and ordered member IDs. Its transcript starts empty and each member opens an independent agent session. |
+| `createStageGroup` | `{botId, requestId, name, goal, acceptance, leaderId, roles: [{botId, sourceRev, description, reuseProject}]}` | Creates a stage and its new bots in one transaction. `requestId` is a UUID. Identical retries return the live group, its first draft and `createdMembers`, the original ordered IDs. `sourceRev` binds the preview to the reviewed source settings. The lead is selected by its source bot ID and saved as its new bot ID. |
+| `stageDetails` | `{botId}` | Reads stage, delivery counts and pending items, handoff content, and the restorable first draft. |
+| `changeStage` | `{botId, action, markdown?, evidence?, previousVersion?, version?}` | `saveHandoff` writes an immutable Markdown snapshot. `accept` binds acceptance to its file ID. `close` and `reopen` control admissions. |
+| `stageUsage` | `{botId}` | Reads local delivery, attempt, observed ACP prompt, confirmed new session and process counts, provider-reported totals by backend/model, and coverage. |
 | `updateBot` | `{id, name?, members?, pinned?, hidden?, section?}` | A group can't become a bot or the reverse. `section`: a name, or `null` for none. |
 | `deleteBot` | `botId` | A group's bots stay. A deleted bot leaves its groups. |
 | `reorderBots` | `ids` | The roster as the user dragged it, top first; groups count as rows. See [bot order](computer-order.md#bot-order). |
@@ -60,7 +64,9 @@ full names take priority; compact names and first words must be unique. Unknown 
 is text, ambiguous names reject the send and keep the draft. Code fences, inline and
 indented code, quote lines, email and URLs do not dispatch. `@all` / `@everyone` expand to
 current members; quote replies include their author's target. A message without any
-assignment expression asks everyone. Stored history is never parsed again after renames.
+assignment expression asks everyone in ordinary and numbered session groups. In a stage
+group it asks the configured lead. If the lead has left, choose a recipient explicitly.
+Stored history is never parsed again after renames.
 
 Both `speak` and tool-created `task` deliveries share one wait slot per original user
 message, up to ten minutes. While a member works on an earlier message in the same group,
@@ -139,6 +145,54 @@ Host allocates the number while saving the new group. For these groups the agent
 session belongs to the room, member and backend. Session creation, resume, and context
 maintenance use that identity. Private chat handoffs stay in the main session, and bots
 continue to use their workspace and long-term memory.
+
+Clients show **Create next stage group** when `hello.stageGroups` is true. The stage name,
+goal, acceptance criteria, confirmed role instructions and chosen lead are captured before
+opening the empty chat with its first draft. Sending that draft is a separate user action.
+Each role has a new bot ID and a new managed workspace by default. An existing project
+directory can be selected explicitly. Role configuration, public skills and currently
+authorized connectors can carry over. New roles begin with Codync shared memory and
+supported agent memory switches off. The agent's own global memory still applies on
+backends that manage it independently. A role with a custom launch command requires a
+standard backend configuration before it can be used here. Each role's stage session
+is scoped to the stage room, separate from any private chat opened for that role.
+
+In a stage, `message_bot` accepts `returnResult: true` when the sender needs to continue
+with the result. A successful final result schedules the sender once, including when the
+result mentions it. Failed, cancelled and passed tasks remain visible on their cards.
+
+The **Stage details** sheet shows pending deliveries and recorded outcomes. A user saves
+the handoff as Markdown and records a durable evidence reference before accepting that
+version. **Close stage** requires an empty active queue and works independently of
+acceptance. The check and stage state update share a write transaction with delivery
+admission. A closed stage keeps its history, handoff and late records. Reopening lets the
+user send or explicitly retry without changing previous terminal states.
+
+To create a stage from another stage, the user selects its accepted handoff version.
+The host copies that immutable snapshot into the new room. The first user message
+references that copy as context, under the new task's authorization. The working agent
+receives the path and hash. Users can select files already shared to the source room
+as evidence. The Host checks their versions and copies the selected snapshots to the
+new room so they can be opened after the old files or chat are removed. The new roles
+start without the previous transcript. The
+**Restore first draft** action is available before a stage has any messages.
+
+**Stage usage** reads local execution observations. A delivery can have several
+attempts after retry or fallback. An attempt that fails during setup can have a
+process start and zero observed prompts. One ACP prompt may result in several
+provider calls. The Host records the actual session model when it is known and
+keeps attempts interrupted by a restart. The count of started deliveries without
+an attempt and the recording start date expose gaps in historical coverage.
+
+Token fields come from the final response of each observed attempt and are grouped
+by backend and model. The reports count beside a field is how many of those attempts
+reported it. Unavailable fields, observed zero values and interrupted attempts are
+distinct. Input, cache and reasoning fields may overlap, so they are shown as received.
+Session-context estimates and account-window percentages remain separate. Unassigned
+counts cover the whole Host since observation began, including private chats, routines,
+and coordination. Bot actor attempts are observed. Background one-shot jobs and account
+probes are outside this ledger. The SQLite
+`turn_usage_attempts` table stores local attempt details without prompts or tool content.
 
 On result storage failure, the actor retains its in-memory output and stops claiming.
 It retries every three seconds five times, then waits for `retryDeliverySave {botId}`.

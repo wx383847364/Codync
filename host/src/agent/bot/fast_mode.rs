@@ -17,9 +17,10 @@ pub(super) enum Listing {
 }
 
 impl Actor {
-    /// Records a session's options from an agent answer or a `config_option_update`: its modes, and Fast mode.
+    /// 记录实际会话模型、模式及快模式能力，统计不回退到推测的默认模型。
     pub(super) fn note_options(&mut self, sid: &str, options: &Value, listing: Listing) {
         self.note_modes(sid, options);
+        self.note_usage_model(sid, options);
         if !options["configOptions"].is_array() {
             // A session without config options has no Fast mode to offer; other answers that
             // leave them out say nothing, and neither overrides what the agent listed before.

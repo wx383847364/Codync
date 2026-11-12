@@ -65,6 +65,7 @@
     "event:bot.bot.selfFallbacks": "bool",
     "event:bot.bot.sharedMemory": "bool",
     "event:bot.bot.skills": "array",
+    "event:bot.bot.stageMemoryShared": "bool",
     "event:bot.bot.startedAt": "null",
     "event:bot.bot.status": "string",
     "event:bot.bot.storageError": "null",
@@ -242,6 +243,7 @@
     "hello.os": "string",
     "hello.rev": "number",
     "hello.signKey": "string",
+    "hello.stageGroups": "bool",
     "hello.version": "string"
   }
 }

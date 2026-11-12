@@ -26,6 +26,7 @@ mod order;
 mod patch;
 mod reactions;
 mod sections;
+mod stage_groups;
 mod sync;
 mod validate;
 pub(crate) use validate::validate;
@@ -174,6 +175,7 @@ impl Hub {
         // Approval cards and queued sends from a previous run can't be honored anymore.
         self.store.expire_pending()?;
         self.store.recover_deliveries()?;
+        self.store.interrupt_usage_attempts()?;
         crate::chat::memory::import_old_memory(self);
         self.routines.restore(&self.store)?;
         crate::market::turn_on_installed_once(&self.store)?;

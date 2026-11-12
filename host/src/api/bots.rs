@@ -113,6 +113,39 @@ pub(super) async fn call(hub: &Arc<Hub>, caller: &Caller, method: &str, b: Value
             let hub = hub.clone();
             json!({"bot": tokio::task::spawn_blocking(move || hub.create_group_session(&id)).await??})
         }
+        "createStageGroup" => {
+            // 用户发送前只返回草稿，连接器凭据由 Host 既有凭据库保管。
+            hub.create_stage_group(b).await?
+        }
+        "stageDetails" | "changeStage" => {
+            let room = str_arg(&b, "botId")?.to_owned();
+            let hub = hub.clone();
+            let editing = method == "changeStage";
+            // 交接快照读写在阻塞线程完成，关闭与调度的判断仍在同一数据库事务。
+            tokio::task::spawn_blocking(
+                move || {
+                    if editing { hub.change_stage(&room, b) } else { hub.stage_details(&room) }
+                },
+            )
+            .await??
+        }
+        "stageUsage" => {
+            let id = str_arg(&b, "botId")?;
+            let group = hub
+                .store
+                .bot(id)?
+                .filter(|row| !row.deleted && row.config.stage.is_some())
+                .ok_or_else(|| anyhow!("stage group not found"))?
+                .config;
+            let hub = hub.clone();
+            // 查询本机尝试及覆盖缺口，保持账户窗口读数的原有口径。
+            tokio::task::spawn_blocking(move || {
+                let mut usage = hub.store.stage_usage(&group.id)?;
+                usage["stageCreatedAt"] = group.created_at.into();
+                Ok::<_, anyhow::Error>(usage)
+            })
+            .await??
+        }
         // Bots from another app's export file on this computer (`import`).
         "previewImport" => crate::import::preview(&b).await?,
         "importBots" => crate::import::apply(hub, &b).await?,

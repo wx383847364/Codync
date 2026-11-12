@@ -49,7 +49,10 @@ impl Hub {
             );
         }
         ensure!(self.store.bot(bot)?.is_some_and(|author| !author.deleted), "bot was deleted");
-        let entry = self.store.insert_entry(lane, crate::store::EntryKind::Agent, turn, data)?;
+        // 保留发布时核验过的投递身份，使文件本身可以成为回传结果。
+        let mut data = data.clone();
+        data["deliveryId"] = id.into();
+        let entry = self.store.insert_entry(lane, crate::store::EntryKind::Agent, turn, &data)?;
         self.delivery_entries(std::slice::from_ref(&entry));
         Ok(entry)
     }
@@ -63,7 +66,8 @@ impl Hub {
         crate::analytics::capture(
             self,
             crate::analytics::Event::GroupDeliveryAccepted,
-            json!({"kind":"speak","source":"user","targets":targets.len()}).as_object().cloned().unwrap_or_default(),
+            json!({"kind":"speak","source":"user","targets":entry.data["resolvedMentions"].as_array().map_or(0, Vec::len)})
+                .as_object().cloned().unwrap_or_default(),
         );
         Ok(entry)
     }

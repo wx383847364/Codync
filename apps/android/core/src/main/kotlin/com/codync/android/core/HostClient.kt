@@ -14,6 +14,7 @@ data class Bot(
     val name: String = "",
     val kind: String = "agent",
     val members: List<String> = emptyList(),
+    val stage: StageGroup? = null,
     val description: String = "",
     val avatarColor: String = "blue",
     val avatarShape: String = "blob",
@@ -49,6 +50,7 @@ data class Bot(
     val harnessMemory: Boolean? = null,
     /** The harness keeps one memory for all its sessions that Codync can't turn off (Hermes Agent, Gemini CLI): every bot on it shares it. */
     val harnessMemoryShared: Boolean? = null,
+    val stageMemoryShared: Boolean? = null,
     /** Moves whenever memory changes, so an open memory screen fetches it again. */
     val memoryRev: Long? = null,
     val autoName: Boolean = false,

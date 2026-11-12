@@ -44,6 +44,8 @@ export function Composer({ botId, reply = null, about = null, cancelReply, onCal
   onInterrupt?: (() => void) | null
 }) {
   const store = useStore()
+  const tr = useTr()
+  if (store.bots.get(botId)?.stage?.closedAt) return <div className="composer">{tr('Stage closed')}</div>
   // Remount transient editor state (selection, attachments, IME) when its destination changes.
   return <DestinationComposer key={JSON.stringify([store.contextId, store.computer.id, botId, about?.id])}
     botId={botId} reply={reply} about={about} cancelReply={cancelReply} onCall={onCall} onInterrupt={onInterrupt} />
@@ -82,12 +84,17 @@ function DestinationComposer({ botId, reply, about, cancelReply, onCall, onInter
   const storageFailures = (bot && isGroup(bot) ? members.filter((member) => member.workingChat === botId) : bot ? [bot] : []).filter((member) => member.storageError)
 
   const name = bot?.name ?? ''
+  // 保留默认接收范围提示，首条草稿预填时也能看到。
+  const stageLead = members.find((member) => member.id === bot?.stage?.leaderId)
+  const stageRoute = stageLead ? tr('Default recipient · {name}').replace('{name}', stageLead.name) : tr('Choose a recipient with @')
   const placeholder = about
     ? tr('Message about “{title}”').replace('{title}', about.title)
     : reply
     ? tr('Reply…')
     : bot && isGroup(bot)
-      ? tr('Ask everyone · @ to ask one bot')
+      ? bot.stage
+        ? stageLead ? tr('Ask {name} · @ to choose another recipient').replace('{name}', stageLead.name) : tr('Choose a recipient with @')
+        : tr('Ask everyone · @ to ask one bot')
       : working
         ? tr('Queue a message for {name}').replace('{name}', name)
         : tr('Ask {name}').replace('{name}', name)
@@ -223,6 +230,7 @@ function DestinationComposer({ botId, reply, about, cancelReply, onCall, onInter
         <div className="composer-surface">
           <MentionMenu menu={{ ...mentionMenu, pick: mentionMenu.choose }} />
           <CommandMenu menu={commandMenu} />
+          {bot?.stage && draft && !reply && !about && <div className="composer-reply">{stageRoute}</div>}
           <ComposerReveal open={!!reply}>
             {reply ? (
               <HStack gap={4} className="composer-reply">

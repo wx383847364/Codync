@@ -24,6 +24,7 @@ import { queueVoiceKey } from './thread/voice-shortcut-keys'
 import { NewBotView, NewGroupView } from './bots/NewBotView'
 import { ImportBotsSheet } from './bots/ImportBotsView'
 import { BotEditorView } from './bots/BotEditorView'
+import { StageDetailsView, StageGroupView } from './bots/StageGroupView'
 import { MarketplaceView } from './marketplace/MarketplaceView'
 import { SignInCodeDialog } from './marketplace/ConnectorSheets'
 import { SettingsView, type SettingsPage } from './settings/SettingsView'
@@ -181,11 +182,7 @@ interface BotTarget {
   store: BotStore
 }
 
-interface EditTarget {
-  id: string
-  draft: BotDraft
-  store: BotStore
-}
+type EditTarget = { id: string; store: BotStore } & ({ draft: BotDraft } | { stage: Bot } | { stageDetails: Bot })
 
 /** A new bot or group chat being made, and the computer it goes to. */
 interface CreateTarget {
@@ -307,10 +304,19 @@ function ChatSplitView() {
     { title: 'Edit Profile…', icon: 'square.and.pencil', action: () => setEditing({ id: crypto.randomUUID(), draft: draftOf(bot), store }) },
     ...(bot.kind === 'group' && store.hasGroupSessions ? [{
       title: 'Create new group session',
+      detail: 'Reuse the same bots in a fresh chat.',
       icon: 'bubble.left.and.bubble.right',
       // 由 Host 复制成员和分配编号。
       action: () => store.createGroupSession(bot.id),
     }] : []),
+    // 复用资料弹层承载阶段预览，来源群及电脑在打开时固定。
+    ...(bot.kind === 'group' && store.hasStageGroups ? [{ title: 'Create next stage group', icon: 'person.2',
+      detail: !bot.stage ? 'Create new bots and choose a lead.'
+        : bot.stage.handoff?.acceptedAt ? 'Create new bots and use the accepted handoff.'
+          : 'Review and accept a handoff in Stage details first.',
+      action: () => setEditing({ id: crypto.randomUUID(), stage: bot, store }) }] : []),
+    ...(bot.stage && store.hasStageGroups ? [{ title: 'Stage details', icon: 'doc.text',
+      action: () => setEditing({ id: crypto.randomUUID(), stageDetails: bot, store }) }] : []),
     { title: 'Copy conversation ID', icon: 'square.on.square', action: () => window.codync.app.copy(bot.id) },
     ...makeLeadItems(bot, store),
     ...(bot.lead ? [] : [{ title: 'Hide from sidebar', icon: 'eye.slash', action: () => store.setHidden(bot, true) }]),
@@ -468,7 +474,8 @@ function ChatSplitView() {
       <Sheet open={editing !== null} onClose={() => setEditing(null)} width={520} height={Math.min(680, sheetHeight)}>
         {editing ? (
           <StoreContext.Provider value={editing.store}>
-            <BotEditorView key={editing.id} draft={editing.draft} />
+            {'stageDetails' in editing ? <StageDetailsView key={editing.id} botId={editing.stageDetails.id} />
+              : 'stage' in editing ? <StageGroupView key={editing.id} group={editing.stage} /> : <BotEditorView key={editing.id} draft={editing.draft} />}
           </StoreContext.Provider>
         ) : null}
       </Sheet>

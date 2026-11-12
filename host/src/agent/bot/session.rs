@@ -40,7 +40,8 @@ impl Actor {
             .bot(room)?
             .filter(|row| !row.deleted && row.config.is_group())
             .ok_or_else(|| anyhow!("group not found"))?;
-        Ok(row.config.group_session_base.is_some())
+        // 阶段实例也能在私聊使用，群会话不能被后来发生的私聊或普通群工作污染。
+        Ok(row.config.group_session_base.is_some() || row.config.stage.is_some())
     }
 
     /// 读取会话槽及连接中的所有者，避免复用另一群在新进程中占用的 ACP ID。
@@ -163,8 +164,7 @@ impl Actor {
         Ok(Value::Array(servers))
     }
 
-    /// Starts the agent one way: resolved first (a registry build can download), with the harness's own memory set
-    /// for the bot.
+    /// 按已选方式启动代理；新阶段的托管目录在实际运行前按已提交的身份建立。
     async fn start_candidate(
         &self,
         candidate: Candidate,
@@ -172,11 +172,19 @@ impl Actor {
         budget: Duration,
         progress: impl Fn(&str),
     ) -> Result<Conn> {
+        if crate::agent::workspace::is_managed(&self.cfg) {
+            tokio::fs::create_dir_all(&self.cfg.cwd).await.context("creating bot workspace")?;
+        }
         let mut command = [candidate.resolve(progress).await?.acp()];
         self.hub.set_runtime(&self.id(), |r| r.activity = "Starting agent…".into());
         let mut env = env.to_vec();
         own_memory::apply(&self.cfg, &mut env, &mut command).await;
-        let conn = start_agent(&command[0], &self.cfg.cwd, &env, budget).await.inspect_err(|e| {
+        let conn = start_agent(&command[0], &self.cfg.cwd, &env, budget, || {
+            // 已启动的进程即使随后握手失败也属于这次尝试。
+            self.usage_event(crate::store::turn_usage::UsageEvent::Process);
+        })
+        .await
+        .inspect_err(|e| {
             tracing::info!(command = command[0].as_str(), error = format!("{e:#}"), "agent failed to start");
         })?;
         self.hub.dev_servers.agent_started(&self.cfg.id, &conn.acp, &self.cfg.backend, &command[0]);
@@ -361,6 +369,9 @@ impl Actor {
             Instructions::FirstMessage => {}
         }
         let res = self.session_request("session/new", params).await?;
+        if res["sessionId"].is_string() {
+            self.usage_event(crate::store::turn_usage::UsageEvent::Session);
+        }
         let Some(conn) = self.conn.as_mut() else { bail!("agent not running") };
         let sid = res["sessionId"].as_str().ok_or_else(|| anyhow!("agent returned no sessionId"))?.to_owned();
         conn.loaded.insert(sid.clone(), Instant::now());

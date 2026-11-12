@@ -378,6 +378,11 @@ html[data-platform="darwin"] .sidebar-header {
   border-radius: var(--radius-s);
   color: var(--text);
 }
+.panel-row.with-subtitle {
+  height: auto;
+  min-height: 30px;
+  padding-block: 5px;
+}
 .panel-row.destructive {
   color: var(--danger);
 }

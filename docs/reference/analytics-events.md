@@ -75,8 +75,10 @@ host answers and sends it once the host is up.
 | `screen_viewed` | host `track` (desktop, TUI), iOS, Android | A screen, sheet or tab is shown | `screen` (see *Screens*) |
 | `bot_created` | host | `createBot` | `kind` (`bot`/`group`), `agent`, `model` or `members` (count) |
 | `bot_created` | host | `createGroupSession` | `kind` (`group`), `source` (`group_session`), `members` (count on success), `outcome` (`created`/`failed`), `error` (`storage`/`other` on failure) |
+| `bot_created` | host | `createStageGroup` | `kind` (`group`), `source` (`stage_group`), `members` (count on success), `outcome` (`created`/`replayed`/`failed`), `error` (`storage`/`other` on failure) |
 | `bots_imported` | host | `importBots` (bots it makes send no `bot_created`) | `source` (`grok-bot`/`openbot`/`other`), `bots`, `groups` (counts) |
 | `bot_updated` | host | `updateBot` | `fields`: the settings that changed, as the bot config's own camelCase keys (`model`, `permission`, `pinned`, `section`, `modelOptions`, `fastMode`, …), never their values |
+| `bot_updated` | host | `changeStage` | `stage_action` (`saveHandoff`/`accept`/`close`/`reopen`), `outcome` (`saved`/`failed`), `error` (`storage`/`other` on failure) |
 | `bots_reordered` | host | `reorderBots` | — |
 | `section_renamed` | host | `renameSection` | `removed`: whether it removed the section (`to` empty or `null`); never the names |
 | `bot_deleted` | host | `deleteBot` | — |
@@ -144,6 +146,7 @@ host answers and sends it once the host is up.
 | `settings` | Settings tab | settings | — |
 | `computers` | Computer management, from Manage computers or a link | computers & devices | — |
 | `usage` | usage | usage | usage overlay |
+| `stage_usage` | stage details usage | stage details usage | stage details usage |
 | `account` | account sheet | account panel | — |
 | `pairing` | pair a computer after setup (first run: `onboarding_step_viewed`) | pair a phone | pair overlay |
 | `voice_settings` | voice chat settings | voice chat settings | — |

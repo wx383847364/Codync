@@ -11,10 +11,12 @@ a version without one gets a generic "Bug fixes and improvements" line. Delete o
 ### zh-Hant
 - 長按 Bot 分享的檔案，即可開啟、另存或複製分享當時的檔案內容。
 - 長按群組可用原有成員建立新的空白會話，成員從各自的新會話開始。
+- 建立下一階段任務群組，指定預設負責人，並在階段詳情驗收交接、關閉群組與查看用量。
 
 ### en-US
 - Touch and hold a shared file to open it, save a copy, or copy its text.
 - Touch and hold a group to start a fresh conversation with the same bots. Each bot gets its own session in the new group.
+- Create a next-stage group with fresh bots and a default lead. Accept handoffs, close stages, and view stage usage.
 
 ## 2.43.0
 

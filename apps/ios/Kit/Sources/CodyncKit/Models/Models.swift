@@ -237,6 +237,7 @@ public enum SetupStep: String, Codable, Sendable {
 public struct Hello: Codable, Sendable {
     /// Host 支持创建具有独立模型会话的群。
     public var groupSessions: Bool?
+    public var stageGroups: Bool?
     public var icons: [String: CustomIcon]?
     public var iconsRevision: Int64?
     public var hostId: String
@@ -408,4 +409,129 @@ public struct BotDraft: Codable, Hashable, Sendable {
 
 public extension Date {
     init(milliseconds: Int64) { self.init(timeIntervalSince1970: Double(milliseconds) / 1000) }
+}
+
+
+/// Host 保存的阶段负责人及验收条件。
+public struct StageGroup: Codable, Hashable, Sendable {
+    public var leaderId: String
+    public var goal: String
+    public var acceptance: String
+    public var handoff: StageHandoff?
+    public var incoming: StageFile?
+    public var closedAt: Int64?
+}
+
+public struct StageFile: Codable, Hashable, Sendable {
+    public var id: String
+    public var name: String
+    public var sha256: String
+    public var size: Int64
+}
+
+public struct StageHandoff: Codable, Hashable, Sendable {
+    public var file: StageFile
+    public var evidence: String
+    public var acceptedAt: Int64?
+}
+
+public struct StageDetails: Decodable, Sendable {
+    public struct Work: Decodable, Sendable {
+        public struct Pending: Decodable, Identifiable, Sendable {
+            public var id: String
+            public var name: String
+            public var status: String
+        }
+        public var counts: [String: Int]
+        public var pending: [Pending]
+    }
+    public var bot: Bot
+    public var markdown: String?
+    public var sharedFiles: [StageFile]?
+    public var incomingMarkdown: String?
+    public var handoffUnavailable: Bool
+    public var incomingUnavailable: Bool
+    public var template: String
+    public var initialDraft: String
+    public var work: Work
+}
+
+public struct StageChange: Encodable, Sendable {
+    public enum Action: String, Encodable, Sendable { case saveHandoff, accept, close, reopen }
+    public var botId: String
+    public var action: Action
+    public var markdown: String?
+    public var evidence: String?
+    public var previousVersion: String?
+    public var version: String?
+
+    /// 验收和编辑都绑定查看过的版本，关闭及重开只传阶段身份。
+    public init(botId: String, action: Action, markdown: String? = nil, evidence: String? = nil,
+                previousVersion: String? = nil, version: String? = nil) {
+        self.botId = botId
+        self.action = action
+        self.markdown = markdown
+        self.evidence = evidence
+        self.previousVersion = previousVersion
+        self.version = version
+    }
+}
+
+/// 每项保留可用计数和报告覆盖，未知字段通过 nil 显示。
+public struct StageUsage: Decodable, Sendable {
+    public struct Section: Decodable, Sendable {
+        public struct Row: Decodable, Sendable {
+            public var label: String
+            public var value: Int64?
+            public var reports: Int?
+            public var attempts: Int?
+        }
+        public var label: String
+        public var backend: String?
+        public var model: String?
+        public var rows: [Row]
+    }
+    public var observedSince: Int64
+    public var stageCreatedAt: Int64
+    public var sections: [Section]
+}
+
+/// 用户已确认的阶段草稿，创建 ID 可用于断线后重传。
+public struct StageGroupDraft: Encodable, Sendable {
+    public struct Role: Encodable, Sendable {
+        public var botId: String
+        public var sourceRev: Int64
+        public var description: String
+        public var reuseProject: Bool
+
+        /// 记录用户确认的角色及项目目录选择。
+        public init(botId: String, sourceRev: Int64, description: String, reuseProject: Bool = false) {
+            self.botId = botId
+            self.sourceRev = sourceRev
+            self.description = description
+            self.reuseProject = reuseProject
+        }
+    }
+
+    public var botId: String
+    public var requestId: UUID
+    public var name: String
+    public var goal: String
+    public var acceptance: String
+    public var leaderId: String
+    public var roles: [Role]
+    public var handoffVersion: String?
+
+    /// 将阶段表单和所选角色固定到同一次提交。
+    public init(botId: String, requestId: UUID, name: String, goal: String, acceptance: String, leaderId: String,
+                roles: [Role], handoffVersion: String? = nil) {
+        self.botId = botId
+        self.requestId = requestId
+        self.name = name
+        self.goal = goal
+        self.acceptance = acceptance
+        self.leaderId = leaderId
+        self.roles = roles
+        self.handoffVersion = handoffVersion
+    }
 }

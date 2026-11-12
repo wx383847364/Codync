@@ -150,6 +150,12 @@ extension BotStore {
         upsert(local)
         storage.lastComputerId = computer.id
         if let bot = bots[botId] { onSent?(bot, .sending) }
+        // 阶段消息在本机暂存，重连后直接收到可操作的负责人或关闭错误。
+        if bots[botId]?.stage != nil, canQueue, files.isEmpty, call == nil {
+            markLocal(nonce: nonce, botId: botId, status: "held")
+            saveCache()
+            return Task { .queued }
+        }
         // The relay mailbox holds text only: files, and the call a message was said in, wait for the computer.
         if canQueue, files.isEmpty, call == nil, let remote = transport as? any RemoteTransport {
             return enqueue(remote, text: text, botId: botId, replyTo: replyTo?.id, nonce: nonce, mentions: mentions)
@@ -188,7 +194,7 @@ extension BotStore {
             } catch {
                 if outgoingFiles[nonce] != nil { lastError = "Couldn't send the files: \(error.localizedDescription)" }
                 // 无 relay 的临时掉线留在本机队列，不复制成第二份草稿。
-                let holds = computer.cloud == nil && (error as? HostError)?.isTransient == true
+                let holds = (computer.cloud == nil || bots[botId]?.stage != nil) && (error as? HostError)?.isTransient == true
                 if !holds { lastError = error.localizedDescription }
                 markLocal(nonce: nonce, botId: botId, status: holds ? "held" : "failed")
                 return holds ? .queued : .failed
@@ -344,8 +350,18 @@ extension BotStore {
         entries[entry.botId]?.removeAll { $0.id == entry.id }
         // The same clientNonce: if the computer got it after all, it won't run twice (the host
         // skips a nonce it has). Every seal still takes a fresh ephemeral key (§6.4).
-        send(text, to: entry.botId, replyTo: entry.data.replyTo, nonce: entry.data.clientNonce ?? UUID().uuidString,
-             files: files, pasted: entry.data.pasted ?? [], call: entry.data.call, mentions: entry.data.mentions ?? [])
+        let sending = send(text, to: entry.botId, replyTo: entry.data.replyTo, nonce: entry.data.clientNonce ?? UUID().uuidString,
+                           files: files, pasted: entry.data.pasted ?? [], call: entry.data.call, mentions: entry.data.mentions ?? [])
+        if entry.data.status == "held", bots[entry.botId]?.stage != nil {
+            // 暂存阶段请求遭到拒绝时恢复可编辑正文和选人身份，保留更新的输入。
+            Task {
+                if await sending?.value == .failed, composerDraft(for: entry.botId).isEmpty {
+                    composerDrafts[entry.botId] = text
+                    composerMentions[entry.botId] = entry.data.mentions
+                    persistComposerDrafts()
+                }
+            }
+        }
     }
 
     /// 已发送附件通过同一有界读取队列获取，缓存只保存原始字节。

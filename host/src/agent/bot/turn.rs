@@ -266,6 +266,7 @@ impl Actor {
         }
         // Written before this returns, so a Stop right after is sent after the prompt.
         let answer = acp.send("session/prompt", params).await?;
+        self.usage_event(crate::store::turn_usage::UsageEvent::Prompt);
         if !self.turn_memory_revision.is_empty()
             && let Err(error) = memory::mark_announced(&self.hub.store, &self.cfg.id, &sid, &self.turn_memory_revision)
         {
@@ -408,6 +409,10 @@ impl Actor {
         } else {
             crate::store::deliveries::Status::Completed
         };
+        self.record_usage_outcome(
+            done,
+            self.active_delivery.is_some() && delivery_status == crate::store::deliveries::Status::NoReply,
+        );
         // 文件成功不把隐藏的 pass 提示提升为可见群正文；普通无文件回合保留原有 trace 语义。
         let delivery_reply = final_text.clone().or(delivery_text);
         let delivery_reply = if published_file {

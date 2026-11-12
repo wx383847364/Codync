@@ -9,9 +9,10 @@ use serde_json::{Value, json};
 use std::sync::Arc;
 
 impl Hub {
-    /// 新建普通机器人或普通群；同成员的普通群复用现有记录。
+    /// 新建普通机器人或普通群；阶段身份由单独的创建入口分配。
     pub fn create_bot(self: &Arc<Self>, mut cfg: BotConfig) -> Result<Value> {
         cfg.group_session_base = None;
+        cfg.stage = None;
         cfg.id = uuid::Uuid::new_v4().to_string();
         cfg.created_at = crate::store::now_ms();
         cfg.position = self.new_bot_position()?;

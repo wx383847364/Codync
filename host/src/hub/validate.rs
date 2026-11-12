@@ -3,6 +3,7 @@
 use crate::store::BotConfig;
 use anyhow::{Result, bail};
 
+/// 校验来源明确的项目目录；Host 管理的目录可以在首次执行前按身份建立。
 pub(crate) fn validate(cfg: &BotConfig) -> Result<()> {
     if cfg.name.trim().is_empty() {
         bail!("name is required");
@@ -14,7 +15,7 @@ pub(crate) fn validate(cfg: &BotConfig) -> Result<()> {
     if cfg.lead && cfg.hidden {
         bail!("the lead bot can't be hidden");
     }
-    if !cfg.cwd.is_empty() && !std::path::Path::new(&cfg.cwd).is_dir() {
+    if !cfg.cwd.is_empty() && !crate::agent::workspace::is_managed(cfg) && !std::path::Path::new(&cfg.cwd).is_dir() {
         bail!("workspace folder does not exist: {}", cfg.cwd);
     }
     if cfg.command.as_deref().map(str::trim).unwrap_or_default().is_empty()

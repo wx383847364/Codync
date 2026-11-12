@@ -4,6 +4,8 @@ import SwiftUI
 /// One row in a Codync menu: an action, a choice when `selected` is set, or a submenu.
 public struct MenuItem {
     public var title: String
+    /// 动作结果的本地化副标题。
+    public var detail: String?
     public var icon: String?
     /// A picture in the icon's place (an agent's logo).
     public var image: Image?
@@ -19,9 +21,12 @@ public struct MenuItem {
     public var submenu: [MenuItem] = []
     public var action: () -> Void
 
+    /// 构建菜单操作，副标题可说明点击后会发生什么。
     public init(_ title: String, icon: String? = nil, image: Image? = nil, selected: Bool? = nil, destructive: Bool = false,
-                divider: Bool = false, verbatim: Bool = false, enabled: Bool = true, action: @escaping () -> Void) {
+                divider: Bool = false, verbatim: Bool = false, enabled: Bool = true, detail: String? = nil,
+                action: @escaping () -> Void) {
         self.title = title
+        self.detail = detail
         self.icon = icon
         self.image = image
         self.selected = selected
@@ -44,8 +49,9 @@ public struct MenuItem {
 
 /// Rows are equal when they show the same thing; the action isn't part of it, since closures always differ.
 extension MenuItem: Equatable {
+    /// 副标题变化时也刷新系统菜单行。
     public static func == (lhs: MenuItem, rhs: MenuItem) -> Bool {
-        lhs.shownTitle() == rhs.shownTitle() && lhs.icon == rhs.icon && lhs.image == rhs.image && lhs.selected == rhs.selected
+        lhs.shownTitle() == rhs.shownTitle() && lhs.detail == rhs.detail && lhs.icon == rhs.icon && lhs.image == rhs.image && lhs.selected == rhs.selected
             && lhs.destructive == rhs.destructive && lhs.divider == rhs.divider && lhs.enabled == rhs.enabled
             && lhs.submenu == rhs.submenu
     }
@@ -148,15 +154,19 @@ extension MenuRows: @MainActor Equatable {
     }
 }
 
-/// A `MenuItem` that runs `action`: choices as checkmarked toggles.
+/// 绘制可执行的系统菜单行，选择项用勾选样式。
 @ViewBuilder private func systemMenuAction(_ item: MenuItem, action: @escaping @MainActor () -> Void) -> some View {
     let role: ButtonRole? = item.destructive ? .destructive : nil
     if let selected = item.selected {
         // SwiftUI only calls the binding's setter from the menu, on the main thread.
         Toggle(isOn: Binding(get: { selected }, set: { _ in MainActor.assumeIsolated { action() } })) { menuLabel(item) }
     } else {
-        Button(role: role, action: action) { menuLabel(item) }
-            .disabled(!item.enabled)
+        Button(role: role, action: action) {
+            // 系统菜单将标题之后的第二个 Text 渲染成原生副标题。
+            menuLabel(item)
+            if let detail = item.detail { Text(L10n.tr(detail)) }
+        }
+        .disabled(!item.enabled)
     }
 }
 

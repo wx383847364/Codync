@@ -182,6 +182,7 @@ impl Store {
              CREATE INDEX IF NOT EXISTS entries_bot ON entries(bot_id, seq);",
         )?;
         super::deliveries::schema(&c)?;
+        super::turn_usage::schema(&c)?;
         migrate(&c)?;
         codync_mem::schema::migrate(&c)?;
         let secret_key = if path == Path::new(":memory:") {

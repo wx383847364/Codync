@@ -117,6 +117,11 @@ internal suspend fun AppStore.deliver(send: PendingSend) {
         savePending(send)
         val active = channel
         if (active?.state?.value is LinkState.ComputerOffline && send.files.isEmpty()) {
+            // 阶段消息直接交给重连后的 Host，以保留可编辑的具体拒发原因。
+            if (state.value.bots.any { it.id == send.botId && it.stage != null }) {
+                savePending(send.copy(status = SendStatus.Held))
+                return
+            }
             savePending(send.copy(status = SendStatus.Waiting))
             try { active.enqueue(send); return }
             catch (error: IOException) {
@@ -153,7 +158,8 @@ internal suspend fun AppStore.deliver(send: PendingSend) {
         throw error
     } catch (error: Exception) {
         // 提及被 host 拒绝时恢复原始绑定，用户的新草稿不被失败回包覆盖。
-        val failed = afterFailure(send, state.value.computer.cloud, error)
+        val cloud = state.value.computer.cloud.takeUnless { state.value.bots.any { bot -> bot.id == send.botId && bot.stage != null } }
+        val failed = afterFailure(send, cloud, error)
         // 本机暂存只保留一个发送入口，真正拒发才恢复草稿。
         if (failed.status == SendStatus.Failed) restoreFailedDraft(send)
         savePending(failed)

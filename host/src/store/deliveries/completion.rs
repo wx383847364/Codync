@@ -1,6 +1,6 @@
 //! 结果、终态、派生投递与聚合卡片的同事务保存。
 
-use super::{COLS, Delivery, Status, get, insert, row, wire};
+use super::{COLS, Delivery, Status, TOOL_RETURN, get, insert, row, wire};
 use crate::{
     LockExt,
     store::{BotConfig, Entry, EntryKind, Store, now_ms},
@@ -117,56 +117,86 @@ impl Store {
             }
             let result = entry(&tx, &result_id, &d.room_id, EntryKind::Agent, turn, &data)?;
             entries.push(result);
-            if changed == 1 && status == Status::Completed {
-                let config: Option<String> = tx
-                    .query_row("SELECT config FROM bots WHERE id=? AND deleted=0", [&d.room_id], |r| r.get(0))
-                    .optional()?;
-                if let Some(config) = config {
-                    let group: BotConfig = serde_json::from_str(&config)?;
-                    let mut members = Vec::new();
-                    for id in &group.members {
-                        let config: Option<String> = tx
-                            .query_row("SELECT config FROM bots WHERE id=? AND deleted=0", [id], |r| r.get(0))
-                            .optional()?;
-                        if let Some(config) = config {
-                            members.push(serde_json::from_str::<BotConfig>(&config)?);
-                        }
-                    }
-                    // 同一执行已用工具派工的目标，最终展示性 @ 不再产生第二份投递。
-                    let tasked = tx
-                        .prepare("SELECT target_bot_id FROM deliveries WHERE source_execution_id=? AND kind='task'")?
-                        .query_map([id], |r| r.get::<_, String>(0))?
-                        .collect::<rusqlite::Result<Vec<_>>>()?;
-                    let targets = crate::chat::mentions::targets(text, &[], &members, None, false);
-                    match targets {
-                        Ok(targets) => {
-                            for target in targets.into_iter().filter(|t| t != &d.target_bot_id && !tasked.contains(t)) {
-                                let mut next = Delivery::speak(&d.room_id, &result_id, &target);
-                                next.source_kind = "reply".into();
-                                next.source_bot_id = Some(d.target_bot_id.clone());
-                                next.source_execution_id = Some(d.id.clone());
-                                next.batch_root_id.clone_from(&d.batch_root_id);
-                                // 轮次和链深仅用于追踪，不能把仍需回复的任务截断。
-                                next.round = d.round.saturating_add(1);
-                                next.chain_depth = d.chain_depth.saturating_add(1);
-                                let next = insert(&tx, &next)?;
-                                entries.push(card(&tx, &next)?);
-                            }
-                        }
-                        Err(error) => entries.push(entry(
-                            &tx,
-                            &format!("delivery-route-error-{id}"),
-                            &d.room_id,
-                            EntryKind::Notice,
-                            turn,
-                            &json!({"text":error.to_string(),"style":"error","deliveryId":id}),
-                        )?),
-                    }
-                }
+        }
+        if changed == 1 && status == Status::Completed {
+            // 只从本次投递实际发布的文件回传，文件名中的 @ 不是成员提及。
+            let source = match text {
+                Some(_) => Some(result_id),
+                None if d.source_kind == TOOL_RETURN => tx.query_row(
+                    "SELECT id FROM entries WHERE bot_id=?1 AND kind='agent' AND json_extract(data,'$.deliveryId')=?2 AND json_array_length(data,'$.files')>0 ORDER BY seq DESC LIMIT 1",
+                    params![d.room_id, d.id], |r| r.get(0),
+                ).optional()?,
+                None => None,
+            };
+            if let Some(source) = source {
+                entries.extend(route_result(&tx, &d, &source, text, turn)?);
             }
         }
         entries.push(card(&tx, &d)?);
         tx.commit()?;
         Ok(entries)
     }
+}
+
+/// 只派发正文里的有效提及和明确要求的回传，目标、结果和终态共用事务。
+fn route_result(c: &Connection, d: &Delivery, source: &str, text: Option<&str>, turn: i64) -> Result<Vec<Entry>> {
+    let config: String = c.query_row("SELECT config FROM bots WHERE id=? AND deleted=0", [&d.room_id], |r| r.get(0))?;
+    let group: BotConfig = serde_json::from_str(&config)?;
+    // 已关闭时仍可保存迟到记录，但不能在同一事务派生新的工作。
+    if group.stage.as_ref().is_some_and(|stage| stage.closed_at.is_some()) {
+        return Ok(vec![]);
+    }
+    let mut members = Vec::new();
+    for id in &group.members {
+        let config: Option<String> =
+            c.query_row("SELECT config FROM bots WHERE id=? AND deleted=0", [id], |r| r.get(0)).optional()?;
+        if let Some(config) = config {
+            members.push(serde_json::from_str::<BotConfig>(&config)?);
+        }
+    }
+    let mut entries = Vec::new();
+    // 同一执行已用工具派工的目标，最终展示性 @ 不再产生第二份投递。
+    let tasked = c
+        .prepare("SELECT target_bot_id FROM deliveries WHERE source_execution_id=? AND kind='task'")?
+        .query_map([&d.id], |r| r.get::<_, String>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut targets = match crate::chat::mentions::targets(text.unwrap_or_default(), &[], &members, None, false) {
+        Ok(mut targets) => {
+            targets.retain(|target| target != &d.target_bot_id && !tasked.contains(target));
+            targets
+        }
+        Err(error) => {
+            entries.push(entry(
+                c,
+                &format!("delivery-route-error-{}", d.id),
+                &d.room_id,
+                EntryKind::Notice,
+                turn,
+                &json!({"text":error.to_string(),"style":"error","deliveryId":d.id}),
+            )?);
+            Vec::new()
+        }
+    };
+    // 明确请求的结果只回给原发起人一次，展示性的 @ 复用同一投递。
+    if group.stage.is_some()
+        && d.source_kind == TOOL_RETURN
+        && let Some(sender) = d.source_bot_id.as_ref()
+        && members.iter().any(|member| &member.id == sender)
+        && !targets.contains(sender)
+    {
+        targets.push(sender.clone());
+    }
+    for target in targets {
+        let mut next = Delivery::speak(&d.room_id, source, &target);
+        next.source_kind = "reply".into();
+        next.source_bot_id = Some(d.target_bot_id.clone());
+        next.source_execution_id = Some(d.id.clone());
+        next.batch_root_id.clone_from(&d.batch_root_id);
+        // 轮次和链深仅用于追踪，不能把仍需回复的任务截断。
+        next.round = d.round.saturating_add(1);
+        next.chain_depth = d.chain_depth.saturating_add(1);
+        let next = insert(c, &next)?;
+        entries.push(card(c, &next)?);
+    }
+    Ok(entries)
 }

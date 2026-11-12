@@ -7,7 +7,7 @@ use anyhow::{Result, anyhow};
 use serde_json::{Value, json};
 
 impl Hub {
-    /// 沿用来源群设置与成员顺序，创建拥有独立历史和模型会话的新群。
+    /// 沿用来源成员与顺序开启独立会话，阶段工作流仍属于来源群。
     pub fn create_group_session(&self, id: &str) -> Result<Value> {
         let bot = {
             // 在同一把锁下读取、分配编号、保存和广播，避免多端创建同名或看到过期名单。
@@ -37,6 +37,7 @@ impl Hub {
                 .find(|name| !names.contains(name.as_str()))
                 .ok_or_else(|| anyhow!("group session number exhausted"))?;
             cfg.group_session_base = Some(base);
+            cfg.stage = None;
             cfg.id = uuid::Uuid::new_v4().to_string();
             cfg.created_at = crate::store::now_ms();
             cfg.position = self.new_bot_position()?;
