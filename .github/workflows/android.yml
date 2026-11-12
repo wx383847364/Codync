@@ -51,7 +51,7 @@ jobs:
           export HOST_PORT=19455
           export CODYNC_EXTERNAL_URL="http://127.0.0.1:$HOST_PORT"
           host="$PWD/host/target/debug/codync-host"
-          "$host" serve --port "$HOST_PORT" --bind 127.0.0.1 > "$RUNNER_TEMP/codync-host.log" 2>&1 &
+          "$host" serve --port "$HOST_PORT" --bind 0.0.0.0 > "$RUNNER_TEMP/codync-host.log" 2>&1 &
           host_pid=$!
           approver=
           trap 'test -z "$approver" || kill "$approver" 2>/dev/null || true; kill "$host_pid" 2>/dev/null || true' EXIT
