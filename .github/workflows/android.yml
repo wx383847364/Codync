@@ -2,6 +2,8 @@ name: Android
 
 on:
   workflow_dispatch:
+  push:
+    branches: [codex/group-session-mobile-check]
 
 permissions:
   contents: read
