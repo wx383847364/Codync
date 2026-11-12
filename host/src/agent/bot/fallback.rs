@@ -80,13 +80,20 @@ impl Actor {
 
     /// The first step, in order, whose agent this turn hasn't failed on and that isn't resting. A signed-out agent
     /// rests too: the sign-in state an app last checked can be stale.
-    fn next_step(&self, now: i64) -> Option<usize> {
+    /// 选择本回合可用的后端，预检新回合时忽略上一回合已尝试的账户。
+    fn next_step(&self, now: i64, tried: &[String]) -> Option<usize> {
         (0..fallback::steps(&self.base)).find(|&s| {
             let account = fallback::account(&self.base, s);
-            !self.relay.tried.contains(&account)
+            !tried.contains(&account)
                 && !self.relay.no_model.contains(&account)
                 && rest::get(&self.hub.store, &account, now).is_none()
         })
+    }
+
+    /// 群会话预检只读取本轮将使用的后端；另一后端的用量与上下文无关。
+    pub(super) fn next_group_turn_uses_current_backend(&self) -> bool {
+        let target = self.next_step(now_ms(), &[]).unwrap_or(0);
+        fallback::account(&self.base, target) == rest::account(&self.cfg)
     }
 
     /// `start_turn`, once the turn has its lane and number: picks the agent. Not for hidden turns.
@@ -102,7 +109,7 @@ impl Actor {
         self.relay.carried = None;
         self.relay.attempt = Some(Attempt { lane: lane.clone(), entries: entries.to_vec(), text: text.to_owned() });
         let now = now_ms();
-        let target = self.next_step(now).unwrap_or(0);
+        let target = self.next_step(now, &self.relay.tried).unwrap_or(0);
         self.left_signed_out_before(target, now);
         let from = self.cfg.clone();
         if fallback::account(&self.base, target) != rest::account(&from) {
@@ -136,6 +143,7 @@ impl Actor {
     /// `start_turn`, once the session is up (a new one, or the agent's own resumed): sets what the agent should hear
     /// first, and puts it on the chat line of the move. The main session gets a recap of the chat in a new session or
     /// a catch-up in its own; a retried turn gets what the agents before did. Not for hidden turns.
+    /// 独立群跳过主会话回顾，但保留本轮失败尝试的交接材料。
     pub(super) fn carry_in(&mut self) {
         let mut carried = Vec::new();
         if self.slot().is_none()
@@ -154,6 +162,12 @@ impl Actor {
             self.hub.set_entry(&id, &line.data);
         }
         self.relay.carried = text;
+    }
+
+    /// 取出本回合可用的交接材料，独立群保留私聊的待用交接。
+    pub(super) fn take_prompt_carry(&mut self) -> [Option<String>; 2] {
+        let handoff = if self.isolated_group_room().is_none() { self.handoff.take() } else { None };
+        [self.relay.carried.take(), handoff]
     }
 
     /// The chat line for a move from the agent `from` ran on to step `target`'s (`carry_in` adds what the new agent
@@ -276,7 +290,7 @@ impl Actor {
             }
             self.relay.tried.push(account);
             let failed = start_error.as_ref().unwrap_or(error);
-            if self.next_step(now).is_none() {
+            if self.next_step(now, &self.relay.tried).is_none() {
                 self.relay.exhausted = true;
                 // No agent answers the turn's messages: they go out again once the first one left signed out is
                 // signed in (the last agent's own card holds them only when there is none, `held_for_sign_in`).
@@ -413,7 +427,7 @@ impl Actor {
         if self.step().is_none() && self.turn.is_none() {
             let from = self.cfg.clone();
             self.idle_relay();
-            let target = self.next_step(now_ms()).unwrap_or(0);
+            let target = self.next_step(now_ms(), &self.relay.tried).unwrap_or(0);
             self.switch_to(target).await;
             self.tell_switch(&from, target);
         } else {

@@ -89,7 +89,8 @@ pub fn tools() -> Value {
     ])
 }
 
-pub async fn call(hub: &Arc<Hub>, bot: &str, name: &str, args: &Value) -> Result<Value> {
+/// 管理工具的审批卡保留请求所属会话。
+pub async fn call(hub: &Arc<Hub>, bot: &str, name: &str, group: Option<&str>, args: &Value) -> Result<Value> {
     let source = agent_bot(hub, bot)?;
     if !source.manage_team {
         bail!("this bot may not manage the team: the user turns that on in its settings");
@@ -109,13 +110,14 @@ pub async fn call(hub: &Arc<Hub>, bot: &str, name: &str, args: &Value) -> Result
                 .collect();
             Ok(json!({"bots": bots}))
         }
-        "create_bot" => create(hub, &source, args).await,
-        "update_bot" => update(hub, &source, args).await,
+        "create_bot" => create(hub, &source, group, args).await,
+        "update_bot" => update(hub, &source, group, args).await,
         _ => bail!("unknown manage tool: {name}"),
     }
 }
 
-async fn create(hub: &Arc<Hub>, source: &BotConfig, args: &Value) -> Result<Value> {
+/// 保留工具来源会话直至创建机器人的审批。
+async fn create(hub: &Arc<Hub>, source: &BotConfig, group: Option<&str>, args: &Value) -> Result<Value> {
     let made = hub.store.bots()?.iter().filter(|b| !b.deleted && b.config.created_by.is_some()).count();
     if made >= MAX_CREATED {
         bail!(
@@ -165,7 +167,7 @@ async fn create(hub: &Arc<Hub>, source: &BotConfig, args: &Value) -> Result<Valu
     crate::hub::validate(&cfg)?;
     fields.insert("backend".into(), cfg.backend.clone().into());
     let name = cfg.name.clone();
-    approve(hub, source, format!("Create bot {name}"), describe(&fields, &lines)).await?;
+    approve(hub, source, group, format!("Create bot {name}"), describe(&fields, &lines)).await?;
     let created = {
         let hub = hub.clone();
         tokio::task::spawn_blocking(move || hub.create_bot(cfg)).await??
@@ -176,7 +178,8 @@ async fn create(hub: &Arc<Hub>, source: &BotConfig, args: &Value) -> Result<Valu
     Ok(json!({"bot": setup(hub, &agent_bot(hub, id)?), "routines": saved}))
 }
 
-async fn update(hub: &Arc<Hub>, source: &BotConfig, args: &Value) -> Result<Value> {
+/// 保留工具来源会话直至编辑机器人的审批。
+async fn update(hub: &Arc<Hub>, source: &BotConfig, group: Option<&str>, args: &Value) -> Result<Value> {
     let id = text(args, "botId")?.context("botId is required")?;
     let target = agent_bot(hub, &id)?;
     let mut fields = setup_patch(args, &target.fallbacks)?;
@@ -190,7 +193,7 @@ async fn update(hub: &Arc<Hub>, source: &BotConfig, args: &Value) -> Result<Valu
     if fields.is_empty() && routines.is_empty() {
         bail!("nothing to change");
     }
-    approve(hub, source, format!("Change bot {}", target.name), describe(&fields, &lines)).await?;
+    approve(hub, source, group, format!("Change bot {}", target.name), describe(&fields, &lines)).await?;
     let mut changed: Vec<String> =
         FIELDS.iter().filter(|(key, _)| fields.contains_key(*key)).map(|(_, label)| label.to_lowercase()).collect();
     if !fields.is_empty() {
@@ -210,7 +213,14 @@ async fn update(hub: &Arc<Hub>, source: &BotConfig, args: &Value) -> Result<Valu
 }
 
 /// Under Ask the change waits for the user's Allow on an approval card in the bot's chat.
-pub(crate) async fn approve(hub: &Hub, source: &BotConfig, title: String, detail: String) -> Result<()> {
+/// 将来源会话交给 actor 核对，避免迟到审批显示到其他聊天。
+pub(crate) async fn approve(
+    hub: &Hub,
+    source: &BotConfig,
+    group: Option<&str>,
+    title: String,
+    detail: String,
+) -> Result<()> {
     if source.permission == Permission::Auto {
         return Ok(());
     }
@@ -221,7 +231,7 @@ pub(crate) async fn approve(hub: &Hub, source: &BotConfig, title: String, detail
         );
     }
     let (reply, answer) = oneshot::channel();
-    hub.send_cmd(&source.id, Cmd::Approve { title, detail, reply })?;
+    hub.send_cmd(&source.id, Cmd::Approve { group_session: group.map(str::to_owned), title, detail, reply })?;
     match tokio::time::timeout(APPROVAL_TIMEOUT, answer).await {
         Ok(Ok(true)) => Ok(()),
         Ok(_) => bail!("the user didn't allow this change; nothing changed"),

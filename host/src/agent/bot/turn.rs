@@ -34,7 +34,7 @@ impl Actor {
         let remind_artifacts = !snapshot.system.contains("publish_artifact");
         let mut prompt = text.to_owned();
         // The user's handoff first, then what the fallback chain carries in.
-        for first in [self.relay.carried.take(), self.handoff.take()].into_iter().flatten() {
+        for first in self.take_prompt_carry().into_iter().flatten() {
             prompt = format!("{first}\n\n{prompt}");
         }
         // A compaction may have dropped the profile the session's first message carried.
@@ -130,7 +130,11 @@ impl Actor {
         let team_turn = if self.group_compaction.is_some() {
             crate::chat::team::Turn::Maintenance
         } else if let Some(active) = &self.active_delivery {
-            crate::chat::team::Turn::Delivery { room: active.delivery.room_id.clone(), id: active.delivery.id.clone() }
+            crate::chat::team::Turn::Delivery {
+                room: active.delivery.room_id.clone(),
+                id: active.delivery.id.clone(),
+                isolated: active.isolated,
+            }
         } else if self.active_request.is_some() {
             crate::chat::team::Turn::Request
         } else {

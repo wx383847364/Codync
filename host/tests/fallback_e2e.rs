@@ -377,3 +377,101 @@ async fn group_fallback_without_text_does_not_complete_the_failed_attempt_output
     );
     assert!(host.log(&bot, "standin.jsonl").iter().any(|r| r["method"] == "session/prompt"));
 }
+
+/// 回退前后各 agent 保留自己在编号群的会话，失败尝试只交接该群本轮的进展。
+#[tokio::test]
+async fn numbered_group_resumes_each_agent_without_private_recap() {
+    let host = Host::start().await;
+    let created = host
+        .call(
+            "createBot",
+            json!({"name":"Relay", "backend":"custom", "command":agent("primary"), "connectors":[], "notify":false}),
+        )
+        .await;
+    let bot = created["bot"]["id"].as_str().unwrap();
+    host.call("updateBot", json!({"id":bot,"fallbacks":[{"backend":"codex","command":agent("standin")}]})).await;
+    let original = host.call("createBot", json!({"name":"Relay room","kind":"group","members":[bot]})).await;
+    let copy = host.call("createGroupSession", json!({"botId":original["bot"]["id"]})).await;
+    let group = copy["bot"]["id"].as_str().unwrap();
+
+    host.call("send", json!({"botId":bot,"text":"PRIVATE_ONLY_MARKER"})).await;
+    wait_for(&host, bot, "private answer", |e| e["data"]["text"] == "primary answered" && e["data"]["final"] == true)
+        .await;
+    host.call("send", json!({"botId":group,"text":"Initial group work"})).await;
+    wait_for(&host, group, "numbered group answer", |e| {
+        e["data"]["text"] == "primary answered" && e["data"]["final"] == true
+    })
+    .await;
+    let folder = host.home.join("bots").join(bot).join("workspace");
+    std::fs::write(folder.join("primary.limit"), "").unwrap();
+    host.call("send", json!({"botId":group,"text":"Continue the group work"})).await;
+    wait_for(&host, group, "standin answer", |e| e["data"]["text"] == "standin answered" && e["data"]["final"] == true)
+        .await;
+
+    let log = host.log(bot, "standin.jsonl");
+    assert!(!log.iter().any(|r| r["method"] == "session/load"), "standin must open its own new session");
+    let prompt = log.iter().find(|r| r["method"] == "session/prompt").unwrap();
+    assert_eq!(prompt["params"]["sessionId"], "standin-s1");
+    let text = prompt["params"]["prompt"][0]["text"].as_str().unwrap();
+    assert!(text.contains("Edited a.txt"), "same-turn progress must reach standin: {text}");
+    assert!(!text.contains("PRIVATE_ONLY_MARKER"));
+
+    std::fs::remove_file(folder.join("primary.limit")).unwrap();
+    host.call("switchBack", json!({"botId":bot})).await;
+    host.call("send", json!({"botId":group,"text":"Back with the primary agent"})).await;
+    wait_for(&host, group, "return to primary", |e| {
+        e["data"]["text"] == "primary answered" && e["data"]["final"] == true && e["turn"].as_i64().unwrap_or(0) > 2
+    })
+    .await;
+    let log = host.log(bot, "primary.jsonl");
+    let prompt = log.iter().rev().find(|r| r["method"] == "session/prompt").unwrap();
+    assert_eq!(prompt["params"]["sessionId"], "primary-s2");
+    assert!(prompt["params"]["prompt"][0]["text"].as_str().unwrap().contains("Back with the primary agent"));
+    assert!(!prompt["params"]["prompt"][0]["text"].as_str().unwrap().contains("PRIVATE_ONLY_MARKER"));
+}
+
+/// 不支持重开的后端重启后会重用 ID，编号群只能复用自己在当前进程内创建的会话。
+#[tokio::test]
+async fn numbered_groups_do_not_share_reused_process_local_session_ids() {
+    let mut host = Host::start().await;
+    let created = host
+        .call(
+            "createBot",
+            json!({"name":"Relay","backend":"custom","command":agent("primary"),"connectors":[],"notify":false}),
+        )
+        .await;
+    let bot = created["bot"]["id"].as_str().unwrap();
+    let original = host.call("createBot", json!({"name":"Relay room","kind":"group","members":[bot]})).await;
+    let a = host.call("createGroupSession", json!({"botId":original["bot"]["id"]})).await;
+    let b = host.call("createGroupSession", json!({"botId":original["bot"]["id"]})).await;
+    let a = a["bot"]["id"].as_str().unwrap();
+    let b = b["bot"]["id"].as_str().unwrap();
+    let folder = host.home.join("bots").join(bot).join("workspace");
+    std::fs::write(folder.join("primary.no-reopen"), "").unwrap();
+
+    // 重启前以 A、B 顺序分配 ID，重启后反向打开，强制两组存储 ID 与进程内分配发生冲突。
+    for (group, text) in [(a, "FIRST_GROUP_HISTORY"), (b, "SECOND_GROUP_HISTORY")] {
+        host.call("send", json!({"botId":group,"text":text})).await;
+        wait_for(&host, group, "first reply", |e| {
+            e["data"]["text"] == "primary answered" && e["data"]["final"] == true
+        })
+        .await;
+    }
+    host.restart(|_| {}).await;
+    for (group, text) in [(b, "second group after restart"), (a, "first group after restart")] {
+        let sent = host.call("send", json!({"botId":group,"text":text})).await;
+        let seq = sent["entry"]["seq"].as_i64().unwrap();
+        wait_for(&host, group, "reply after restart", |e| {
+            e["data"]["text"] == "primary answered"
+                && e["data"]["final"] == true
+                && e["seq"].as_i64().unwrap_or(0) > seq
+        })
+        .await;
+    }
+
+    let log = host.log(bot, "primary.jsonl");
+    let prompts: Vec<_> = log.iter().filter(|row| row["method"] == "session/prompt").collect();
+    let sessions: Vec<_> = prompts.iter().map(|row| row["params"]["sessionId"].as_str().unwrap()).collect();
+    assert_eq!(sessions, ["primary-s1", "primary-s2", "primary-s1", "primary-s2"]);
+    assert!(!prompts[3]["params"]["prompt"][0]["text"].as_str().unwrap().contains("SECOND_GROUP_HISTORY"));
+}

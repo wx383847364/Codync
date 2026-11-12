@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use serde_json::{Value, json};
 
-use super::{After, App, Bot, Dir, Entry, Focus, Msg, Overlay, Status, merge_toggles};
+use super::{After, App, Bot, Dir, Entry, Msg, Overlay, Status, merge_toggles};
 
 /// An entry the mirror doesn't hold, below the floor its bot's loaded chat had when this
 /// connection began: `seq` grows with insertion, so it predates the window and only arrived because
@@ -124,7 +124,8 @@ impl App {
         outside_window(self.floors.get(bot).copied(), held, e)
     }
 
-    fn upsert_bot(&mut self, v: &Value) {
+    /// 合并 Host 返回的机器人或群，保持名单和选择状态一致。
+    pub(super) fn upsert_bot(&mut self, v: &Value) {
         let Some(id) = v["id"].as_str() else { return };
         if v["deleted"].as_bool().unwrap_or(false) {
             self.bots.remove(id);
@@ -162,6 +163,7 @@ impl App {
         }
     }
 
+    /// 处理 Host 回复，新群加入名单后打开其聊天。
     fn on_reply(&mut self, after: After, r: Result<Value, String>) {
         if let After::Connection(id, step) = after {
             self.connection_reply(&id, step, r);
@@ -251,6 +253,7 @@ impl App {
             }
             After::Hello => {
                 self.custom_icons = v["icons"].is_object();
+                self.group_sessions = v["groupSessions"] == true;
                 self.mismatch = crate::compat::check(env!("CARGO_PKG_VERSION"), crate::compat::MIN_HOST, &v);
                 v["name"].as_str().unwrap_or("computer").clone_into(&mut self.host);
                 v["version"].as_str().unwrap_or_default().clone_into(&mut self.host_version);
@@ -334,17 +337,9 @@ impl App {
                 if let Some(i) = saved {
                     self.overlays.truncate(i);
                 }
-                if let Some(id) = v["bot"]["id"].as_str() {
-                    let id = id.to_owned();
-                    self.upsert_bot(&v["bot"]);
-                    if created {
-                        self.select(&id);
-                        self.chat_page = true;
-                        self.focus = Focus::Chat;
-                        self.typing = true;
-                    }
-                }
+                self.receive_saved_bot(&v["bot"], created);
             }
+            After::GroupSessionCreated => self.receive_saved_bot(&v["bot"], true),
             After::Connectors | After::Skills => {
                 let connectors = matches!(after, After::Connectors);
                 let list = self.set_plugins(connectors, v["items"].as_array().cloned().unwrap_or_default());

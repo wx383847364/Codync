@@ -197,6 +197,13 @@ public extension HostClient {
         return res.bot
     }
 
+    /// 从指定群创建独立会话群，返回 Host 分配的新群。
+    func createGroupSession(_ botId: String) async throws -> Bot {
+        struct Res: Decodable { var bot: Bot }
+        let res: Res = try await call("createGroupSession", ["botId": botId])
+        return res.bot
+    }
+
     func updateGroup(_ draft: GroupDraft) async throws -> Bot {
         struct Res: Decodable { var bot: Bot }
         let res: Res = try await call("updateBot", draft)

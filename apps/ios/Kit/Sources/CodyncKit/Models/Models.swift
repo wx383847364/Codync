@@ -235,6 +235,8 @@ public enum SetupStep: String, Codable, Sendable {
 }
 
 public struct Hello: Codable, Sendable {
+    /// Host 支持创建具有独立模型会话的群。
+    public var groupSessions: Bool?
     public var icons: [String: CustomIcon]?
     public var iconsRevision: Int64?
     public var hostId: String

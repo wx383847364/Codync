@@ -41,7 +41,7 @@ pub async fn call(hub: &Arc<Hub>, call: &str, name: &str, args: &Value, lines: &
             "answer_approval" => answer(hub, &cfg, args["option"].as_str().unwrap_or_default()),
             "stop_bot" => stop(hub, &cfg),
             "search_memory" if !cfg.is_group() => {
-                crate::chat::memory::tool_call(hub, &cfg.id, "search_memory", args).await
+                crate::chat::memory::tool_call(hub, &cfg.id, "search_memory", None, args).await
             }
             _ => Err(anyhow!("Unknown tool {name}.")),
         }

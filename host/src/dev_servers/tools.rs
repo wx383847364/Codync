@@ -72,9 +72,10 @@ pub fn tools() -> Vec<Value> {
     ]
 }
 
-pub async fn call(hub: &Arc<Hub>, bot: &str, name: &str, args: &Value) -> Result<Value> {
+/// 启动服务器所需的审批跟随调用工具的会话。
+pub async fn call(hub: &Arc<Hub>, bot: &str, name: &str, group: Option<&str>, args: &Value) -> Result<Value> {
     match name {
-        START => start(hub, bot, args).await,
+        START => start(hub, bot, group, args).await,
         "list_dev_servers" => Ok(json!({"servers": hub.dev_servers.wire(bot)})),
         "stop_dev_server" => {
             stop(hub, bot, arg(args, "id")?, "bot").await?;
@@ -94,7 +95,8 @@ fn arg<'a>(args: &'a Value, key: &str) -> Result<&'a str> {
     args[key].as_str().map(str::trim).filter(|v| !v.is_empty()).ok_or_else(|| anyhow!("{key} is required"))
 }
 
-async fn start(hub: &Arc<Hub>, bot: &str, args: &Value) -> Result<Value> {
+/// 在复用或启动服务器前用来源会话请求审批。
+async fn start(hub: &Arc<Hub>, bot: &str, group: Option<&str>, args: &Value) -> Result<Value> {
     let command = arg(args, "command")?.to_owned();
     let cfg = hub.store.bot(bot)?.filter(|row| !row.deleted).map(|row| row.config).context("unknown bot")?;
     let folder = folder_for(&cfg, args["folder"].as_str()).await?;
@@ -105,7 +107,7 @@ async fn start(hub: &Arc<Hub>, bot: &str, args: &Value) -> Result<Value> {
         if !servers.view(bot, &id)?.status.active() {
             if !servers.approved(&id) {
                 check_room(hub, bot)?;
-                ask(hub, &cfg, &command, &folder).await?;
+                ask(hub, &cfg, group, &command, &folder).await?;
                 if on_a_card {
                     servers.note_approved(&hub.store, &id);
                 }
@@ -115,7 +117,7 @@ async fn start(hub: &Arc<Hub>, bot: &str, args: &Value) -> Result<Value> {
         return answer(hub, bot, &id, true).await;
     }
     check_room(hub, bot)?;
-    ask(hub, &cfg, &command, &folder).await?;
+    ask(hub, &cfg, group, &command, &folder).await?;
     let name = args["name"]
         .as_str()
         .map(str::trim)
@@ -135,9 +137,10 @@ async fn start(hub: &Arc<Hub>, bot: &str, args: &Value) -> Result<Value> {
 }
 
 /// Under Ask, waits on the approval card with the command and folder.
-async fn ask(hub: &Hub, cfg: &BotConfig, command: &str, folder: &str) -> Result<()> {
+/// 审批请求绑定工具调用所属的会话。
+async fn ask(hub: &Hub, cfg: &BotConfig, group: Option<&str>, command: &str, folder: &str) -> Result<()> {
     let detail = format!("{command}\n{folder}");
-    let answered = crate::chat::manage::approve(hub, cfg, "Start a dev server".to_owned(), detail).await;
+    let answered = crate::chat::manage::approve(hub, cfg, group, "Start a dev server".to_owned(), detail).await;
     if answered.is_err() {
         report(hub, Event::DevServerStarted, "outcome", "refused");
     }

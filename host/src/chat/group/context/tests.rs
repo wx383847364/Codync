@@ -54,13 +54,17 @@ impl Fixture {
         self.hub.store.start_delivery(&delivery.id, &delivery.target_bot_id).unwrap();
         self.hub.team.start_turn(
             &delivery.target_bot_id,
-            crate::chat::team::Turn::Delivery { room: delivery.room_id.clone(), id: delivery.id.clone() },
+            crate::chat::team::Turn::Delivery {
+                room: delivery.room_id.clone(),
+                id: delivery.id.clone(),
+                isolated: false,
+            },
         );
     }
     /// 为检索参数补可信当前投递，调用生产工具分发而非绕过鉴权的内部分页器。
     async fn read(&self, delivery: &Delivery, mut args: serde_json::Value) -> Result<serde_json::Value> {
         args["contextDeliveryId"] = json!(delivery.id);
-        crate::chat::memory::tool_call(&self.hub, &delivery.target_bot_id, "search_history", &args).await
+        crate::chat::memory::tool_call(&self.hub, &delivery.target_bot_id, "search_history", None, &args).await
     }
 }
 impl Drop for Fixture {
@@ -132,7 +136,9 @@ async fn group_history_pages_original_unicode_and_large_metadata_without_loss() 
     let (root, next) = f.relay(&body);
     f.hub.store.claim_delivery(&next.id, "b").unwrap();
     f.hub.store.start_delivery(&next.id, "b").unwrap();
-    f.hub.team.start_turn("b", crate::chat::team::Turn::Delivery { room: "g".into(), id: next.id.clone() });
+    f.hub
+        .team
+        .start_turn("b", crate::chat::team::Turn::Delivery { room: "g".into(), id: next.id.clone(), isolated: false });
     let mut offset = 0;
     let mut restored = String::new();
     let mut version = serde_json::Value::Null;
@@ -141,6 +147,7 @@ async fn group_history_pages_original_unicode_and_large_metadata_without_loss() 
             &f.hub,
             "b",
             "search_history",
+            None,
             &json!({"contextDeliveryId":next.id,"entryId":root.id,"offset":offset,"version":version,"limit":4096}),
         )
         .await
@@ -167,6 +174,7 @@ async fn group_history_pages_original_unicode_and_large_metadata_without_loss() 
         &f.hub,
         "b",
         "search_history",
+        None,
         &json!({"contextDeliveryId":next.id,"entryId":e.id}),
     )
     .await
@@ -180,6 +188,7 @@ async fn group_history_pages_original_unicode_and_large_metadata_without_loss() 
             &f.hub,
             "b",
             "search_history",
+            None,
             &json!({"contextDeliveryId":next.id,"entryId":e.id,"part":"metadata","offset":offset,"version":version,"limit":4096}),
         )
         .await
@@ -202,7 +211,9 @@ async fn group_history_scope_is_checked_on_every_page_and_never_becomes_private_
     let (_, next) = f.relay("任务");
     f.hub.store.claim_delivery(&next.id, "b").unwrap();
     f.hub.store.start_delivery(&next.id, "b").unwrap();
-    f.hub.team.start_turn("b", crate::chat::team::Turn::Delivery { room: "g".into(), id: next.id.clone() });
+    f.hub
+        .team
+        .start_turn("b", crate::chat::team::Turn::Delivery { room: "g".into(), id: next.id.clone(), isolated: false });
     let private = f.hub.add_entry(&Lane::main("b"), EntryKind::User, 1, &json!({"text":"PRIVATE_SECRET"})).unwrap();
     let other = f.hub.add_entry(&Lane::main("other"), EntryKind::User, 1, &json!({"text":"OTHER_SECRET"})).unwrap();
     let thought = f.hub.add_entry(&Lane::main("g"), EntryKind::Thought, 1, &json!({"text":"THOUGHT_SECRET"})).unwrap();
@@ -211,6 +222,7 @@ async fn group_history_scope_is_checked_on_every_page_and_never_becomes_private_
             &f.hub,
             "b",
             "search_history",
+            None,
             &json!({"contextDeliveryId":next.id,"entryId":id}),
         )
         .await;
@@ -221,6 +233,7 @@ async fn group_history_scope_is_checked_on_every_page_and_never_becomes_private_
             &f.hub,
             "b",
             "search_history",
+            None,
             &json!({"contextDeliveryId":"forged","query":""})
         )
         .await
@@ -230,7 +243,7 @@ async fn group_history_scope_is_checked_on_every_page_and_never_becomes_private_
     group.members = vec!["a".into()];
     f.hub.store.save_bot(&group).unwrap();
     assert!(
-        crate::chat::memory::tool_call(&f.hub, "b", "search_history", &json!({"contextDeliveryId":next.id}))
+        crate::chat::memory::tool_call(&f.hub, "b", "search_history", None, &json!({"contextDeliveryId":next.id}))
             .await
             .is_err()
     );

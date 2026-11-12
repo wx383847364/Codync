@@ -13,6 +13,7 @@ use std::ops::ControlFlow;
 use std::sync::Arc;
 
 /// 返回主机状态及可选的显式附件图片检查能力。
+/// 处理主机级请求；hello 公布客户端入口所需的能力。
 pub(super) async fn call(hub: &Arc<Hub>, caller: &Caller, method: &str, b: Value) -> Result<ControlFlow<Value, Value>> {
     Ok(ControlFlow::Break(match method {
         "hostUpdateStatus" => crate::update::status()?,
@@ -70,6 +71,7 @@ pub(super) async fn call(hub: &Arc<Hub>, caller: &Caller, method: &str, b: Value
                 "version": env!("CARGO_PKG_VERSION"),
                 "minApp": crate::compat::MIN_APP,
                 "fileImageInfo": true,
+                "groupSessions": true,
                 // Whether `installHostUpdate` can update this computer, from here or a phone.
                 "canUpdate": tokio::task::spawn_blocking(crate::update::installable).await?,
                 // The latest release, so a phone can say whether this computer is current (null: unknown).

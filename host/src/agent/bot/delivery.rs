@@ -1,8 +1,8 @@
 //! 投递 turn 的执行和结果保存。房间等待超时不丢弃在途结果。
 
 use super::{Actor, Done, SegKind};
-use crate::store::Lane;
 use crate::store::deliveries::{Delivery, Status};
+use crate::store::{Lane, group_session_slot};
 use anyhow::{Result, ensure};
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -10,6 +10,7 @@ use tokio::sync::{mpsc, oneshot};
 
 pub(super) struct ActiveDelivery {
     pub delivery: Delivery,
+    pub isolated: bool,
     output: Option<String>,
     pub output_open: bool,
     /// 最近一次工具之后、被思考片段分开的正文，供尾部 pass 时保留。
@@ -140,11 +141,29 @@ impl Actor {
                 return;
             }
         };
+        let isolated = match self.has_group_session(&queued.room_id) {
+            Ok(isolated) => isolated,
+            Err(error) => {
+                tracing::warn!(%error, "could not resolve the group session");
+                let _ = reply.send(false);
+                return;
+            }
+        };
+        let slot = isolated.then(|| group_session_slot(&queued.room_id, &self.cfg.backend));
+        // 若该回合会切换后端，旧连接的用量不代表它将使用的会话。
+        let session = if !isolated || self.next_group_turn_uses_current_backend() {
+            self.session_for(slot.as_deref())
+        } else {
+            None
+        };
         // 维护先于领取；DB、会话和房间条件不变时不重复构建超窗任务包。
-        match self
-            .context_is_blocked(&queued)
-            .and_then(|blocked| if blocked { Ok(true) } else { self.prepare_group_context(&queued, None) })
-        {
+        match self.context_is_blocked(&queued, session.as_deref()).and_then(|blocked| {
+            if blocked {
+                Ok(true)
+            } else {
+                self.prepare_group_context(&queued, slot.as_deref(), session.as_deref(), None)
+            }
+        }) {
             Ok(true) => {
                 let _ = reply.send(false);
                 return;
@@ -158,8 +177,10 @@ impl Actor {
         }
         let prepared = crate::chat::group::delivery_prompt(&self.hub, &queued, &self.cfg);
         if let Ok(packet) = &prepared {
-            let estimated = self.group_prompt_estimate(&packet.prompt).await;
-            match estimated.and_then(|estimate| self.prepare_group_context(&queued, Some(estimate))) {
+            let estimated = self.group_prompt_estimate(&packet.prompt, session.as_deref(), slot.is_none()).await;
+            match estimated.and_then(|estimate| {
+                self.prepare_group_context(&queued, slot.as_deref(), session.as_deref(), Some(estimate))
+            }) {
                 Ok(true) => {
                     let _ = reply.send(false);
                     return;
@@ -177,6 +198,7 @@ impl Actor {
             Ok(Some(delivery)) => {
                 self.active_delivery = Some(ActiveDelivery {
                     delivery: delivery.clone(),
+                    isolated,
                     reply,
                     output: None,
                     output_open: false,
@@ -189,7 +211,7 @@ impl Actor {
                     Ok(prepared) => {
                         self.context_blocks.remove(&id);
                         // 仅上报数量和估算来源；未知的真实窗口保持 null，不作为零计费量展示。
-                        let (used, size) = self.reported_group_context();
+                        let (used, size) = self.reported_group_context(session.as_deref());
                         crate::analytics::capture(&self.hub,crate::analytics::Event::GroupContextPrepared,
                             serde_json::json!({"outcome":"prepared","protected_estimated_tokens":prepared.protected_estimate,"background_estimated_tokens":prepared.background_estimate,"background_budget":crate::chat::group::background_budget(),"context_used":used,"context_size":size}).as_object().cloned().unwrap_or_default());
                         tracing::debug!(

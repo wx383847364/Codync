@@ -359,6 +359,7 @@ pub(super) mod tests {
             id: id.into(),
             kind: BotKind::Agent,
             members: vec![],
+            group_session_base: None,
             name: name.into(),
             description: "Keeps the shop's site running".into(),
             avatar_color: "blue".into(),

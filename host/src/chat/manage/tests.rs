@@ -25,7 +25,7 @@ async fn a_manager_creates_and_changes_bots_that_record_who_made_them() {
     let dir = std::env::temp_dir().join(format!("codync-manage-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&dir).unwrap();
     let hub = hub(&dir);
-    let team = call(&hub, "lead", "list_team", &json!({})).await.unwrap();
+    let team = call(&hub, "lead", "list_team", None, &json!({})).await.unwrap();
     let team: Vec<_> = team["bots"]
         .as_array()
         .unwrap()
@@ -40,7 +40,7 @@ async fn a_manager_creates_and_changes_bots_that_record_who_made_them() {
         json!({"name": "Scan", "instruction": "Scan the repo", "triggers": [{"type": "interval", "seconds": 1800}]});
     let args = json!({"name": " Security Analyst ", "instructions": "Reviews code.", "agent": "claude",
         "avatarColor": "red", "routines": [routine]});
-    let made = call(&hub, "lead", "create_bot", &args).await.unwrap();
+    let made = call(&hub, "lead", "create_bot", None, &args).await.unwrap();
     let id = made["bot"]["id"].as_str().unwrap();
     let cfg = hub.store.bot(id).unwrap().unwrap().config;
     assert_eq!(
@@ -52,19 +52,19 @@ async fn a_manager_creates_and_changes_bots_that_record_who_made_them() {
     assert_eq!(cfg.mode.as_deref(), Some("plan"), "in the same mode");
     // Another agent may not have that mode: no bot is made on it.
     let other = json!({"name": "Reviewer", "agent": "codex"});
-    let refused = call(&hub, "lead", "create_bot", &other).await.unwrap_err().to_string();
+    let refused = call(&hub, "lead", "create_bot", None, &other).await.unwrap_err().to_string();
     assert!(refused.contains("plan mode, which Codex may not have"), "{refused}");
     // And reaches only the connectors and skills it does, not every installed one.
     assert_eq!((cfg.connectors, cfg.skills), (vec!["github".to_owned()], vec![]));
     assert_eq!(made["routines"][0]["triggerDescriptions"][0], "Every 30 minutes");
 
-    call(&hub, "lead", "update_bot", &json!({"botId": "dev", "instructions": "Writes code.", "hidden": true}))
+    call(&hub, "lead", "update_bot", None, &json!({"botId": "dev", "instructions": "Writes code.", "hidden": true}))
         .await
         .unwrap();
     let dev = hub.store.bot("dev").unwrap().unwrap().config;
     assert_eq!((dev.description.as_str(), dev.hidden), ("Writes code.", true));
     // A manager changes its own setup too.
-    call(&hub, "lead", "update_bot", &json!({"botId": "lead", "name": "Boss", "model": "opus"})).await.unwrap();
+    call(&hub, "lead", "update_bot", None, &json!({"botId": "lead", "name": "Boss", "model": "opus"})).await.unwrap();
     let lead = hub.store.bot("lead").unwrap().unwrap().config;
     assert_eq!((lead.name.as_str(), lead.model.as_deref(), lead.auto_name), ("Boss", Some("opus"), false));
     assert_eq!(
@@ -82,7 +82,7 @@ async fn a_manager_creates_and_changes_bots_that_record_who_made_them() {
 
     let refused = |bot: &'static str, name: &'static str, args: Value| {
         let hub = hub.clone();
-        async move { call(&hub, bot, name, &args).await.unwrap_err().to_string() }
+        async move { call(&hub, bot, name, None, &args).await.unwrap_err().to_string() }
     };
     assert!(refused("dev", "create_bot", json!({"name": "x"})).await.contains("may not manage the team"));
     assert!(refused("lead", "create_bot", json!({"name": "x", "avatarColor": "plaid"})).await.contains("avatarColor"));

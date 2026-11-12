@@ -6,10 +6,19 @@ any left). tools/asc-submit.py reads the released version's section;
 a version without one gets a generic "Bug fixes and improvements" line. Delete old sections.
 -->
 
-## 2.43.0
+## 2.45.0
 
 ### zh-Hant
 - 長按 Bot 分享的檔案，即可開啟、另存或複製分享當時的檔案內容。
+- 長按群組可用原有成員建立新的空白會話，成員從各自的新會話開始。
+
+### en-US
+- Touch and hold a shared file to open it, save a copy, or copy its text.
+- Touch and hold a group to start a fresh conversation with the same bots. Each bot gets its own session in the new group.
+
+## 2.43.0
+
+### zh-Hant
 - 群組可同時顯示多位 Bot 的工作狀態和用時。
 - 點一下對話中的檔案連結或行內程式碼中的絕對路徑，即可複製電腦上的路徑。
 - 圖片可切換原始像素、縮放和平移，並限制快取與讀取資源。
@@ -21,7 +30,6 @@ a version without one gets a generic "Bug fixes and improvements" line. Delete o
 - 不登入也能用 Wi-Fi 或 Tailscale；帳號可啟用中繼。重試保留附件，儲存故障可重試保存。
 
 ### en-US
-- Touch and hold a shared file to open it, save a copy, or copy its text.
 - See each active group member’s status and elapsed time.
 - Tap file links or absolute paths in inline code to copy the computer’s path.
 - Inspect original image pixels with zoom and pan, with bounded caching.

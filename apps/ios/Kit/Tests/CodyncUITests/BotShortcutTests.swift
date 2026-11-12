@@ -9,6 +9,7 @@ private func shortcutStore(_ storage: SharedStore.Context, remote: FakeRemote) -
     return BotStore(computer: computer, storage: storage) { _ in remote }
 }
 
+/// 快捷指令等待投递结果，并保留独立的输入框草稿。
 @MainActor @Test func shortcutSendWaitsForAcceptanceAndPreservesComposerDraft() async throws {
     let suite = "BotShortcutTests.\(UUID().uuidString)"
     defer { UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite) }
@@ -23,7 +24,8 @@ private func shortcutStore(_ storage: SharedStore.Context, remote: FakeRemote) -
     store.setComposerDraft("Keep my draft", for: "b1")
     let progress = try await store.sendAndWait("  Shortcut text  ", to: "b1")
     if case .delivered = progress {} else { Issue.record("Expected delivered") }
-    #expect(await remote.sent == ["Shortcut text"])
+    // 客户端保留原文发送，Host 统一裁剪。夹具记录的是 RPC 请求。
+    #expect(await remote.sent == ["  Shortcut text  "])
     #expect(store.chat("b1").contains { $0.id == "e1" })
     #expect(store.composerDraft(for: "b1") == "Keep my draft")
     await #expect(throws: (any Error).self) { try await store.sendAndWait("  \n", to: "b1") }
@@ -31,12 +33,13 @@ private func shortcutStore(_ storage: SharedStore.Context, remote: FakeRemote) -
     #expect(await remote.sent.count == 1)
 
     await remote.fail("send", times: 1)
+    // 在第一次发送失败后取消，验证请求不会被重试。
     let cancelled = Task { try await store.sendAndWait("cancel before retry", to: "b1") }
     #expect(await until { await remote.calls.filter { $0 == "send" }.count == 2 })
     cancelled.cancel()
     await #expect(throws: CancellationError.self) { try await cancelled.value }
     try await Task.sleep(for: .milliseconds(600))
-    #expect(await remote.sent == ["Shortcut text"])
+    #expect(await remote.sent == ["  Shortcut text  "])
     #expect(await remote.calls.filter { $0 == "send" }.count == 2)
     #expect(store.chat("b1").contains { $0.data.text == "cancel before retry" && $0.data.status == "failed" })
 

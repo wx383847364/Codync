@@ -7,29 +7,62 @@ use crate::agent::acp::{self, Incoming};
 use crate::agent::own_memory;
 use crate::agent::registry::Candidate;
 use crate::chat::{context, memory};
-use crate::store::run_session_key;
+use crate::store::{group_session_slot, run_session_key};
 use anyhow::{Context, Result, anyhow, bail};
 use serde_json::{Value, json};
 use std::time::{Duration, Instant};
 
 impl Actor {
-    /// Which session the running turn uses: a routine run has one of its own (by its slot); everything else uses
-    /// the main one.
+    /// 群投递在选定后端后解析会话槽，回退重试只能访问该后端的会话。
     pub(super) fn slot(&self) -> Option<String> {
-        self.active_routine.as_deref().map(crate::routines::session_slot)
+        self.active_routine
+            .as_deref()
+            .map(crate::routines::session_slot)
+            .or_else(|| self.isolated_group_room().map(|room| group_session_slot(room, &self.cfg.backend)))
     }
 
+    /// 返回当前执行所属的独立群。整理和业务回合共享这一归属。
+    pub(super) fn isolated_group_room(&self) -> Option<&str> {
+        self.active_delivery
+            .as_ref()
+            .filter(|active| active.isolated)
+            .map(|active| active.delivery.room_id.as_str())
+            .or_else(|| {
+                self.group_compaction.as_ref().filter(|group| group.slot.is_some()).map(|group| group.room.as_str())
+            })
+    }
+
+    /// 读取群的持久设置，读不到时暂停领取，避免误用主会话。
+    pub(super) fn has_group_session(&self, room: &str) -> Result<bool> {
+        let row = self
+            .hub
+            .store
+            .bot(room)?
+            .filter(|row| !row.deleted && row.config.is_group())
+            .ok_or_else(|| anyhow!("group not found"))?;
+        Ok(row.config.group_session_base.is_some())
+    }
+
+    /// 读取会话槽及连接中的所有者，避免复用另一群在新进程中占用的 ACP ID。
     pub(super) fn session_for(&mut self, slot: Option<&str>) -> Option<String> {
-        let Some(slot) = slot else { return self.session_id.clone() };
-        if let Some(sid) = self.run_sessions.get(slot) {
-            return Some(sid.clone());
-        }
-        let sid = self.hub.store.kv_get(&run_session_key(&self.cfg.id, slot));
-        let sid = sid.filter(|s| !s.is_empty())?;
-        self.run_sessions.insert(slot.to_owned(), sid.clone());
-        Some(sid)
+        let sid = if let Some(slot) = slot {
+            if let Some(sid) = self.run_sessions.get(slot) {
+                sid.clone()
+            } else {
+                let sid = self.hub.store.kv_get(&run_session_key(&self.cfg.id, slot)).filter(|s| !s.is_empty())?;
+                self.run_sessions.insert(slot.to_owned(), sid.clone());
+                sid
+            }
+        } else {
+            self.session_id.clone()?
+        };
+        self.conn
+            .as_ref()
+            .is_none_or(|conn| conn.session_slots.get(&sid).is_none_or(|owner| owner.as_deref() == slot))
+            .then_some(sid)
     }
 
+    /// 按当前会话槽保存 ACP 身份，主会话与独立会话各写自己的位置。
     pub(super) fn set_session(&mut self, slot: Option<&str>, sid: Option<&str>) {
         let Some(slot) = slot else {
             self.session_id = sid.map(str::to_owned);
@@ -41,17 +74,17 @@ impl Actor {
         let key = run_session_key(&self.cfg.id, slot);
         let stored = if let Some(s) = sid {
             self.run_sessions.insert(slot.to_owned(), s.to_owned());
-            self.hub.store.kv_set(&key, s)
+            self.hub.store.save_slotted_session(&self.cfg.id, slot, s)
         } else {
             self.run_sessions.remove(slot);
             self.hub.store.kv_delete(&key)
         };
         if let Err(error) = stored {
-            tracing::warn!(bot = %self.cfg.id, error = format!("{error:#}"), "couldn't store the routine run's session");
+            tracing::warn!(bot = %self.cfg.id, error = format!("{error:#}"), "couldn't store the separate session");
         }
     }
 
-    /// Slots of the routine runs that have a session (stored or loaded).
+    /// 列出已保存或加载的独立会话槽，用于配置更改或切换 agent。
     pub(super) fn run_slots(&self) -> Vec<String> {
         let prefix = run_session_key(&self.cfg.id, "");
         let mut slots: Vec<String> = self.run_sessions.keys().cloned().collect();
@@ -118,7 +151,14 @@ impl Actor {
             composio.then_some("composio"),
         ];
         for name in builtin.into_iter().flatten() {
-            servers.push(crate::mcp::acp_server(name, &exe, &[name, "--bot", &self.cfg.id], port));
+            let mut server = crate::mcp::acp_server(name, &exe, &[name, "--bot", &self.cfg.id], port);
+            if let Some(group) = self.isolated_group_room()
+                && let Some(env) = server["env"].as_array_mut()
+            {
+                // 会话 A 的桥即使在会话 B 执行时仍存活，也只能请求 A 的操作。
+                env.push(json!({"name":crate::mcp::GROUP_SESSION_ENV,"value":group}));
+            }
+            servers.push(server);
         }
         Ok(Value::Array(servers))
     }
@@ -170,9 +210,17 @@ impl Actor {
         {
             c.acp.kill().await;
         }
+        // pi 在进程启动时绑定工具。换群时重开该群自己的会话和工具桥。
+        let pi = self.cfg.backend == "pi";
+        let group = self.isolated_group_room().map(str::to_owned);
+        if pi
+            && self.conn.as_ref().is_some_and(|conn| conn.tool_group != group)
+            && let Some(conn) = self.conn.take()
+        {
+            conn.acp.kill().await;
+        }
         let mut servers = self.mcp_servers()?;
         // pi gets its servers when it starts (`pi_tools`), so they take pi's names before that.
-        let pi = self.cfg.backend == "pi";
         let mut renamed = if pi {
             pi_tools::avoid_clashes(&mut servers, &self.cfg.cwd, self.agent_config_path("PI_CODING_AGENT_DIR")).await
         } else {
@@ -202,7 +250,10 @@ impl Actor {
                 // A local CLI too old for ACP just hangs; don't make the user wait long before the fallback.
                 let budget = Duration::from_secs(if fallback_left { 20 } else { 180 });
                 match self.start_candidate(candidate, &env, budget, &progress).await {
-                    Ok(conn) => {
+                    Ok(mut conn) => {
+                        if pi {
+                            conn.tool_group.clone_from(&group);
+                        }
                         self.conn = Some(conn);
                         break;
                     }
@@ -279,6 +330,7 @@ impl Actor {
                         res
                     };
                     conn.loaded.insert(sid.clone(), Instant::now());
+                    conn.session_slots.insert(sid.clone(), slot.map(str::to_owned));
                     conn.renamed.insert(sid.clone(), renamed);
                     self.note_options(&sid, &res, Listing::Session);
                     if let Some(s) = snapshot {
@@ -312,6 +364,7 @@ impl Actor {
         let Some(conn) = self.conn.as_mut() else { bail!("agent not running") };
         let sid = res["sessionId"].as_str().ok_or_else(|| anyhow!("agent returned no sessionId"))?.to_owned();
         conn.loaded.insert(sid.clone(), Instant::now());
+        conn.session_slots.insert(sid.clone(), slot.map(str::to_owned));
         conn.renamed.insert(sid.clone(), renamed);
         let options = select_model(&conn.acp, &res, &sid, &self.cfg).await?;
         self.note_options(&sid, &options, Listing::Session);

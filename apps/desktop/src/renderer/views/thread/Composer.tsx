@@ -208,7 +208,7 @@ function DestinationComposer({ botId, reply, about, cancelReply, onCall, onInter
         {/* 故障入口不依赖尚未写出的投递卡片，使用成员身份恢复保存。 */}
         <button className="press" onClick={() => store.retryDeliverySave(member.id)}>重试保存</button>
       </HStack>)}
-      {bot?.pendingNewSession ? <span>将在当前任务结束后新建会话；成员主会话与群共享。输入 /new-cancel 取消切换。</span> : null}
+      {bot?.pendingNewSession ? <span>将在当前任务结束后新建会话；成员主会话与普通群共享。输入 /new-cancel 取消切换。</span> : null}
       <div
         className="composer"
         onDragOver={(e) => {

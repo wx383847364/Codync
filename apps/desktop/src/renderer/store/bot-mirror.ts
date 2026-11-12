@@ -156,6 +156,11 @@ export class BotMirror extends Observable {
     return this.hostVersion !== null && hostHasSections(this.hostVersion.version)
   }
 
+  /** 只有支持独立群会话的 Host 才展示创建入口。 */
+  get hasGroupSessions() {
+    return this.hello?.groupSessions === true
+  }
+
   /** The user picks the lead (`setLead`) and may delete it: an older host refuses both. */
   get hasLeadChoice() {
     return this.hostVersion !== null && !isBelow(this.hostVersion.version, LEAD_CHOICE_HOST)

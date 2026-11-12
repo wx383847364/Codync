@@ -11,6 +11,9 @@ use tokio::sync::mpsc;
 mod remote;
 pub use remote::serve_remote;
 
+/// 工具桥从 ACP 服务器配置读取群身份，不接收模型提供的群 ID。
+pub(crate) const GROUP_SESSION_ENV: &str = "CODYNC_MCP_GROUP_SESSION";
+
 pub const PROTOCOL_VERSION: &str = "2025-06-18";
 
 /// ACP `McpServer` for `codync-host mcp <args…> --port <port>`. Its env names the data directory, where the token
@@ -46,10 +49,12 @@ Never type a password yourself: use type_login with a saved login (request_login
 Don't approve payments: ask the user to do that from their phone.";
 
 /// Serves MCP on stdio until the agent closes it.
+/// 读取会话工具桥的群身份并在每个 HTTP 请求中带上。
 pub async fn serve(bot: String, port: u16, server: Server) -> Result<()> {
     let token = std::fs::read_to_string(crate::service::data_dir().join("token")).unwrap_or_default();
     let token: Arc<str> = token.trim().into();
     let bot: Arc<str> = bot.into();
+    let group_session = std::env::var(GROUP_SESSION_ENV).ok().map(Arc::<str>::from);
     let mut lines = BufReader::new(tokio::io::stdin()).lines();
     // Requests run side by side (a manage approval can take minutes); their replies share stdout.
     let (replies, mut outbox) = mpsc::unbounded_channel::<Value>();
@@ -109,6 +114,7 @@ pub async fn serve(bot: String, port: u16, server: Server) -> Result<()> {
         let key = id.to_string();
         let (replies, token, bot, available_tools) =
             (replies.clone(), token.clone(), bot.clone(), available_tools.clone());
+        let group_session = group_session.clone();
         let request = tokio::spawn(async move {
             let params = &msg["params"];
             let reply = match msg["method"].as_str().unwrap_or_default() {
@@ -123,7 +129,7 @@ pub async fn serve(bot: String, port: u16, server: Server) -> Result<()> {
                     Server::Computer => computer_tools(port, &token).await,
                     _ => json!({"tools": available_tools}),
                 }),
-                "tools/call" => Ok(call(port, &token, &bot, params, server).await),
+                "tools/call" => Ok(call(port, &token, &bot, group_session.as_deref(), params, server).await),
                 method => Err(json!({"code": -32601, "message": format!("unknown method {method}")})),
             };
             let _ = replies.send(match reply {
@@ -153,9 +159,11 @@ async fn computer_tools(port: u16, token: &str) -> Value {
 }
 
 /// One tool call through the host. Failures are tool errors the agent can read, not protocol errors.
-async fn call(port: u16, token: &str, bot: &str, params: &Value, server: Server) -> Value {
+/// 使用工具桥绑定的群身份，宿主用它拒绝切换会话后的迟到请求。
+async fn call(port: u16, token: &str, bot: &str, group_session: Option<&str>, params: &Value, server: Server) -> Value {
     let body = json!({
         "botId": bot,
+        "groupSession": group_session,
         "name": params["name"],
         "arguments": params.get("arguments").filter(|a| a.is_object()).cloned().unwrap_or_else(|| json!({})),
     });

@@ -51,7 +51,7 @@ enum SlashCommands {
     private static func sessions(_ bot: Bot) -> [SlashCommand] {
         guard !bot.isGroup else { return [] }
         return [("new", "after", "在当前任务结束后新建会话"), ("new-now", "immediate", "立即停止并新建"), ("new-cancel", "cancel", "取消切换")].map { name, mode, title in
-            SlashCommand(name: name, icon: "plus", title: title, detail: "主会话与群共享；先保存当前执行状态", warning: false, action: .session(mode))
+            SlashCommand(name: name, icon: "plus", title: title, detail: "主会话与普通群共享；先保存当前执行状态", warning: false, action: .session(mode))
         }
     }
 
