@@ -72,6 +72,7 @@ pub(super) async fn call(hub: &Arc<Hub>, caller: &Caller, method: &str, b: Value
                 "minApp": crate::compat::MIN_APP,
                 "fileImageInfo": true,
                 "groupSessions": true,
+                "stageGroups": true,
                 // Whether `installHostUpdate` can update this computer, from here or a phone.
                 "canUpdate": tokio::task::spawn_blocking(crate::update::installable).await?,
                 // The latest release, so a phone can say whether this computer is current (null: unknown).

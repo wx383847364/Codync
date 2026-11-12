@@ -90,7 +90,11 @@ pub fn with_members(store: &Store, members: &[String]) -> Result<Option<String>>
     Ok(store.bots()?.into_iter().find_map(|row| {
         let mut have = row.config.members.clone();
         have.sort();
-        (!row.deleted && row.config.is_group() && row.config.group_session_base.is_none() && have == wanted)
+        (!row.deleted
+            && row.config.is_group()
+            && row.config.group_session_base.is_none()
+            && row.config.stage.is_none()
+            && have == wanted)
             .then_some(row.config.id)
     }))
 }

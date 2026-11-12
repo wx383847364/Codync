@@ -46,9 +46,7 @@ pub(crate) fn launch_commands(cfg: &BotConfig) -> Result<Vec<Candidate>> {
     })
 }
 
-/// Switches a session (`session/new`, `session/load` or `session/resume` answered `res`) to the bot's
-/// chosen model, then sets that model's options (effort, fast…). Returns the answer holding
-/// the session's config options now: a model can change them.
+/// 切换模型并应用配置，只有会话报告或成功确认的选择用于本地用量归属。
 pub(crate) async fn select_model(acp: &Acp, res: &Value, sid: &str, cfg: &BotConfig) -> Result<Value> {
     let selected = cfg.model.as_deref().filter(|m| !m.is_empty());
     let (model, options) = model_choice(res, selected.unwrap_or("Default"), &cfg.model_options);
@@ -56,20 +54,27 @@ pub(crate) async fn select_model(acp: &Acp, res: &Value, sid: &str, cfg: &BotCon
         acp.request("session/set_config_option", json!({"sessionId": sid, "configId": id, "value": value}))
     };
     let mut current = res.clone();
+    let mut confirmed = reported_model(res).map(str::to_owned);
     if selected.is_some() {
         if let Some(config_id) = crate::agent::auth::model_config(res).and_then(|c| c["id"].as_str()) {
             let answer = set(config_id, model).await.map_err(|e| model_error(model, &e))?;
+            confirmed = Some(reported_model(&answer).unwrap_or(model).to_owned());
             if answer["configOptions"].is_array() {
                 current = answer;
             }
         } else {
-            acp.request("session/set_model", json!({"sessionId": sid, "modelId": model}))
+            let answer = acp
+                .request("session/set_model", json!({"sessionId": sid, "modelId": model}))
                 .await
                 .map_err(|e| model_error(model, &e))?;
+            confirmed = Some(reported_model(&answer).unwrap_or(model).to_owned());
         }
     }
     for (id, value) in options {
         let answer = set(id, value).await.map_err(|e| model_error(&format!("{model} with {id}={value}"), &e))?;
+        if let Some(model) = reported_model(&answer) {
+            confirmed = Some(model.to_owned());
+        }
         if answer["configOptions"].is_array() {
             current = answer;
         }
@@ -80,7 +85,18 @@ pub(crate) async fn select_model(acp: &Acp, res: &Value, sid: &str, cfg: &BotCon
     {
         current["modes"] = modes.clone();
     }
+    if let Some(model) = confirmed {
+        current["_codyncSelectedModel"] = model.into();
+    }
     Ok(current)
+}
+
+/// 使用会话返回的当前模型字段，缺省时不拿配置列表或显示名代替。
+pub(super) fn reported_model(options: &Value) -> Option<&str> {
+    crate::agent::auth::model_config(options)
+        .and_then(|item| item["currentValue"].as_str())
+        .or_else(|| options["models"]["currentModelId"].as_str())
+        .filter(|model| !model.is_empty())
 }
 
 /// The model to select and the options to set on it: the model id's variant, then the bot's own. How the agent
@@ -118,8 +134,16 @@ fn split_variant<'a>(res: &Value, model: &'a str) -> (&'a str, Vec<(&'a str, &'a
 }
 
 /// Spawns an ACP agent and completes the `initialize` handshake.
-pub(crate) async fn start_agent(command: &str, cwd: &str, env: &[(String, String)], budget: Duration) -> Result<Conn> {
+/// 子进程真正启动后通知调用方，再等待可能失败的 ACP 握手。
+pub(crate) async fn start_agent(
+    command: &str,
+    cwd: &str,
+    env: &[(String, String)],
+    budget: Duration,
+    spawned: impl FnOnce(),
+) -> Result<Conn> {
     let (acp, rx) = Acp::spawn(command, cwd, env)?;
+    spawned();
     let init = tokio::time::timeout(
         budget,
         acp.request(
@@ -174,6 +198,7 @@ pub(crate) async fn start_agent(command: &str, cwd: &str, env: &[(String, String
         tool_group: None,
         loaded: HashMap::new(),
         session_slots: HashMap::new(),
+        confirmed_models: HashMap::new(),
         started: Instant::now(),
         opening: false,
         fast_options: HashMap::new(),

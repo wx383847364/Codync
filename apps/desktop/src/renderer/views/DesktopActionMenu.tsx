@@ -53,8 +53,9 @@ export function DesktopActionMenu({ items, onDismiss, x, y }: { items: ActionIte
       hover.current?.schedule(index)
     } else hover.current?.schedule(null)
   }
+  // 菜单说明显示在标题下方，账号菜单的行尾计数仍由 PanelItem.detail 显示。
   const convert = (item: ActionItem, index: number): PanelItem => ({
-    title: item.title, icon: item.icon ?? 'circle', detail: item.detail, verbatim: item.verbatim, destructive: item.destructive,
+    title: item.title, icon: item.icon ?? 'circle', subtitle: item.detail, verbatim: item.verbatim, destructive: item.destructive,
     ...('submenu' in item ? { chevron: true, submenu: true, expanded: open === index, action: (row: HTMLButtonElement | null) => enter(index, row) }
       : { action: () => { onDismiss(); item.action() } }),
   })

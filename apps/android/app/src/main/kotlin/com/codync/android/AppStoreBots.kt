@@ -101,6 +101,30 @@ fun AppStore.createGroupSession(botId: String) = action("groupSession:$botId") {
     openBot(response.jsonObject.getValue("bot").jsonObject.getValue("id").jsonPrimitive.content)
 }
 
+/** 创建已确认的阶段群，保存首条草稿并打开，失败沿用 Store 的错误反馈。 */
+internal fun AppStore.createStageGroup(draft: StageGroupDraft, saved: () -> Unit) = action("stage-group") {
+    val response = ready().call("createStageGroup", WireJson.encodeToJsonElement(draft).jsonObject)
+    val bot = HostClient.decode(response.jsonObject.getValue("bot").jsonObject)
+    receiveReply(response)
+    if (bot.lastMessage == null && state.value.drafts[bot.id]?.text.isNullOrEmpty()) {
+        editDraft(bot.id, response.jsonObject.getValue("draft").jsonPrimitive.content)
+    }
+    openBot(bot.id)
+    saved()
+}
+
+/** 查询或修改阶段状态后同步 Host 投影，不重新选择当前聊天。 */
+internal suspend fun AppStore.stageDetails(botId: String, change: StageChange? = null): StageDetails {
+    val response = if (change == null) ready().call("stageDetails", body("botId" to botId))
+        else ready().call("changeStage", WireJson.encodeToJsonElement(change).jsonObject)
+    receiveReply(response)
+    return WireJson.decodeFromJsonElement(response)
+}
+
+/** 读取阶段用量只触及本机统计，不刷新账户额度或执行机器人。 */
+internal suspend fun AppStore.stageUsage(botId: String): StageUsage =
+    WireJson.decodeFromJsonElement(ready().call("stageUsage", body("botId" to botId)))
+
 /** `/fast`: a bot's own Fast mode, or a group's members' together (each member's own setting, so it holds in their chats too). */
 fun AppStore.toggleFastMode(bot: Bot) {
     if (bot.kind != "group") return setFastMode(bot, !bot.fastMode)

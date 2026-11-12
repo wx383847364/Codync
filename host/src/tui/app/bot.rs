@@ -22,6 +22,7 @@ pub enum OwnMemory {
 #[allow(clippy::struct_excessive_bools, reason = "mirrors the host's bot JSON")]
 pub struct Bot {
     pub id: String,
+    pub rev: i64,
     pub name: String,
     pub description: String,
     pub color: String,
@@ -60,6 +61,7 @@ pub struct Bot {
     pub created_at: i64,
     /// The harness's own memory beside Codync's; `None` where the screen says nothing about it.
     pub harness_memory: Option<OwnMemory>,
+    pub stage_memory_shared: bool,
     /// Agents that carry on, in order, when its own can't answer (`agent::fallback`).
     pub fallbacks: Vec<crate::store::Fallback>,
     /// The bot may set its own fallbacks.
@@ -83,6 +85,7 @@ pub struct Bot {
     /// A group chat: several bots and the user, no agent of its own.
     pub group: bool,
     pub members: Vec<String>,
+    pub(crate) stage: Option<crate::store::StageGroup>,
     /// Where the running turn talks: a chat (`None` = its own).
     pub working_chat: Option<String>,
 }
@@ -168,10 +171,12 @@ impl Bot {
         if self.managed_workspace { "personal workspace".to_owned() } else { tilde(&self.cwd, home) }
     }
 
+    /// 解析 Host 同步资料，版本用于校验阶段预览后角色配置是否变化。
     pub(in crate::tui) fn parse(v: &Value) -> Option<Self> {
         let s = |k: &str| v[k].as_str().unwrap_or_default().to_owned();
         Some(Self {
             id: v["id"].as_str()?.to_owned(),
+            rev: v["rev"].as_i64().unwrap_or_default(),
             name: s("name"),
             description: s("description"),
             color: v["avatarColor"].as_str().unwrap_or("blue").to_owned(),
@@ -207,6 +212,7 @@ impl Bot {
                 .as_bool()
                 .map(OwnMemory::Switch)
                 .or_else(|| (v["harnessMemoryShared"] == true).then_some(OwnMemory::Shared)),
+            stage_memory_shared: v["stageMemoryShared"] == true,
             fallbacks: serde_json::from_value(v["fallbacks"].clone()).unwrap_or_default(),
             self_fallbacks: v["selfFallbacks"].as_bool().unwrap_or(true),
             agent_step: v["agentStep"]["agent"].as_str().map(str::to_owned),
@@ -229,6 +235,7 @@ impl Bot {
             last_at: v["lastAt"].as_i64().unwrap_or(0),
             group: v["kind"] == "group",
             members: strs(&v["members"]),
+            stage: serde_json::from_value(v["stage"].clone()).unwrap_or_default(),
             working_chat: v["workingChat"].as_str().map(str::to_owned),
         })
     }

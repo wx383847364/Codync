@@ -285,6 +285,17 @@ def prompt(request):
                 update({"sessionUpdate": "compaction_update", "compactionId": "group-script-compact", "status": "completed"})
             if "usage" in script:
                 update({"sessionUpdate": "usage_update", **script["usage"]})
+            if "readStageHandoff" in script:
+                # 从 ACP 实际收到的路径读快照，避免只在 Host 测试代码里验证文件存在。
+                handoff = re.search(r"Read the Markdown at (.+?) \(SHA-256", text)
+                assert handoff and pathlib.Path(handoff.group(1)).read_text() == script["readStageHandoff"], text
+            if "publishStageEvidence" in script:
+                # 从实际执行目录发布证据，下一阶段必须读取自己的固定副本。
+                response = mcp_call("chat", "send_file", {"path": script["publishStageEvidence"]})
+                assert not response.get("isError"), response
+            if "readStageEvidence" in script:
+                evidence = re.search(r"Evidence file:[^ ]+ \([^)]*\) at (.+?) \(SHA-256", text)
+                assert evidence and pathlib.Path(evidence.group(1)).read_text() == script["readStageEvidence"], text
             for task in script.get("tasks", []):
                 response = mcp_call("team", "message_bot", task)
                 assert not response.get("isError"), response
@@ -310,7 +321,11 @@ def prompt(request):
                     update({"sessionUpdate": "tool_call_update", "toolCallId": "report-tool", "status": "completed"})
                 for chunk in ["(pa", "ss)"]:
                     update({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": chunk}})
-            send({"id": request["id"], "result": {"stopReason": "end_turn"}})
+            # 最终实报与 usage_update 的上下文用量分开，后者可以重复出现。
+            result = {"stopReason": "end_turn"}
+            if "resultUsage" in script:
+                result["usage"] = script["resultUsage"]
+            send({"id": request["id"], "result": result})
             return
         # A room turn: answer only when the user spoke last, otherwise pass.
         room = text.split("New messages in the room (oldest first):\n", 1)[-1].split("\n\n", 1)[0]
@@ -369,6 +384,10 @@ for line in sys.stdin:
         # 测试在claimed与started之间强杀host，准备会话时绝不发送任务prompt。
         while pathlib.Path("hold-session").exists():
             time.sleep(0.01)
+        if pathlib.Path("fail-session").exists():
+            # 记录执行尝试和进程启动，但在发送任务 prompt 前就失败。
+            send({"id": request["id"], "error": {"code": -32000, "message": "fixture session start failed"}})
+            continue
         servers = request["params"]["mcpServers"]
         with open("sessions.jsonl", "a") as log:
             log.write(json.dumps(request) + "\n")
@@ -379,9 +398,14 @@ for line in sys.stdin:
         pathlib.Path("servers.json").write_text(json.dumps(request["params"]["mcpServers"]))
         # 新会话获得不同身份；重开时返回宿主请求的原身份。
         session_id = request["params"].get("sessionId") or str(uuid.uuid4())
-        send({"id": request["id"], "result": {"sessionId": session_id, "models": {
+        result = {"sessionId": session_id, "models": {
             "currentModelId": "old", "availableModels": [{"modelId": "old", "name": "Old"}, {"modelId": "new", "name": "New"}],
-        }}})
+        }}
+        if pathlib.Path("modern-model").exists():
+            # 设置模型只回 ACK，不重发配置列表，Host 应记录确认后的选择。
+            result["configOptions"] = [{"id": "model", "type": "select", "category": "model",
+                "currentValue": "old", "options": [{"value": "old", "name": "Old"}, {"value": "new", "name": "New"}]}]
+        send({"id": request["id"], "result": result})
     elif method == "session/set_model":
         # 用于执行中更改配置的回归；当前回合仍按旧模型身份完成。
         send({"id": request["id"], "result": {}})

@@ -50,6 +50,8 @@ pub enum Action {
     NewBot,
     NewGroup,
     NewGroupSession,
+    NewStageGroup,
+    StageDetails,
     Market,
     Memory,
     Details,
@@ -67,10 +69,12 @@ pub enum Action {
     Appearance(super::super::appearance::Appearance),
 }
 
-pub const ACTIONS: [(&str, &str, Action); 20] = [
+pub const ACTIONS: [(&str, &str, Action); 22] = [
     ("New bot…", "n", Action::NewBot),
     ("New group chat…", "m", Action::NewGroup),
     ("Create new group session", "", Action::NewGroupSession),
+    ("Create next stage group", "", Action::NewStageGroup),
+    ("Stage details", "", Action::StageDetails),
     ("Extensions: agents, connectors, skills…", "A", Action::Market),
     ("Memory of this bot…", "M", Action::Memory),
     ("Details of this bot…", "R", Action::Details),
@@ -332,6 +336,8 @@ pub enum Overlay {
     Folder(FolderPicker),
     Form(Box<Form>),
     Group(GroupForm),
+    StageGroup(Box<super::StageGroupForm>),
+    StageDetails(Box<super::StageDetailsForm>),
     /// How far its list is scrolled.
     Usage(usize),
     /// Which agents' limits show: the row under the cursor, and whether a move is on its way to the host (the next waits

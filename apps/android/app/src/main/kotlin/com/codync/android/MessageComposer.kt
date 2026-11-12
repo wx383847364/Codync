@@ -91,6 +91,10 @@ private enum class Trailing { Interrupt, Stop, Call, Send }
 @Composable fun MessageComposer(bot: Bot, state: AppState, store: AppStore, onCall: (() -> Unit)?,
     onInterrupt: (() -> Unit)? = null, replyTo: ReplyQuote? = null, cancelReply: () -> Unit = {}, about: String? = null,
     draftKey: String = bot.id, queued: List<Entry> = emptyList()) {
+    if (bot.stage?.closedAt != null) {
+        Text(tr("Stage closed"), modifier = Modifier.padding(12.dp), style = Type.footnote, color = Palette.secondary)
+        return
+    }
     val draft = state.drafts[draftKey]
     val text = rememberTextFieldState(initialText = draft?.text.orEmpty())
     val files = draft?.files.orEmpty()
@@ -159,9 +163,15 @@ private enum class Trailing { Interrupt, Stop, Call, Send }
         onCall != null && bare -> Trailing.Call
         else -> Trailing.Send
     }
+    // 已移出群的负责人不再显示为默认接收人。
+    val stageLead = state.bots.firstOrNull { it.id == bot.stage?.leaderId && it.id in bot.members }
     val placeholder = when {
         about != null -> tr("Message about “{title}”").replace("{title}", about)
         replyTo != null -> tr("Reply…")
+        bot.stage != null -> {
+            if (stageLead == null) tr("Choose a recipient with @")
+            else tr("Ask {name} · @ to choose another recipient").replace("{name}", stageLead.name)
+        }
         bot.kind == "group" -> tr("Ask everyone · @ to ask one bot")
         working -> tr("Queue a message for {name}").replace("{name}", bot.name)
         else -> tr("Ask {name}").replace("{name}", bot.name)
@@ -207,6 +217,10 @@ private enum class Trailing { Interrupt, Stop, Call, Send }
         if (command != null) run(command) else store.sendDraft(draftKey, bot.id, typed, replyTo) { clear(); cancelReply() }
     }
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+    if (bot.stage != null && typed.isNotEmpty() && replyTo == null && about == null) {
+        Text(stageLead?.let { tr("Default recipient · {name}").replace("{name}", it.name) } ?: tr("Choose a recipient with @"),
+            modifier = Modifier.padding(horizontal = 16.dp), style = Type.footnote, color = Palette.secondary)
+    }
     // 来源群直接展示成员保存故障，按持有内存结果的成员身份重试。
     (if (bot.kind == "group") members.filter { it.workingChat == bot.id } else listOf(bot)).filter { it.storageError != null }.forEach { member ->
         Text("${member.name}: ${member.storageError}", style = Type.footnote, color = Palette.danger)

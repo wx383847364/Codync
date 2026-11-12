@@ -52,6 +52,36 @@ pub enum BotKind {
     Group,
 }
 
+/// 阶段群的目标、验收条件与本群负责人，普通群没有这组配置。
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct StageGroup {
+    pub leader_id: String,
+    pub goal: String,
+    pub acceptance: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub handoff: Option<StageHandoff>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub incoming: Option<crate::chat::files::SharedFile>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub incoming_files: Vec<crate::chat::files::SharedFile>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub closed_at: Option<i64>,
+}
+
+/// 验收记录绑定这一个快照版本；保存新版本需要再次验收。
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct StageHandoff {
+    pub file: crate::chat::files::SharedFile,
+    pub evidence: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub evidence_files: Vec<crate::chat::files::SharedFile>,
+    pub saved_at: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accepted_at: Option<i64>,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 #[expect(clippy::struct_excessive_bools, reason = "independent user settings stored as plain JSON flags")]
@@ -65,6 +95,9 @@ pub struct BotConfig {
     /// 新会话群的编号基名。存在时，成员按群使用独立的模型会话。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) group_session_base: Option<String>,
+    /// 仅由阶段群创建入口写入，普通编辑与复制会话不会覆盖它。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) stage: Option<StageGroup>,
     pub name: String,
     #[serde(default)]
     pub description: String,

@@ -67,6 +67,10 @@ private const val SECTIONS_HOST = "2.32.0"
 internal val AppState.supportsGroupSessions: Boolean
     get() = hello?.get("groupSessions")?.jsonPrimitive?.booleanOrNull == true
 
+/** 当前电脑支持阶段群时显示创建入口。 */
+internal val AppState.supportsStageGroups: Boolean
+    get() = hello?.get("stageGroups")?.jsonPrimitive?.booleanOrNull == true
+
 /** Section controls show only for a host that keeps sections; before its `hello` (offline) they stay hidden. */
 internal val AppState.supportsSections: Boolean
     get() = hello?.text("version")?.let { !AppVersion.isBelow(it, SECTIONS_HOST) } == true

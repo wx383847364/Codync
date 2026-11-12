@@ -49,6 +49,12 @@ pub enum After {
     Update,
     Saved,
     GroupSessionCreated,
+    StageGroupCreated,
+    StageDetails {
+        room: String,
+        saved: bool,
+    },
+    StageUsage(String),
     Connectors,
     Skills,
     Installed,

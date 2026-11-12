@@ -27,6 +27,7 @@ mod permission;
 mod queue;
 mod roster;
 mod skill;
+mod stage_group;
 mod style;
 mod time;
 mod trace;

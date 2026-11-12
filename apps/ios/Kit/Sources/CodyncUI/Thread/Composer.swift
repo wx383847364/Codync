@@ -54,10 +54,21 @@ struct Composer: View {
 
     private var canAttach: Bool { bot != nil }
 
+    /// 通过群成员解析默认负责人，已移除的角色不再显示为接收人。
+    private var stageLead: Bot? {
+        guard let id = bot?.stage?.leaderId else { return nil }
+        return members.first { $0.id == id }
+    }
+
+    /// 群输入框提示默认接收人，引用及附件保持当前提示。
     private var placeholder: String {
         let name = bot?.name ?? ""
         if let artifact { return L10n.tr("Message about “{title}”").replacingOccurrences(of: "{title}", with: artifact.title) }
         if replyingTo != nil { return L10n.tr("Reply…") }
+        if bot?.stage != nil {
+            guard let lead = stageLead else { return L10n.tr("Choose a recipient with @") }
+            return L10n.tr("Ask {name} · @ to choose another recipient").replacingOccurrences(of: "{name}", with: lead.name)
+        }
         if bot?.isGroup == true { return L10n.tr("Ask everyone · @ to ask one bot") }
         let key = working ? "Queue a message for {name}" : "Ask {name}"
         return L10n.tr(key).replacingOccurrences(of: "{name}", with: name)
@@ -113,7 +124,21 @@ struct Composer: View {
 
     /// 呈现候选、来源成员保存故障与编辑器，所有发送仍经 host。
     var body: some View {
+        if bot?.stage?.closedAt != nil {
+            Text(L10n.tr("Stage closed")).font(.footnote).foregroundStyle(Palette.secondary).padding(12)
+        } else {
+            editor
+        }
+    }
+
+    /// 已开放的群沿用现有草稿、选择与发送操作。
+    private var editor: some View {
         VStack(alignment: .leading, spacing: 6) {
+            if bot?.stage != nil && !draft.isEmpty && replyingTo == nil && artifact == nil {
+                Text(stageLead.map { L10n.tr("Default recipient · {name}").replacingOccurrences(of: "{name}", with: $0.name) }
+                     ?? L10n.tr("Choose a recipient with @"))
+                    .font(.footnote).foregroundStyle(Palette.secondary)
+            }
             ForEach(storageFailures) { member in
                 Text("\(member.name): \(member.storageError ?? "")").font(.footnote).foregroundStyle(Palette.danger)
                 Button("重试保存") {

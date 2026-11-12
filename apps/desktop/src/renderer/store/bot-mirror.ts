@@ -161,6 +161,11 @@ export class BotMirror extends Observable {
     return this.hello?.groupSessions === true
   }
 
+  /** 由 Host 的能力标记控制阶段群入口。 */
+  get hasStageGroups() {
+    return this.hello?.stageGroups === true
+  }
+
   /** The user picks the lead (`setLead`) and may delete it: an older host refuses both. */
   get hasLeadChoice() {
     return this.hostVersion !== null && !isBelow(this.hostVersion.version, LEAD_CHOICE_HOST)

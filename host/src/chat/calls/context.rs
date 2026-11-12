@@ -360,6 +360,7 @@ pub(super) mod tests {
             kind: BotKind::Agent,
             members: vec![],
             group_session_base: None,
+            stage: None,
             name: name.into(),
             description: "Keeps the shop's site running".into(),
             avatar_color: "blue".into(),

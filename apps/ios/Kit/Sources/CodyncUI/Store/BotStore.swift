@@ -253,6 +253,9 @@ public final class BotStore {
         hello?.groupSessions == true
     }
 
+    /// 由当前 Host 公布的能力决定是否展示阶段入口。
+    public var supportsStageGroups: Bool { hello?.stageGroups == true }
+
     /// From host 2.33.0 the user picks the lead (`setLead`) and may delete it; an older host refuses both.
     public var supportsLeadChoice: Bool {
         hostVersion.map { !AppVersion.isBelow($0.version, Self.leadChoiceHost) } ?? false
