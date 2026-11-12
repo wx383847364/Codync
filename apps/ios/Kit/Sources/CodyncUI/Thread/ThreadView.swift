@@ -289,7 +289,9 @@ struct GroupIntroCard: View {
                     .foregroundStyle(Palette.secondary)
                     .multilineTextAlignment(.center)
             }
-            Text(L10n.tr("Everyone answers in turn. @mention a bot to ask just that one."))
+            let lead = model.members(of: group).first { $0.id == (group.stage?.leaderId ?? group.groupLeaderId) }
+            Text(lead.map { L10n.tr("Ask {name} · @ to choose another recipient").replacingOccurrences(of: "{name}", with: $0.name) }
+                 ?? L10n.tr(group.stage != nil ? "Choose a recipient with @" : "Everyone answers in turn. @mention a bot to ask just that one."))
                 .font(.subheadline)
                 .foregroundStyle(Palette.secondary)
                 .multilineTextAlignment(.center)

@@ -454,13 +454,16 @@ function GroupIntroCard({ group }: { group: Bot }) {
   const store = useStore()
   const members = store.members(group)
   const names = members.map((m) => m.name)
+  const lead = members.find((member) => member.id === (group.stage?.leaderId ?? group.groupLeaderId))
+  const hint = lead ? tr('Ask {name} · @ to choose another recipient').replace('{name}', () => lead.name)
+    : group.stage ? tr('Choose a recipient with @') : tr('Everyone answers in turn. @mention a bot to ask just that one.')
   return (
     <div className="intro-card">
       <GroupAvatar members={members} size={72} />
       <Text as="div" size="title2" weight="semibold" tone="text">{group.name}</Text>
       {group.name !== names.join(', ') ? <Text as="div" size="subheadline" tone="secondary">{names.join(' · ')}</Text> : null}
       {group.description ? <Text as="div" size="subheadline" tone="secondary">{group.description}</Text> : null}
-      <Text as="div" size="callout" tone="secondary" className="intro-card-hint balanced">{tr(`Everyone answers in turn. @mention a bot to ask just that one.`)}</Text>
+      <Text as="div" size="callout" tone="secondary" className="intro-card-hint balanced">{hint}</Text>
     </div>
   )
 }

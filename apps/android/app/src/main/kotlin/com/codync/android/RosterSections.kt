@@ -67,6 +67,10 @@ private const val SECTIONS_HOST = "2.32.0"
 internal val AppState.supportsGroupSessions: Boolean
     get() = hello?.get("groupSessions")?.jsonPrimitive?.booleanOrNull == true
 
+/** 新版 Host 支持确认群成员和留空阶段字段。 */
+internal val AppState.supportsGroupMemberPicker: Boolean
+    get() = hello?.get("groupMemberPicker")?.jsonPrimitive?.booleanOrNull == true
+
 /** 当前电脑支持阶段群时显示创建入口。 */
 internal val AppState.supportsStageGroups: Boolean
     get() = hello?.get("stageGroups")?.jsonPrimitive?.booleanOrNull == true

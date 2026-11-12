@@ -355,14 +355,21 @@ pub(super) fn form_view(buf: &mut Buffer, area: Rect, app: &App, f: &Form) {
     rput(buf, inner.right(), by, hint, t.dim.patch(t.panel));
 }
 
+/// 绘制终端群表单，候选支持搜索，负责人单独选择。
 pub(super) fn group_view(buf: &mut Buffer, area: Rect, app: &App, g: &GroupForm) {
     let t = theme();
-    let bots = app.group_candidates(&g.members);
+    let bots = app.group_candidates(g);
     // A new group gets its About afterwards, in the editor.
     let about = g.group_id.is_some();
-    let top = if about { 4 } else { 2 };
-    let r = centered(area, 74, u(bots.len() + 8).saturating_add(top).max(16));
-    let title = tr(if about { "Group chat" } else { "New group chat" });
+    let top = 4;
+    let r = centered(area, 74, u(bots.len() + 10).saturating_add(top).max(16));
+    let title = tr(if about {
+        "Group chat"
+    } else if g.session_source.is_some() {
+        "Create new group session"
+    } else {
+        "New group chat"
+    });
     let inner = frame_box(buf, r, t.text, t.panel, Some((title.as_ref(), t.text)));
     let label = |on: bool| if on { t.bold } else { t.secondary }.patch(t.panel);
     let on_bots = g.field == GroupField::Bots;
@@ -390,6 +397,16 @@ pub(super) fn group_view(buf: &mut Buffer, area: Rect, app: &App, g: &GroupForm)
             g.field == GroupField::About,
             false,
         );
+    } else {
+        input_line(
+            buf,
+            Rect::new(inner.x, inner.y + 2, inner.width, 1),
+            inner.y + 2,
+            &g.query,
+            tr("Search or add bots").as_ref(),
+            g.field == GroupField::Search,
+            false,
+        );
     }
     put(buf, inner.x, inner.y + top, inner.width, &format!("Bots · {}", g.members.len()), label(on_bots));
     let list_h = usize::from(inner.height.saturating_sub(top + 5));
@@ -400,7 +417,7 @@ pub(super) fn group_view(buf: &mut Buffer, area: Rect, app: &App, g: &GroupForm)
             inner.x,
             inner.y + top + 1,
             inner.width,
-            tr("No bots yet. Create a bot first.").as_ref(),
+            tr(if g.query.text.is_empty() { "No bots yet. Create a bot first." } else { "No matching bots" }).as_ref(),
             t.dim.patch(t.panel),
         );
     }
@@ -422,6 +439,19 @@ pub(super) fn group_view(buf: &mut Buffer, area: Rect, app: &App, g: &GroupForm)
         rput(buf, inner.right(), y, &truncate(&folder, usize::from(inner.width / 3)), t.dim.patch(base));
     }
     let by = inner.bottom() - 1;
+    let leader = g.leader.as_ref().and_then(|id| app.bots.get(id));
+    let stage = g.group_id.as_ref().and_then(|id| app.bots.get(id)).is_some_and(|group| group.stage.is_some());
+    if g.show_leader {
+        let value = leader.map_or_else(|| tr("No lead").into_owned(), |bot| bot.name.clone());
+        put(
+            buf,
+            inner.x,
+            by.saturating_sub(2),
+            inner.width,
+            &format!("{}   ‹ {value} ›", tr("Group lead (optional)")),
+            label(g.field == GroupField::Leader),
+        );
+    }
     if let Some(e) = &g.error {
         put(buf, inner.x, by - 1, inner.width, e, t.red.patch(t.panel));
     } else {
@@ -430,7 +460,10 @@ pub(super) fn group_view(buf: &mut Buffer, area: Rect, app: &App, g: &GroupForm)
             inner.x,
             by - 1,
             inner.width,
-            tr("Everyone answers in turn unless you @mention someone.").as_ref(),
+            &leader.map_or_else(
+                || tr(if stage { "Choose a recipient with @" } else { "Ask everyone · @ to ask one bot" }).into_owned(),
+                |bot| tr("Ask {name} · @ to choose another recipient").replace("{name}", &bot.name),
+            ),
             t.dim.patch(t.panel),
         );
     }

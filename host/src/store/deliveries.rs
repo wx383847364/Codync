@@ -6,7 +6,7 @@ mod tests;
 
 use super::{Entry, EntryKind, Store, now_ms};
 use crate::LockExt;
-use anyhow::{Result, bail, ensure};
+use anyhow::{Context, Result, bail, ensure};
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -274,7 +274,7 @@ impl Store {
             .collect::<rusqlite::Result<_>>()?)
     }
 
-    /// 在投递事务内绑定阶段群负责人，并一次提交消息与所有目标。
+    /// 在投递事务内读取默认接收人，并一次提交消息与所有目标。
     pub fn post_group(&self, room: &str, data: &Value, targets: &[String]) -> Result<(Entry, Vec<Entry>)> {
         let mut c = self.db.locked();
         let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -293,32 +293,48 @@ impl Store {
         {
             return Ok((entry, vec![]));
         }
-        ensure!(
-            tx.query_row(
-                "SELECT EXISTS(SELECT 1 FROM bots WHERE id=? AND deleted=0 AND json_extract(config,'$.kind')='group')",
+        let raw: String = tx
+            .query_row(
+                "SELECT config FROM bots WHERE id=? AND deleted=0 AND json_extract(config,'$.kind')='group'",
                 [room],
-                |r| r.get::<_, bool>(0)
-            )?,
-            "The group is no longer available."
-        );
-        let stage = super::bots::room_stage(&tx, room)?;
+                |r| r.get(0),
+            )
+            .optional()?
+            .context("The group is no longer available.")?;
+        let group: super::BotConfig = serde_json::from_str(&raw)?;
         ensure!(
-            stage.as_ref().is_none_or(|stage| stage.closed_at.is_none()),
+            group.stage.as_ref().is_none_or(|stage| stage.closed_at.is_none()),
             "This stage is closed. Reopen it to send work."
         );
-        let leader = stage.as_ref().filter(|_| targets.is_empty()).map(|stage| vec![stage.leader_id.clone()]);
-        if let Some(ids) = &leader {
-            // 引用已离群成员的定向回复不能隐式改发给负责人。
-            ensure!(
-                data["replyTo"]["author"].as_str().is_none_or(|author| author == "user"),
-                "The quoted member is unavailable. Choose a recipient with @."
-            );
-            ensure!(eligible(&tx, room, &ids[0], None)?, "The stage lead is unavailable. Choose a recipient with @.");
+        // 明确提及与回复优先。普通群的负责人离群时按最新成员名单广播。
+        let mut default = Vec::new();
+        if targets.is_empty() {
+            if let Some(leader) = group.group_leader() {
+                if eligible(&tx, room, leader, None)? {
+                    // 引用已离群成员的回复不能隐式改发给负责人。
+                    ensure!(
+                        data["replyTo"]["author"].as_str().is_none_or(|author| author == "user"),
+                        "The quoted member is unavailable. Choose a recipient with @."
+                    );
+                    default.push(leader.to_owned());
+                } else {
+                    ensure!(group.stage.is_none(), "The stage lead is unavailable. Choose a recipient with @.");
+                }
+            }
+            if default.is_empty() {
+                default = tx
+                    .prepare(
+                        "SELECT b.id FROM json_each(?1,'$.members') m JOIN bots b ON b.id=m.value
+                     WHERE b.deleted=0 ORDER BY m.key",
+                    )?
+                    .query_map([&raw], |r| r.get(0))?
+                    .collect::<rusqlite::Result<_>>()?;
+            }
         }
-        let targets = leader.as_deref().unwrap_or(targets);
+        let targets = if targets.is_empty() { default.as_slice() } else { targets };
         let mut data = data.clone();
         // 首次主动发送携带已确认的交接副本；历史、查看交接和重复发送不创建工作。
-        if let Some(crate::store::StageGroup { incoming: Some(file), incoming_files, .. }) = stage
+        if let Some(crate::store::StageGroup { incoming: Some(file), incoming_files, .. }) = group.stage
             && !tx.query_row("SELECT EXISTS(SELECT 1 FROM entries WHERE bot_id=? AND kind='user')", [room], |r| {
                 r.get::<_, bool>(0)
             })?

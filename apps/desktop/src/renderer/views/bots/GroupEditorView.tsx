@@ -38,6 +38,9 @@ export function GroupEditorView({ group }: { group: Bot }) {
   // "Alice, Bob" when no name is typed.
   const defaultName = picked.length ? picked.map((b) => b.name).join(', ') : 'Name'
   const current = store.bots.get(group.id)
+  const lead = picked.find((member) => member.id === (group.stage?.leaderId ?? group.groupLeaderId))
+  const route = lead ? tr('Ask {name} · @ to choose another recipient').replace('{name}', () => lead.name)
+    : group.stage ? tr('Choose a recipient with @') : tr('Everyone answers in turn unless you @mention someone.')
 
   const toggle = (id: string) => {
     setMembers((list) => (list.includes(id) ? list.filter((m) => m !== id) : [...list, id]))
@@ -102,7 +105,7 @@ export function GroupEditorView({ group }: { group: Bot }) {
                 <Text tone="secondary" className="member-name">{tr(`Add Member`)}</Text>
               </button>
             ) : null}
-            <Text as="div" size="caption" tone="tertiary" className="group-note">{tr(`Everyone answers in turn unless you @mention someone.`)}</Text>
+            <Text as="div" size="caption" tone="tertiary" className="group-note">{route}</Text>
           </VStack>
           {error ? <Text size="footnote" tone="danger" className="fade-in">{error}</Text> : null}
           {current ? (

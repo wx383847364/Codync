@@ -39,7 +39,9 @@ data class GroupDraft(
     val description: String = "",
     val members: List<String> = emptyList(),
     val pinned: Boolean = false,
+    val groupLeaderId: String? = null,
 ) {
+    /** 校验成员并编码普通建群的可选负责人。 */
     fun body(roster: List<Bot>): JsonObject {
         val picked = members.distinct().map { id ->
             requireNotNull(roster.firstOrNull { it.id == id && !it.deleted && it.kind != "group" }) {
@@ -54,6 +56,7 @@ data class GroupDraft(
             put("description", description.trim())
             put("members", JsonArray(picked.map { JsonPrimitive(it.id) }))
             put("pinned", pinned)
+            if (id == null) groupLeaderId?.let { put("groupLeaderId", it) }
         }
     }
 

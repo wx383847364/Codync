@@ -160,7 +160,7 @@ fn route_result(c: &Connection, d: &Delivery, source: &str, text: Option<&str>, 
         .prepare("SELECT target_bot_id FROM deliveries WHERE source_execution_id=? AND kind='task'")?
         .query_map([&d.id], |r| r.get::<_, String>(0))?
         .collect::<rusqlite::Result<Vec<_>>>()?;
-    let mut targets = match crate::chat::mentions::targets(text.unwrap_or_default(), &[], &members, None, false) {
+    let mut targets = match crate::chat::mentions::targets(text.unwrap_or_default(), &[], &members, None) {
         Ok(mut targets) => {
             targets.retain(|target| target != &d.target_bot_id && !tasked.contains(target));
             targets

@@ -44,9 +44,10 @@ impl App {
             Overlay::NewBot(n) => (n.field == NewBotField::Name).then_some(&mut n.name),
             Overlay::Folder(p) => Some(&mut p.query),
             Overlay::Group(g) => match g.field {
-                GroupField::Name => Some(&mut g.name),
+                GroupField::Name if g.session_source.is_none() => Some(&mut g.name),
                 GroupField::About => Some(&mut g.about),
-                GroupField::Bots => None,
+                GroupField::Search => Some(&mut g.query),
+                _ => None,
             },
             Overlay::StageGroup(g) => g.editor(),
             Overlay::StageDetails(g) if !g.closed() && g.page == super::StageDetailsPage::Handoff && !g.busy => {

@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test'
+import { test, expect, type Locator } from '@playwright/test'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { DatabaseSync } from 'node:sqlite'
@@ -7,6 +7,18 @@ import { api, attach, sandbox, typeMessage } from './sandbox.ts'
 
 type Group = { id: string; name: string; members: string[] }
 type Prompt = { sessionId: string; prompt: { text: string }[] }
+
+/** 在同一帧读取两个矩形，弹窗缩放期间也能比较实际对齐。 */
+async function expectInlineOptions(button: Locator) {
+  await expect.poll(() => button.evaluate((trigger) => {
+    const list = document.getElementById(trigger.getAttribute('aria-controls') ?? '')
+    if (!list) return false
+    const anchor = trigger.getBoundingClientRect()
+    const options = list.getBoundingClientRect()
+    return Math.abs(options.width - anchor.width) < 0.5 &&
+      Math.abs(options.left - anchor.left) < 0.5 && options.top >= anchor.bottom
+  })).toBe(true)
+}
 
 /** 从真实右键菜单创建新群，检查导航、编号、成员顺序和实际 ACP 会话。 */
 test('right-click opens an empty numbered group with its own member sessions', async () => {
@@ -43,6 +55,7 @@ test('right-click opens an empty numbered group with its own member sessions', a
     for (const number of [1, 2, 3]) {
       await source.click({ button: 'right' })
       await page.getByRole('menuitem', { name: 'Create new group session' }).click()
+      await page.getByRole('dialog', { name: 'Create new group session' }).getByRole('button', { name: 'Create', exact: true }).click()
       const selected = page.locator('.roster-row[aria-current=true]')
       await expect(selected.getByText(`${name} ${number}`, { exact: true })).toBeVisible()
       const id = (await selected.getAttribute('data-roster-row'))!.split('/').at(-1)!
@@ -94,6 +107,70 @@ test('right-click opens an empty numbered group with its own member sessions', a
   }
 })
 
+/** 普通建群通过搜索和完整名单加入，新会话可重新确认名单与负责人。 */
+test('the group picker searches, adds, and clears the lead in a fresh session', async () => {
+  const { browser, page } = await attach()
+  const name = `Picker crew ${Date.now()}`
+  const ids: string[] = []
+  try {
+    const bots: Group[] = []
+    for (const role of ['Lead', 'Reviewer', 'Backup']) {
+      const { bot } = await api<{ bot: Group }>(page, 'createBot', {
+        name: `${name} ${role}`, backend: 'opencode', skills: [], connectors: [],
+      })
+      bots.push(bot)
+      ids.push(bot.id)
+    }
+    const [lead, reviewer, backup] = bots as [Group, Group, Group]
+    await page.getByRole('button', { name: 'New', exact: true }).click()
+    await page.getByRole('menuitem', { name: 'New group chat' }).click()
+    const form = page.getByRole('dialog', { name: 'New group chat' })
+    await form.getByRole('textbox', { name: 'Name' }).fill(name)
+    await form.getByRole('button', { name: 'Show bot list' }).click()
+    await form.getByRole('option', { name: reviewer.name, exact: true }).click()
+    const search = form.getByRole('combobox', { name: 'Search or add bots' })
+    await search.fill(lead.name)
+    await expect(form.getByRole('option')).toHaveCount(1)
+    await form.getByRole('option', { name: lead.name, exact: true }).click()
+    await expect(form.getByRole('option', { name: lead.name, exact: true })).toHaveAttribute('aria-selected', 'true')
+    // 从仍打开的搜索列表直接点击负责人，验证关闭列表不会吞掉外部点击。
+    const leadButton = form.getByRole('button', { name: /Group lead/ })
+    await leadButton.click()
+    const leadOptions = form.getByRole('listbox', { name: /Group lead/ })
+    await expect(leadOptions.getByRole('option', { name: backup.name })).toHaveCount(0)
+    await expect(leadOptions.getByRole('option', { name: 'No lead' })).toHaveAttribute('aria-selected', 'true')
+    await expectInlineOptions(leadButton)
+    await leadOptions.getByRole('option', { name: lead.name, exact: true }).click()
+    await expect(leadOptions).toBeHidden()
+    await expect(leadButton).toBeFocused()
+    await expect(leadButton).toHaveAccessibleDescription(lead.name)
+    await form.getByRole('button', { name: 'Create', exact: true }).click()
+    const selected = page.locator('.roster-row[aria-current=true]')
+    await expect(selected.getByText(name, { exact: true })).toBeVisible()
+    ids.unshift((await selected.getAttribute('data-roster-row'))!.split('/').at(-1)!)
+    await expect(page.locator('.composer textarea')).toHaveAttribute('placeholder', `Ask ${lead.name} · @ to choose another recipient`)
+
+    await selected.click({ button: 'right' })
+    await page.getByRole('menuitem', { name: 'Create new group session' }).click()
+    const fresh = page.getByRole('dialog', { name: 'Create new group session' })
+    await expect(fresh.getByRole('button', { name: /Group lead/ })).toContainText(lead.name)
+    await fresh.getByRole('button', { name: `Remove ${lead.name}`, exact: true }).click()
+    await expect(fresh.getByRole('button', { name: /Group lead/ })).toContainText('No lead')
+    await fresh.getByRole('combobox', { name: 'Search or add bots' }).fill(backup.name)
+    await fresh.getByRole('option', { name: backup.name, exact: true }).click()
+    await fresh.getByRole('button', { name: 'Create', exact: true }).click()
+    await expect(selected.getByText(`${name} 1`, { exact: true })).toBeVisible()
+    ids.unshift((await selected.getAttribute('data-roster-row'))!.split('/').at(-1)!)
+    await expect(page.locator('.composer textarea')).toHaveAttribute('placeholder', 'Ask everyone · @ to ask one bot')
+    await expect(page.locator('.intro-card')).toContainText(backup.name)
+    await expect(page.locator('.intro-card')).not.toContainText(lead.name)
+  } finally {
+    // 移除测试群和机器人，便于继续在同一沙箱检查。
+    for (const id of ids) await api(page, 'deleteBot', { botId: id }).catch(() => {})
+    await browser.close()
+  }
+})
+
 /** 真实群菜单打开阶段表单，新建后显示新负责人、空白历史和待发送的目标。 */
 test('stage opens with fresh roles, saves a versioned handoff and closes independently', async () => {
   const { browser, page } = await attach()
@@ -117,18 +194,36 @@ test('stage opens with fresh roles, saves a versioned handoff and closes indepen
     // 用户在选择前能看到两种创建方式，读屏也会读出说明。
     const sessionAction = page.getByRole('menuitem', { name: 'Create new group session', exact: true })
     const stageAction = page.getByRole('menuitem', { name: 'Create next stage group', exact: true })
-    await expect(sessionAction.getByText('Reuse the same bots in a fresh chat.')).toBeVisible()
-    await expect(sessionAction).toHaveAccessibleDescription('Reuse the same bots in a fresh chat.')
+    await expect(sessionAction.getByText('Original members are preselected. You can change them.')).toBeVisible()
+    await expect(sessionAction).toHaveAccessibleDescription('Original members are preselected. You can change them.')
     await expect(stageAction.getByText('Create new bots and choose a lead.')).toBeVisible()
     await expect(stageAction).toHaveAccessibleDescription('Create new bots and choose a lead.')
     await stageAction.click()
-    await page.getByLabel('Stage name').fill(`${name} next`)
-    await page.getByPlaceholder('Stage goal').fill('Build the next phase')
-    await page.getByPlaceholder('Acceptance criteria').fill('A verified result is visible')
-    await page.getByRole('switch', { name: reviewer.name, exact: true }).click()
-    await page.getByRole('switch', { name: lead.name, exact: true }).click()
-    await page.getByRole('button', { name: 'Set as stage lead' }).last().click()
-    await page.getByRole('button', { name: 'Create stage group' }).click()
+    await page.getByPlaceholder('Stage name').fill(`${name} next`)
+    await page.getByPlaceholder('Stage goal (optional)').fill('Build the next phase')
+    await page.getByPlaceholder('Acceptance criteria (optional)').fill('A verified result is visible')
+    await page.getByRole('button', { name: 'Show bot list' }).click()
+    await page.getByRole('option', { name: reviewer.name, exact: true }).click()
+    await page.getByRole('option', { name: lead.name, exact: true }).click()
+    await page.getByRole('button', { name: /Group lead/ }).click()
+    await page.getByRole('listbox', { name: 'Group lead' }).getByRole('option', { name: lead.name, exact: true }).click()
+    await page.getByRole('button', { name: 'Role settings', exact: true }).click()
+    const roles = page.getByRole('dialog', { name: 'Role settings' })
+    await expect(roles.getByPlaceholder('Role instructions')).toHaveValue('Review requirements')
+    const roleButton = roles.getByRole('button', { name: 'Role settings', exact: true })
+    await roleButton.click()
+    const roleOptions = roles.getByRole('listbox', { name: 'Role settings' })
+    await expect(roleOptions.getByRole('option', { name: reviewer.name, exact: true })).toHaveAttribute('aria-selected', 'true')
+    await expectInlineOptions(roleButton)
+    await page.keyboard.press('Escape')
+    await expect(roleOptions).toBeHidden()
+    await expect(roles).toBeVisible()
+    await roleButton.click()
+    await roleOptions.getByRole('option', { name: lead.name, exact: true }).click()
+    await expect(roles.getByPlaceholder('Role instructions')).toHaveValue('Coordinate work')
+    await expect(roleButton).toHaveAccessibleDescription(lead.name)
+    await roles.getByRole('button', { name: 'Done', exact: true }).click()
+    await page.getByRole('button', { name: 'Create', exact: true }).click()
     const selected = page.locator('.roster-row[aria-current=true]')
     await expect(selected.getByText(`${name} next`, { exact: true })).toBeVisible()
     const id = (await selected.getAttribute('data-roster-row'))!.split('/').at(-1)!
@@ -183,18 +278,20 @@ test('stage opens with fresh roles, saves a versioned handoff and closes indepen
     await expect(stageAction.getByText('Create new bots and use the accepted handoff.')).toBeVisible()
     await expect(stageAction).toHaveAccessibleDescription('Create new bots and use the accepted handoff.')
     await stageAction.click()
-    await page.getByLabel('Stage name').fill(`${name} successor`)
-    await page.getByPlaceholder('Stage goal').fill('Continue with the confirmed constraints')
-    await page.getByPlaceholder('Acceptance criteria').fill('The current stage verifies its own results')
+    await page.getByPlaceholder('Stage name').fill(`${name} successor`)
+    // 两个阶段字段同时留空，交接仍可由现有开关明确带入。
     await page.getByRole('switch', { name: 'Use accepted handoff' }).click()
-    await page.getByRole('switch', { name: lead.name, exact: true }).click()
-    await page.getByRole('button', { name: 'Set as stage lead' }).click()
-    await page.getByRole('button', { name: 'Create stage group' }).click()
+    await page.getByRole('combobox', { name: 'Search or add bots' }).fill('Lead')
+    await page.getByRole('option', { name: lead.name, exact: true }).click()
+    await page.getByRole('button', { name: /Group lead/ }).click()
+    await page.getByRole('listbox', { name: 'Group lead' }).getByRole('option', { name: lead.name, exact: true }).click()
+    await page.getByRole('button', { name: 'Create', exact: true }).click()
     await expect(selected.getByText(`${name} successor`, { exact: true })).toBeVisible()
     const successor = (await selected.getAttribute('data-roster-row'))!.split('/').at(-1)!
     ids.unshift(successor)
     const details = await api<{ bot: Group; incomingMarkdown: string }>(page, 'stageDetails', { botId: successor })
     ids.push(...details.bot.members)
+    await expect(page.locator('.composer textarea')).toHaveValue('')
     expect(details.incomingMarkdown).toBe(`${handoff}\n\n## Evidence references\n\nFixture repository commit def456\n`)
     expect((await api<{ entries: unknown[] }>(page, 'history', { botId: successor })).entries).toEqual([])
   } finally {

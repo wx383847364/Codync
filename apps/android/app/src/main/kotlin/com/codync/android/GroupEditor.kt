@@ -86,7 +86,14 @@ import com.codync.android.design.*
                     Box(Modifier.width(32.dp), contentAlignment = Alignment.Center) { Symbol("plus", size = 18.dp, tint = Palette.secondary) }
                     Text("Add Member", style = Type.body, color = Palette.secondary)
                 }
-                Text("Everyone answers in turn unless you @mention someone.", Modifier.padding(top = 10.dp), style = Type.caption, color = Palette.tertiary)
+                val source = state.bots.firstOrNull { it.id == initial.id }
+                val lead = state.bots.firstOrNull { it.id in draft.members && it.id == (source?.stage?.leaderId ?: source?.groupLeaderId) }
+                val route = when {
+                    lead != null -> tr("Ask {name} · @ to choose another recipient").replace("{name}", lead.name)
+                    source?.stage != null -> tr("Choose a recipient with @")
+                    else -> tr("Everyone answers in turn unless you @mention someone.")
+                }
+                Text(route, Modifier.padding(top = 10.dp), style = Type.caption, color = Palette.tertiary)
             }
             AnimatedVisibility(state.error != null, enter = fadeIn(Motion.fade()), exit = fadeOut(Motion.fade())) {
                 Text(state.error.orEmpty(), style = Type.footnote, color = Palette.danger)

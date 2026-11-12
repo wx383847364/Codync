@@ -7,16 +7,19 @@ fn bot(id: &str, name: &str) -> BotConfig {
 
 /// 使用真正入库解析验证名称和引用目标，不保留旧 sweep 算法副本。
 #[test]
-fn mentions_pick_responders_and_no_mention_means_everyone() {
+fn mentions_return_only_explicit_recipients() {
     let members = [bot("a", "Alice Chen"), bot("b", "Bob"), bot("c", "尼采課")];
-    let ids = |text: &str| crate::chat::mentions::targets(text, &[], &members, None, true).unwrap();
-    assert_eq!(ids("hi all"), ["a", "b", "c"]);
+    let ids = |text: &str| crate::chat::mentions::targets(text, &[], &members, None).unwrap();
+    assert_eq!(ids("hi all"), Vec::<String>::new());
     assert_eq!(ids("@bob can you look"), ["b"]);
     assert_eq!(ids("@alicechen and @Alice"), ["a"]);
     assert_eq!(ids("@尼采課幫我整理"), ["c"]);
-    assert_eq!(ids("@bobby?"), ["a", "b", "c"]);
+    assert_eq!(ids("@bobby?"), Vec::<String>::new());
     assert_eq!(ids("@all go"), ["a", "b", "c"]);
-    assert_eq!(crate::chat::mentions::targets("why?", &[], &members, Some("b"), true).unwrap(), ["b"]);
+    assert_eq!(crate::chat::mentions::targets("why?", &[], &members, Some("b")).unwrap(), ["b"]);
+    // 成员在校验后被移除时必须拒绝结构化提及，避免改发给负责人。
+    let stale = crate::chat::mentions::Mention { bot_id: "gone".into(), start: 0, end: 5 };
+    assert!(crate::chat::mentions::targets("@gone", &[stale], &members, None).is_err());
 }
 
 use crate::api::devices::Caller;

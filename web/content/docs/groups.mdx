@@ -1,4 +1,4 @@
-A group chat puts several of your bots and you in one conversation. Each member answers in turn, reads what the others said, and does its work with its own agent, folder, tools and approval setting. Use a group when you want bots to discuss a problem, review each other's work, or split a task while you watch.
+A group chat puts several of your bots and you in one conversation. Each recipient answers in turn, reads what the others said, and does its work with its own agent, folder, tools and approval setting. Use a group when you want bots to discuss a problem, review each other's work, or split a task while you watch.
 
 A group is a room for bots you already have. Each member uses its own agent and folder.
 
@@ -8,11 +8,11 @@ A group is a room for bots you already have. Each member uses its own agent and 
 - **Desktop:** click **+** above your bots and choose **New group chat**.
 - **Terminal UI:** press `m`.
 
-Pick the bots to add, type a name if you like, and choose **Create**. Without a name, the group is named after its members ("Alice, Bob").
+Type a bot name in **Search or add bots** or open the list with its arrow. Add the bots you want, optionally choose a lead from the selected members, and choose **Create**. In the terminal, type a search, use Space to select a member, and use the left and right arrow keys in the lead field. Without a name, the group is named after its members ("Alice, Bob").
 
 - A group needs at least one bot.
 - A group can't contain another group.
-- If an ordinary group with exactly the same bots already exists, this opens that group.
+- If an ordinary group already has the same members and lead, this opens that group.
 
 Use **Create new group session** for a fresh chat with your existing bots. Use **Create next stage group** for a new team of bot instances with a designated lead. To continue from a stage group, accept its handoff in **Stage details**, then select **Use accepted handoff** in the creation form.
 
@@ -22,13 +22,13 @@ Use **Create new group session** for a fresh chat with your existing bots. Use *
 - **iPhone and Android:** touch and hold the group in the bot list and choose **Create new group session**.
 - **Terminal UI:** select the group and press `Ctrl+K` and choose **Create new group session**.
 
-The new group opens immediately with the same members in the same order. Its name gets the next number, such as **Release 1**, **Release 2**, or **Release 3**. Each member starts a fresh agent session for that group, and later messages in that group use its own conversation. Bots still use their own settings, workspace and long-term memory.
+The form starts with the source group’s members and lead. You can change either before creating the session. Its name gets the next number, such as **Release 1**, **Release 2**, or **Release 3**. Each member starts a fresh agent session for that group, and later messages in that group use its own conversation. Bots still use their own settings, workspace and long-term memory.
 
 ## Start the next stage of a task
 
-Open the source group's menu and choose **Create next stage group**. Right-click on desktop, touch and hold on iPhone or Android, or use `Ctrl+K` in the terminal. Name the stage, enter the goal and acceptance criteria, and select the roles you need. Review their instructions for stable role requirements and choose a stage lead.
+Open the source group's menu and choose **Create next stage group**. Right-click on desktop, touch and hold on iPhone or Android, or use `Ctrl+K` in the terminal. Name the stage, search for the source roles you need, and choose a stage lead. The goal and acceptance criteria are optional. Use **Role settings** to review each selected role’s instructions and workspace. On desktop and phones, the lead and role lists open below their fields and mark the current choice. In the terminal, press Tab to reach the role instructions and press `p` on a selected role to reuse its project folder.
 
-The new group starts with fresh bot instances and a draft containing the goal and acceptance criteria. Review the draft and send it when you are ready. New bots get their own workspace by default. You can explicitly reuse an existing project directory for a role. Codync shared memory starts off. The form identifies agents that keep their own shared memory.
+The new group starts with fresh bot instances. When you enter a goal or acceptance criteria, Codync prepares a draft with the supplied text. Review and send it when you are ready. New bots get their own workspace by default. You can explicitly reuse an existing project directory for a role. Codync shared memory starts off. The form identifies agents that keep their own shared memory.
 
 Messages without an explicit recipient go to the stage lead. Use `@` to select another member, reply to a member's message, or use `@all` to address everyone. Keep work and revisions for the same stage in this group.
 
@@ -60,7 +60,7 @@ In the editor you can rename the group, add or remove members, and fill in **Wha
 
 When you send a message, the group runs a round of answers:
 
-1. **Who is asked.** Selected or uniquely named members, plus the author you reply to. `@all` and `@everyone` ask everyone. With no target, a stage group asks its lead and other groups ask everyone.
+1. **Who is asked.** Selected or uniquely named members, plus the author you reply to. `@all` and `@everyone` ask everyone. With no target, a group asks its lead if it has one and asks everyone otherwise.
 2. **One at a time per message.** Available members take turns so each can see prior replies. If a member is still working on an earlier message, even in this group, the other recipients can answer first. The busy member keeps each request queued and receives its original message when free.
 3. **Passing.** A member with nothing to add can pass without a message. A pass at the end keeps a result the member already gave in that turn, provided it did not continue tool work. Tool-assigned work that passes without a result shows that it provided no result.
 4. **Continue until handoff.** Members keep doing authorized work and assigning the next action until they deliver the result to you or need your decision, information or approval. Group work has no fixed round, reply-count or handoff-depth cutoff. After ten minutes, the next recipient of the same message can take a turn while the earlier work continues. Busy members keep their accepted work queued. You can still stop the group yourself.

@@ -164,14 +164,12 @@ private enum class Trailing { Interrupt, Stop, Call, Send }
         else -> Trailing.Send
     }
     // 已移出群的负责人不再显示为默认接收人。
-    val stageLead = state.bots.firstOrNull { it.id == bot.stage?.leaderId && it.id in bot.members }
+    val stageLead = state.bots.firstOrNull { it.id == (bot.stage?.leaderId ?: bot.groupLeaderId) && it.id in bot.members }
     val placeholder = when {
         about != null -> tr("Message about “{title}”").replace("{title}", about)
         replyTo != null -> tr("Reply…")
-        bot.stage != null -> {
-            if (stageLead == null) tr("Choose a recipient with @")
-            else tr("Ask {name} · @ to choose another recipient").replace("{name}", stageLead.name)
-        }
+        stageLead != null -> tr("Ask {name} · @ to choose another recipient").replace("{name}", stageLead.name)
+        bot.stage != null -> tr("Choose a recipient with @")
         bot.kind == "group" -> tr("Ask everyone · @ to ask one bot")
         working -> tr("Queue a message for {name}").replace("{name}", bot.name)
         else -> tr("Ask {name}").replace("{name}", bot.name)
@@ -217,7 +215,7 @@ private enum class Trailing { Interrupt, Stop, Call, Send }
         if (command != null) run(command) else store.sendDraft(draftKey, bot.id, typed, replyTo) { clear(); cancelReply() }
     }
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-    if (bot.stage != null && typed.isNotEmpty() && replyTo == null && about == null) {
+    if ((bot.stage != null || stageLead != null) && typed.isNotEmpty() && replyTo == null && about == null) {
         Text(stageLead?.let { tr("Default recipient · {name}").replace("{name}", it.name) } ?: tr("Choose a recipient with @"),
             modifier = Modifier.padding(horizontal = 16.dp), style = Type.footnote, color = Palette.secondary)
     }

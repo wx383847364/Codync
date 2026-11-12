@@ -161,6 +161,11 @@ export class BotMirror extends Observable {
     return this.hello?.groupSessions === true
   }
 
+  /** 可配置的新会话和可选阶段字段要求 Host 支持新版建群表单。 */
+  get hasGroupMemberPicker() {
+    return this.hello?.groupMemberPicker === true
+  }
+
   /** 由 Host 的能力标记控制阶段群入口。 */
   get hasStageGroups() {
     return this.hello?.stageGroups === true

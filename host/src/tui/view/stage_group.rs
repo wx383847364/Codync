@@ -12,40 +12,65 @@ pub(super) fn stage_group_view(buf: &mut Buffer, area: Rect, app: &App, stage: &
     let t = theme();
     let title = tr("Create next stage group");
     let inner = frame_box(buf, centered(area, 83, 22), t.text, t.panel, Some((title.as_ref(), t.text)));
-    if inner.height < 10 || inner.width < 22 {
+    if inner.height < 13 || inner.width < 30 {
         return;
     }
-    for (i, (label, editor)) in
-        [("Stage name", &stage.name), ("Stage goal", &stage.goal), ("Acceptance criteria", &stage.acceptance)]
-            .into_iter()
-            .enumerate()
-    {
-        let y = inner.y + u(i);
-        put(buf, inner.x, y, 21, tr(label).as_ref(), t.secondary.patch(t.panel));
-        input_line(buf, Rect::new(inner.x + 21, y, inner.width - 21, 1), y, editor, "", stage.field == i, false);
+    let column = 31.min(inner.width - 12);
+    for (field, y, key, editor) in [
+        (0, inner.y, "Stage name", &stage.name),
+        (1, inner.y + 1, "Search or add bots", &stage.query),
+        (
+            4,
+            inner.bottom() - 7,
+            if app.group_member_picker { "Stage goal (optional)" } else { "Stage goal" },
+            &stage.goal,
+        ),
+        (
+            5,
+            inner.bottom() - 6,
+            if app.group_member_picker { "Acceptance criteria (optional)" } else { "Acceptance criteria" },
+            &stage.acceptance,
+        ),
+    ] {
+        put(buf, inner.x, y, column, tr(key).as_ref(), t.secondary.patch(t.panel));
+        input_line(
+            buf,
+            Rect::new(inner.x + column, y, inner.width - column, 1),
+            y,
+            editor,
+            "",
+            stage.field == field,
+            false,
+        );
     }
+    let indices = stage.role_indices(app);
+    let rows = usize::from(inner.height - 11);
+    let current = indices.iter().position(|index| *index == stage.cursor).unwrap_or_default();
+    let offset = current.saturating_sub(rows.saturating_sub(1));
+    if indices.is_empty() {
+        put(buf, inner.x, inner.y + 3, inner.width, tr("No matching bots").as_ref(), t.dim);
+    }
+    for (line, (position, index)) in indices.iter().enumerate().skip(offset).take(rows).enumerate() {
+        let role = &stage.roles[*index];
+        let name = app.bots.get(&role.id).map_or(role.id.as_str(), |bot| bot.name.as_str());
+        let selected = if role.selected { "☑" } else { "☐" };
+        let style = if stage.field == 2 && current == position { t.bold.patch(t.sel) } else { t.text.patch(t.panel) };
+        put(buf, inner.x, inner.y + 3 + u(line), inner.width, &format!("{selected} {name}"), style);
+    }
+    let lead = stage
+        .leader
+        .as_ref()
+        .and_then(|id| app.bots.get(id))
+        .map_or_else(|| tr("Choose").into_owned(), |bot| bot.name.clone());
     put(
         buf,
         inner.x,
-        inner.y + 3,
+        inner.bottom() - 8,
         inner.width,
-        tr("Keep only stable instructions for the selected roles.").as_ref(),
-        t.dim,
+        &format!("{}   ‹ {lead} ›", tr("Group lead")),
+        if stage.field == 3 { t.bold.patch(t.sel) } else { t.text.patch(t.panel) },
     );
-    let rows = usize::from(inner.height - 9);
-    let offset = stage.cursor.saturating_sub(rows.saturating_sub(1));
-    for (line, (index, role)) in stage.roles.iter().enumerate().skip(offset).take(rows).enumerate() {
-        let name = app.bots.get(&role.id).map_or(role.id.as_str(), |bot| bot.name.as_str());
-        let lead = if stage.leader.as_deref() == Some(role.id.as_str()) {
-            format!(" · {}", tr("Stage lead"))
-        } else {
-            String::new()
-        };
-        let selected = if role.selected { "☑" } else { "☐" };
-        let style = if stage.field == 3 && stage.cursor == index { t.bold.patch(t.sel) } else { t.text.patch(t.panel) };
-        put(buf, inner.x, inner.y + 4 + u(line), inner.width, &format!("{selected} {name}{lead}"), style);
-    }
-    if let Some(role) = stage.roles.get(stage.cursor) {
+    if let Some(role) = indices.get(current).and_then(|index| stage.roles.get(*index)) {
         let y = inner.bottom() - 5;
         let workspace = tr("Personal workspace");
         let folder = if role.reuse_project { role.project.as_deref().unwrap_or_default() } else { &workspace };
@@ -63,7 +88,7 @@ pub(super) fn stage_group_view(buf: &mut Buffer, area: Rect, app: &App, stage: &
             y + 2,
             &role.instructions,
             "",
-            stage.field == 4 && role.selected,
+            stage.field == 6 && role.selected,
             false,
         );
     }
@@ -84,7 +109,7 @@ pub(super) fn stage_group_view(buf: &mut Buffer, area: Rect, app: &App, stage: &
     let label = tr(if stage.saving {
         "Creating…"
     } else {
-        "tab next field · space select · l lead · p project · ^s create"
+        "tab next field · space select · ←→ lead · p project · ^s create"
     });
     let text = stage.error.as_deref().unwrap_or(&label);
     put(buf, inner.x, inner.bottom() - 1, inner.width, text, if stage.error.is_some() { t.red } else { t.dim });
@@ -205,12 +230,9 @@ pub(super) fn stage_details_view(buf: &mut Buffer, area: Rect, form: &StageDetai
     let close = tr(if form.closed() { "Reopen stage" } else { "Close stage" });
     let keys = format!("F2 {} · F3 {} · F4 {} · F5 {close}", tr("Incoming handoff"), tr("Refresh"), tr("Accept stage"));
     put(buf, inner.x, inner.bottom() - 2, inner.width, &keys, t.dim.patch(t.panel));
-    let edits = format!(
-        "F7 {} · F8 {} · ^S {} · F6 {}",
-        tr("Stage usage"),
-        tr("Shared evidence files"),
-        tr("Save handoff"),
-        tr("Restore first draft")
-    );
+    let restore =
+        if form.first_draft().is_some() { format!(" · F6 {}", tr("Restore first draft")) } else { String::new() };
+    let edits =
+        format!("F7 {} · F8 {} · ^S {}{restore}", tr("Stage usage"), tr("Shared evidence files"), tr("Save handoff"));
     put(buf, inner.x, inner.bottom() - 1, inner.width, &edits, t.dim.patch(t.panel));
 }

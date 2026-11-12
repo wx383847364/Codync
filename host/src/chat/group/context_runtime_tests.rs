@@ -468,7 +468,7 @@ async fn group_session_reopens_and_compacts_without_using_the_shared_session() {
     room.send("@a ORIGINAL_SESSION_MARKER", None).await;
     room.settle().await;
     let shared = room.hub.store.bot("a").unwrap().unwrap().session_id.unwrap();
-    let created = room.hub.create_group_session(&room.group).unwrap();
+    let created = room.hub.create_group_session(&room.group, None).unwrap();
     let id = created["id"].as_str().unwrap();
     assert_eq!(created["members"], json!(["a", "b"]));
     assert!(room.hub.store.history(id, i64::MAX, 500).unwrap().is_empty());

@@ -14,6 +14,7 @@ struct BotListView: View {
     @State private var editing: EditTarget?
     @State private var editingGroup: GroupTarget?
     @State private var creatingStage: GroupTarget?
+    @State private var creatingGroupSession: GroupTarget?
     @State private var stageDetails: GroupTarget?
     @State private var confirmDelete: RosterItem?
     /// What the section name dialog names while it's open.
@@ -243,6 +244,11 @@ struct BotListView: View {
                 GroupEditorView(group: target.group).environment(store)
             }
         }
+        .codyncSheet(item: $creatingGroupSession) { target in
+            if let store = accounts.store(for: target.computerId) {
+                NewGroupView(source: target.group).environment(store)
+            }
+        }
         .codyncSheet(item: $creatingStage) { target in
             // 阶段表单使用来源群所在的电脑。
             if let store = accounts.store(for: target.computerId) {
@@ -384,9 +390,14 @@ struct BotListView: View {
             ]
             if bot.isGroup && store.supportsGroupSessions {
                 items.append(MenuItem("Create new group session", icon: "bubble.left.and.bubble.right",
-                                      detail: "Reuse the same bots in a fresh chat.") {
-                    // Host 返回新群后，名单选择会打开其聊天。
-                    store.createGroupSession(bot.id)
+                                      detail: store.supportsGroupMemberPicker
+                                        ? "Original members are preselected. You can change them." : "Reuse the same bots in a fresh chat.") {
+                    // 新版由用户确认预填名单，旧版 Host 保持原有复制操作。
+                    if store.supportsGroupMemberPicker {
+                        creatingGroupSession = GroupTarget(computerId: item.ref.computerId, group: bot)
+                    } else {
+                        store.createGroupSession(bot.id)
+                    }
                 })
             }
             if bot.isGroup && store.supportsStageGroups {

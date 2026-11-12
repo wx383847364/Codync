@@ -256,6 +256,9 @@ public final class BotStore {
     /// 由当前 Host 公布的能力决定是否展示阶段入口。
     public var supportsStageGroups: Bool { hello?.stageGroups == true }
 
+    /// 新版 Host 支持新会话成员选择与可选阶段字段。
+    public var supportsGroupMemberPicker: Bool { hello?.groupMemberPicker == true }
+
     /// From host 2.33.0 the user picks the lead (`setLead`) and may delete it; an older host refuses both.
     public var supportsLeadChoice: Bool {
         hostVersion.map { !AppVersion.isBelow($0.version, Self.leadChoiceHost) } ?? false
