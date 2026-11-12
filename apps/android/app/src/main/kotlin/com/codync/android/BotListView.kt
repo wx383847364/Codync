@@ -299,6 +299,7 @@ internal fun moved(roster: List<Bot>, id: String, offset: Int): List<String>? {
 
 private fun Bot.movesWith(other: Bot) = band == other.band && (pinned || section == other.section)
 
+/** 显示群所属电脑支持的操作；新群创建成功后由 Store 打开。 */
 @Composable private fun BotRowItem(bot: Bot, state: AppState, store: AppStore, drag: ContextDrag, sections: List<String>, grouped: Boolean,
     agent: AgentMark?, edit: () -> Unit, delete: () -> Unit, newSection: () -> Unit) {
     Box(Modifier.fillMaxWidth().contextActions(onClick = { store.openBot(bot.id) }, reorder = drag, preview = {
@@ -311,6 +312,12 @@ private fun Bot.movesWith(other: Bot) = band == other.band && (pinned || section
             if (state.supportsSections) sectionMenu(bot, sections, { store.setSection(bot.id, it) }, newSection) else null,
             if (bot.kind == "group") MenuItem("Edit group", icon = "person.2", action = edit)
             else MenuItem("Edit profile", icon = "pencil", action = edit),
+            if (bot.kind == "group" && state.supportsGroupSessions) {
+                MenuItem("Create new group session", icon = "bubble.left.and.bubble.right") {
+                    // 仅发送来源群 ID，名单和编号由 Host 确定。
+                    store.createGroupSession(bot.id)
+                }
+            } else null,
             MenuItem("Mark as read", icon = "checkmark.message") {
                 store.command("markRead", buildJsonObject { put("botId", bot.id) }, "roster:" + bot.id)
             },

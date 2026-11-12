@@ -5,7 +5,7 @@ use crate::chat::{context, memory};
 use crate::hub::BotStatus;
 use crate::store::{
     deliveries::{Delivery, Status},
-    now_ms,
+    group_session_slot, now_ms,
 };
 use anyhow::{Result, anyhow};
 use serde::{Deserialize, Serialize};
@@ -19,7 +19,8 @@ const MAINTENANCE_TIMEOUT: Duration = Duration::from_secs(120);
 pub(super) struct Maintenance {
     pub room: String,
     pub delivery: String,
-    session: String,
+    pub session: String,
+    pub slot: Option<String>,
     used: u64,
     epoch: u32,
     started: i64,
@@ -64,18 +65,30 @@ fn reported_usage(usage: Option<(u64, u64)>, stale: bool) -> (Option<u64>, Optio
 
 impl Actor {
     /// 停止后的 ACP 仍可能退出中；已越过 MCP 桥的迟到命令也不得产生维护副作用。
-    pub(super) fn maintenance_command(&self, cmd: Cmd) -> Option<Cmd> {
-        if self.group_compaction.is_none() {
-            return Some(cmd);
-        }
+    pub(super) fn guard_tool_command(&self, cmd: Cmd) -> Option<Cmd> {
+        let maintaining = self.group_compaction.is_some();
         match cmd {
-            Cmd::SendToUser { reply, .. } | Cmd::React { reply, .. } | Cmd::SendFile { reply, .. } => {
-                let _ = reply.send(Err(anyhow!("tools are unavailable during context maintenance")));
+            Cmd::SendToUser { ref group_session, reply, .. }
+            | Cmd::React { ref group_session, reply, .. }
+            | Cmd::SendFile { ref group_session, reply, .. }
+                if maintaining || group_session.as_deref() != self.isolated_group_room() =>
+            {
+                // 命令排队期间可能切换群，发布内容前须再次核对会话。
+                let reason = if maintaining {
+                    "tools are unavailable during context maintenance"
+                } else {
+                    "the tool is bound to another conversation"
+                };
+                let _ = reply.send(Err(anyhow!(reason)));
             }
-            Cmd::PostArtifact { reply, .. } => {
-                let _ = reply.send(Err(anyhow!("tools are unavailable during context maintenance")));
+            Cmd::PostArtifact { ref group_session, reply, .. }
+                if maintaining || group_session.as_deref() != self.isolated_group_room() =>
+            {
+                let _ = reply.send(Err(anyhow!("the tool's conversation is no longer available")));
             }
-            Cmd::Approve { reply, .. } => {
+            Cmd::Approve { ref group_session, reply, .. }
+                if maintaining || group_session.as_deref() != self.isolated_group_room() =>
+            {
                 let _ = reply.send(false);
             }
             other => return Some(other),
@@ -84,9 +97,9 @@ impl Actor {
     }
 
     /// 预检包含真正会补发的 profile、记忆和交接前缀；只读预览不消费提醒或会话水位。
-    pub(super) async fn group_prompt_estimate(&self, text: &str) -> Result<usize> {
+    pub(super) async fn group_prompt_estimate(&self, text: &str, sid: Option<&str>, shared: bool) -> Result<usize> {
         let mut estimate = codync_mem::tokens::estimate(text);
-        let Some(sid) = self.session_id.as_deref() else { return Ok(estimate) };
+        let Some(sid) = sid else { return Ok(estimate) };
         let snapshot = self.snapshot(sid).await?;
         let channel = self.conn.as_ref().map_or(Instructions::FirstMessage, Conn::instructions);
         let resend = channel == Instructions::FirstMessage && self.profile_resend.contains(sid);
@@ -105,35 +118,37 @@ impl Actor {
         if let Some((update, _)) = context::profile_update(&self.hub.store, &snapshot, &self.cfg) {
             estimate = estimate.saturating_add(codync_mem::tokens::estimate(&update));
         }
-        for first in [self.relay.carried.as_deref(), self.handoff.as_deref()].into_iter().flatten() {
-            estimate = estimate.saturating_add(codync_mem::tokens::estimate(first));
+        if shared {
+            // 私聊交接只参与共享会话的预估。
+            for first in [self.relay.carried.as_deref(), self.handoff.as_deref()].into_iter().flatten() {
+                estimate = estimate.saturating_add(codync_mem::tokens::estimate(first));
+            }
         }
         // profile 标签、重发说明和段落分隔一并预留，仍是估算而非实际 tokenizer。
         Ok(estimate.saturating_add(256))
     }
 
     /// 遥测不把缺失窗口报成零，也不把已整理但尚未重报的占用当作当前值。
-    pub(super) fn reported_group_context(&self) -> (Option<u64>, Option<u64>) {
-        let Some(sid) = self.session_id.as_deref() else { return (None, None) };
+    pub(super) fn reported_group_context(&self, sid: Option<&str>) -> (Option<u64>, Option<u64>) {
+        let Some(sid) = sid else { return (None, None) };
         let stale = self
             .context_attempts
             .get(sid)
             .is_some_and(|a| a.confirmed && self.context_usage_at.get(sid).copied().unwrap_or(0) <= a.started);
-        reported_usage(self.context_usage(), stale)
+        reported_usage(self.context_usage(sid), stale)
     }
 
     /// 同一个会话和房间数据没有变化时只保持 queued，避免每三秒重复昂贵准备。
-    pub(super) fn context_is_blocked(&self, d: &Delivery) -> Result<bool> {
+    pub(super) fn context_is_blocked(&self, d: &Delivery, sid: Option<&str>) -> Result<bool> {
         let Some(block) = self.context_blocks.get(&d.id) else { return Ok(false) };
-        Ok(block.session == self.session_id
+        Ok(block.session.as_deref() == sid
             && block.model == self.context_model()
             && block.room_rev == self.hub.store.group_context_revision(&d.room_id)?
-            && block.usage == self.context_usage())
+            && block.usage == sid.and_then(|sid| self.context_usage(sid)))
     }
 
     /// 来自真实 `usage_update` 的当前会话用量，未知不能冒充零。
-    fn context_usage(&self) -> Option<(u64, u64)> {
-        let sid = self.session_id.as_ref()?;
+    fn context_usage(&self, sid: &str) -> Option<(u64, u64)> {
         self.context_usage_at.get(sid)?;
         self.conn.as_ref()?.usage.get(sid).copied()
     }
@@ -149,20 +164,28 @@ impl Actor {
     }
 
     /// 领取前安排一次同 sid 维护；不支持或无法释放空间时仍保留原投递与明确恢复路径。
-    pub(super) fn prepare_group_context(&mut self, d: &Delivery, incoming: Option<usize>) -> Result<bool> {
-        let (Some(sid), Some((used, size))) = (self.session_id.clone(), self.context_usage()) else { return Ok(false) };
+    pub(super) fn prepare_group_context(
+        &mut self,
+        d: &Delivery,
+        slot: Option<&str>,
+        sid: Option<&str>,
+        incoming: Option<usize>,
+    ) -> Result<bool> {
+        let Some((sid, (used, size))) = sid.and_then(|sid| Some((sid, self.context_usage(sid)?))) else {
+            return Ok(false);
+        };
         let (high, mut full) = pressure(used, size, u64::try_from(incoming.unwrap_or(0)).unwrap_or(u64::MAX));
-        let c = self.conversation(&sid);
+        let c = self.conversation(sid);
         // 结果元数据暂时写不进去时仍保留本进程的尝试，避免每次补查重新付费整理。
-        let attempt = if let Some(attempt) = self.context_attempts.get(&sid) {
+        let attempt = if let Some(attempt) = self.context_attempts.get(sid) {
             Some(attempt.clone())
         } else {
-            self.hub.store.kv_read(&self.attempt_key(&sid))?.map(|v| serde_json::from_str::<Attempt>(&v)).transpose()?
+            self.hub.store.kv_read(&self.attempt_key(sid))?.map(|v| serde_json::from_str::<Attempt>(&v)).transpose()?
         };
         // 原生整理确认后但尚未收到新 usage，旧占用已过期，不能据此误报仍然满窗。
         let stale = attempt
             .as_ref()
-            .is_some_and(|a| a.confirmed && self.context_usage_at.get(&sid).copied().unwrap_or(0) <= a.started);
+            .is_some_and(|a| a.confirmed && self.context_usage_at.get(sid).copied().unwrap_or(0) <= a.started);
         if stale {
             // 当前占用未知，但任务包本身超过已知窗口仍可判定不可容纳；不能把未知当零发送。
             let minimum = u64::try_from(incoming.unwrap_or(0)).unwrap_or(u64::MAX);
@@ -182,7 +205,8 @@ impl Actor {
                     group: Some(Maintenance {
                         room: d.room_id.clone(),
                         delivery: d.id.clone(),
-                        session: sid,
+                        session: sid.to_owned(),
+                        slot: slot.map(str::to_owned),
                         used,
                         epoch: c.compactions,
                         started: now_ms(),
@@ -202,8 +226,13 @@ impl Actor {
             } else {
                 format!("当前会话已用 {used}/{size}")
             };
+            let recovery = if slot.is_some() {
+                "请在成员设置中选择更大窗口的模型"
+            } else {
+                "请在成员设置中选择更大窗口的模型，或在确认后使用 /new 新建会话"
+            };
             let detail = format!(
-                "上下文空间不足：已保留原始任务、要求和待办，派工仍在排队。{reported}，新增任务包估算约 {} token（不是实测）。请在成员设置中选择更大窗口的模型，或在确认后使用 /new 新建会话；条件变化后会自动继续。",
+                "上下文空间不足：已保留原始任务、要求和待办，派工仍在排队。{reported}，新增任务包估算约 {} token（不是实测）。{recovery}；条件变化后会自动继续。",
                 incoming.unwrap_or_default()
             );
             self.hub.delivery_context_problem(&d.id, &self.cfg.id, &detail)?;
@@ -212,10 +241,10 @@ impl Actor {
             self.context_blocks.insert(
                 d.id.clone(),
                 Blocked {
-                    session: self.session_id.clone(),
+                    session: Some(sid.to_owned()),
                     model: self.context_model(),
                     room_rev: self.hub.store.group_context_revision(&d.room_id)?,
-                    usage: self.context_usage(),
+                    usage: Some((used, size)),
                 },
             );
             return Ok(true);
@@ -237,8 +266,11 @@ impl Actor {
                 return;
             }
         };
+        let current_slot = group.slot.as_ref().map(|_| group_session_slot(&group.room, &self.cfg.backend));
         if !valid
-            || self.session_id.as_deref() != Some(group.session.as_str())
+            || current_slot != group.slot
+            || (group.slot.is_some() && !self.next_group_turn_uses_current_backend())
+            || self.session_for(group.slot.as_deref()).as_deref() != Some(group.session.as_str())
             || self.pending_completion.is_some()
             || self.pending_new_session.is_some()
         {

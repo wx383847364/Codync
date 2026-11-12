@@ -38,17 +38,20 @@ pub enum Cmd {
     },
     /// `send_message` from the bot's `chat` MCP server: a message for the user, now.
     SendToUser {
+        group_session: Option<String>,
         text: String,
         reply: tokio::sync::oneshot::Sender<Result<()>>,
     },
     /// `react` from the bot's `chat` MCP server: an emoji on the message the turn answers.
     React {
+        group_session: Option<String>,
         emoji: String,
         /// In a room: whose message (see `chat::reactions::in_room`).
         to: Option<String>,
         reply: tokio::sync::oneshot::Sender<Result<()>>,
     },
     SendFile {
+        group_session: Option<String>,
         path: String,
         name: Option<String>,
         cancelled: Arc<std::sync::atomic::AtomicBool>,
@@ -57,6 +60,7 @@ pub enum Cmd {
     /// An artifact the bot just published (`chat::artifacts`): its card (the entry's `data`) in the turn's chat. Answers
     /// the card's entry id.
     PostArtifact {
+        group_session: Option<String>,
         data: Value,
         reply: tokio::sync::oneshot::Sender<Result<String>>,
     },
@@ -72,6 +76,7 @@ pub enum Cmd {
     },
     /// A Codync tool asks the user before it acts (`chat::manage`), on the agent's kind of approval card.
     Approve {
+        group_session: Option<String>,
         title: String,
         detail: String,
         reply: tokio::sync::oneshot::Sender<bool>,

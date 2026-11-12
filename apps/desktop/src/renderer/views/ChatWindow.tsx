@@ -299,11 +299,18 @@ function ChatSplitView() {
   const openMarketplace = () => setMarketplace((selectedStore ?? app.local ?? onlineStores[0])?.computer.id ?? null)
 
   // One plain list. The lead stays in sight: no hide.
+  // 群操作使用该群所属的 Host，创建成功后的选中状态由 store 发布。
   const botActions = (bot: Bot, store: BotStore): ActionItem[] => [
     { title: bot.pinned ? 'Unpin' : 'Pin', icon: 'pin', action: () => store.setPinned(bot, !bot.pinned) },
     ...moveToSectionItems(bot, store, setNaming),
     { title: 'Mark as Read', icon: 'bell.badge', action: () => store.markAllRead(bot.id) },
     { title: 'Edit Profile…', icon: 'square.and.pencil', action: () => setEditing({ id: crypto.randomUUID(), draft: draftOf(bot), store }) },
+    ...(bot.kind === 'group' && store.hasGroupSessions ? [{
+      title: 'Create new group session',
+      icon: 'bubble.left.and.bubble.right',
+      // 由 Host 复制成员和分配编号。
+      action: () => store.createGroupSession(bot.id),
+    }] : []),
     { title: 'Copy conversation ID', icon: 'square.on.square', action: () => window.codync.app.copy(bot.id) },
     ...makeLeadItems(bot, store),
     ...(bot.lead ? [] : [{ title: 'Hide from sidebar', icon: 'eye.slash', action: () => store.setHidden(bot, true) }]),

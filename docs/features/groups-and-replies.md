@@ -33,7 +33,8 @@ quotes itself.
 | Method | Body | Notes |
 |---|---|---|
 | `send` | `botId, text, clientNonce, replyTo?, mentions?: [{botId,start,end}]` | `botId` is a bot or a group. `replyTo`: the id of a user message or final reply in that chat; anything else is refused. Works in the relay mailbox too. |
-| `createBot` | `{kind:"group", name, description?, members}` | Returns the existing group when these exact bots already share one. |
+| `createBot` | `{kind:"group", name, description?, members}` | Returns the existing ordinary group when these exact bots already share one. |
+| `createGroupSession` | `{botId}` | Opens a new, numbered group with the same settings and ordered member IDs. Its transcript starts empty and each member opens an independent agent session. |
 | `updateBot` | `{id, name?, members?, pinned?, hidden?, section?}` | A group can't become a bot or the reverse. `section`: a name, or `null` for none. |
 | `deleteBot` | `botId` | A group's bots stay. A deleted bot leaves its groups. |
 | `reorderBots` | `ids` | The roster as the user dragged it, top first; groups count as rows. See [bot order](computer-order.md#bot-order). |
@@ -131,7 +132,13 @@ Stop, member removal and group deletion persist cancellation before stopping exe
 Private Stop keeps requests queued in other groups. `/new` defaults to switching after
 the current execution and result save; `/new-now` cancels, waits for the existing
 15-second grace/agent termination, persists interruption, then forgets the old session.
-`/new-cancel` withdraws a pending switch. Main and group turns share that session.
+`/new-cancel` withdraws a pending switch. Main and ordinary group turns share that session.
+
+Clients show **Create new group session** when `hello.groupSessions` is true. The action copies the source group's setup under a new chat ID. The
+Host allocates the number while saving the new group. For these groups the agent
+session belongs to the room, member and backend. Session creation, resume, and context
+maintenance use that identity. Private chat handoffs stay in the main session, and bots
+continue to use their workspace and long-term memory.
 
 On result storage failure, the actor retains its in-memory output and stops claiming.
 It retries every three seconds five times, then waits for `retryDeliverySave {botId}`.
@@ -164,6 +171,9 @@ user message with `data.replyTo` shows the quote at the top of its bubble. Every
 quote as its first non-empty line without Markdown markers (the roster's message preview rule). Reactions under
 a message (the user's: tap to take back; the bots': emoji plus the avatars of who chose it),
 group create/edit (name, members), Stop in a group calls `stop` with the group id.
+The group roster's **Create new group session** action calls `createGroupSession` and
+opens its returned chat, through right-click on desktop, touch-and-hold on phones and
+the action search in the terminal.
 
 Slack-style reply threads were removed for quote replies; [threads for teams](../plans/threads-for-teams.md)
 lists where their code lived and how to bring it back.

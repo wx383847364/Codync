@@ -68,6 +68,7 @@
   "Done": "完了",
   "Each bot runs on its own computer. Sign in to see the computers in your account.": "各ボットは独自のコンピューター上で実行されます。サインインして、アカウント内のコンピューターを表示します。",
   "Edit": "編集",
+  "Create new group session": "新しいグループセッションを作成",
   "Edit group": "グループの編集",
   "Edit profile": "プロフィールの編集",
   "English": "English",
@@ -1895,6 +1896,7 @@
   "This file could not be found on this computer.": "このコンピューターでファイルが見つかりませんでした。",
   "This action is unavailable for this file.": "このファイルではこの操作を利用できません。",
   "Could not complete the file action.": "ファイル操作を完了できませんでした。",
+  "Copy file contents supports UTF-8 text files up to 256 KiB.": "256 KiB以下のUTF-8テキストファイルの内容をコピーできます。",
   "Copy file contents supports UTF-8 text files up to 1 MiB.": "1 MiB以下のUTF-8テキストファイルの内容をコピーできます。",
   "File on the host computer": "ホストコンピューター上のファイル",
   "Couldn't copy the path.": "パスをコピーできませんでした。"

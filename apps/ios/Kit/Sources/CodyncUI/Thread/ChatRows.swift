@@ -197,26 +197,29 @@ struct AgentBubble: View {
             Group {
                 if let artifact = entry.data.artifact {
                     ArtifactCard(botId: entry.botId, ref: artifact) { openArtifact?(artifact) }
+                        .contextActions(reactions: model.reactionPick(entry)) { messageItems }
                 } else if let files = entry.data.files, !files.isEmpty {
-                    ForEach(files) { file in FileDownloadCard(entry: entry, file: file) }
+                    ForEach(files) { file in FileDownloadCard(entry: entry, file: file) { messageItems } }
                 } else {
                     MarkdownText(entry.data.text ?? "", fileLinks: true).equatable()
                         .padding(.horizontal, 16)
                         .padding(.vertical, 10)
                         .background(Palette.bubbleAgent, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                        .contextActions(reactions: model.reactionPick(entry)) { messageItems }
                 }
             }
-                .contextActions(reactions: model.reactionPick(entry)) {
-                    var items = [
-                        MenuItem("Copy", icon: "square.on.square") { Pasteboard.copy(entry.data.text) },
-                        MenuItem("Show what it did", icon: "list.bullet", action: openTrace),
-                    ]
-                    if let reply { items.insert(MenuItem("Reply", icon: "arrowshape.turn.up.left", action: reply), at: 1) }
-                    return items
-                }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.trailing, 40)
+    }
+
+    private var messageItems: [MenuItem] {
+        var items = [
+            MenuItem("Copy", icon: "square.on.square") { Pasteboard.copy(entry.data.text) },
+            MenuItem("Show what it did", icon: "list.bullet", action: openTrace),
+        ]
+        if let reply { items.insert(MenuItem("Reply", icon: "arrowshape.turn.up.left", action: reply), at: 1) }
+        return items
     }
 }
 

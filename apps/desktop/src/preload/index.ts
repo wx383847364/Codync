@@ -130,10 +130,11 @@ const bridge: CodyncBridge = {
     openInBrowser: (id, html) => ipcRenderer.invoke('artifacts:openInBrowser', id, html),
   },
   files: {
-    begin: (file) => ipcRenderer.invoke('files:begin', file),
+    begin: (file, action) => ipcRenderer.invoke('files:begin', file, action),
     write: (id, offset, data) => ipcRenderer.invoke('files:write', id, offset, data),
     finish: (id) => ipcRenderer.invoke('files:finish', id),
     cancel: (id) => ipcRenderer.invoke('files:cancel', id),
+    editors: () => ipcRenderer.invoke('files:editors'),
   },
   fileLinks: {
     // 文件动作只传递明确选择的路径与固定动作标识。

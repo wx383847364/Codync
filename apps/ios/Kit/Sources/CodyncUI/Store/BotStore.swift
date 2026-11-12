@@ -248,6 +248,11 @@ public final class BotStore {
         hostVersion.map { !AppVersion.isBelow($0.version, Self.sectionsHost) } ?? false
     }
 
+    /// 旧 Host 不支持独立群会话，群菜单只在已确认支持时显示该操作。
+    public var supportsGroupSessions: Bool {
+        hello?.groupSessions == true
+    }
+
     /// From host 2.33.0 the user picks the lead (`setLead`) and may delete it; an older host refuses both.
     public var supportsLeadChoice: Bool {
         hostVersion.map { !AppVersion.isBelow($0.version, Self.leadChoiceHost) } ?? false

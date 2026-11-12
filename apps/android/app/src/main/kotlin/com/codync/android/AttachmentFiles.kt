@@ -92,13 +92,24 @@ class AttachmentFiles(private val context: Context, private val directory: File)
 
     /** The system share sheet for a file in a `shareFolder`. */
     fun open(shared: File, name: String) {
-        val uri = FileProvider.getUriForFile(context, context.packageName + ".files", shared)
-        val type = android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(shared.extension.lowercase()) ?: "application/octet-stream"
-        val intent = Intent(Intent.ACTION_SEND).setType(type).putExtra(Intent.EXTRA_STREAM, uri).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        val intent = Intent(Intent.ACTION_SEND).setType(mimeType(shared)).putExtra(Intent.EXTRA_STREAM, shareUri(shared))
+            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         context.startActivity(Intent.createChooser(intent, "Share $name").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
     }
 
+    fun view(shared: File, choose: Boolean) {
+        val intent = Intent(Intent.ACTION_VIEW).setDataAndType(shareUri(shared), mimeType(shared))
+            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        val target = if (choose) Intent.createChooser(intent, null) else intent
+        context.startActivity(target.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+    }
+
+    private fun shareUri(shared: File): Uri = FileProvider.getUriForFile(context, context.packageName + ".files", shared)
+
     companion object {
+        fun mimeType(shared: File): String =
+            android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(shared.extension.lowercase()) ?: "application/octet-stream"
+
         /** 按缓存软额度淘汰旧文件，但当前即将使用的文件即使单独超额也必须保留。 */
         fun trim(keeping: File) {
             val directory = keeping.parentFile ?: return

@@ -49,7 +49,12 @@ pub fn draw(buf: &mut Buffer, area: Rect, app: &App, l: &Library) {
             }
         }
     }
-    footer(buf, inner, None, "↵ open an artifact in the browser · f save to Downloads · r rename · esc");
+    let selected = l.items.as_ref().and_then(|items| items.get(l.cursor));
+    let keys = match selected {
+        Some(LibraryItem::File { .. }) => "↵ open · f save · Y copy path · C copy contents · R reveal · esc",
+        _ => "↵ open an artifact in the browser · f save to Downloads · r rename · esc",
+    };
+    footer(buf, inner, None, keys);
 }
 
 /// A row as the chat shows it: `▤ <title>` for an artifact, `▤ name · size` for a file.

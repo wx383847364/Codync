@@ -68,6 +68,7 @@
   "Done": "Pronto",
   "Each bot runs on its own computer. Sign in to see the computers in your account.": "Cada bot roda no próprio computador. Entre para ver os computadores da sua conta.",
   "Edit": "Editar",
+  "Create new group session": "Criar nova sessão de grupo",
   "Edit group": "Editar grupo",
   "Edit profile": "Editar perfil",
   "English": "English",
@@ -1895,6 +1896,7 @@
   "This file could not be found on this computer.": "Este arquivo não foi encontrado neste computador.",
   "This action is unavailable for this file.": "Esta ação não está disponível para este arquivo.",
   "Could not complete the file action.": "Não foi possível concluir a ação no arquivo.",
+  "Copy file contents supports UTF-8 text files up to 256 KiB.": "É possível copiar o conteúdo de arquivos de texto UTF-8 de até 256 KiB.",
   "Copy file contents supports UTF-8 text files up to 1 MiB.": "É possível copiar o conteúdo de arquivos de texto UTF-8 de até 1 MiB.",
   "File on the host computer": "Arquivo no computador host",
   "Couldn't copy the path.": "Não foi possível copiar o caminho."

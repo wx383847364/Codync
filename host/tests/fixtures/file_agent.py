@@ -42,6 +42,11 @@ def prompt(message):
         elif 'invalid-files' in text:
             for path in ['missing', '.', 'oversized']:
                 results.append(request('tools/call', {'name':'send_file', 'arguments':{'path':path}}))
+        elif 'share-generated-report' in text:
+            path = Path(session['cwd'], 'Retest report.md')
+            path.write_text('# Retest complete\n', encoding='utf-8')
+            results.append(request('tools/call', {'name':'send_file', 'arguments':{'path':path.name}}))
+            path.unlink()
         else:
             paths = [Path(session['cwd'], 'selected-file.txt').read_text()] if 'share-selected-file' in text else (['image.png'] if 'share-image' in text else ['binary.dat', '.hidden', 'empty', 'report.pdf'])
             for path in paths:

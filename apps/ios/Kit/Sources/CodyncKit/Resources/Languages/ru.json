@@ -68,6 +68,7 @@
   "Done": "Готово",
   "Each bot runs on its own computer. Sign in to see the computers in your account.": "Каждый бот работает на своём компьютере. Войдите, чтобы увидеть компьютеры вашего аккаунта.",
   "Edit": "Изменить",
+  "Create new group session": "Создать новый сеанс группы",
   "Edit group": "Изменить группу",
   "Edit profile": "Изменить профиль",
   "English": "English",
@@ -1895,6 +1896,7 @@
   "This file could not be found on this computer.": "Не удалось найти этот файл на компьютере.",
   "This action is unavailable for this file.": "Это действие недоступно для этого файла.",
   "Could not complete the file action.": "Не удалось выполнить действие с файлом.",
+  "Copy file contents supports UTF-8 text files up to 256 KiB.": "Можно скопировать содержимое текстового файла UTF-8 размером до 256 КиБ.",
   "Copy file contents supports UTF-8 text files up to 1 MiB.": "Можно скопировать содержимое текстового файла UTF-8 размером до 1 МиБ.",
   "File on the host computer": "Файл на компьютере-хосте",
   "Couldn't copy the path.": "Не удалось скопировать путь."

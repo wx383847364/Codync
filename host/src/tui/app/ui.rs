@@ -49,6 +49,7 @@ pub const FILTERS: [(&str, Option<Mark>); 5] = [
 pub enum Action {
     NewBot,
     NewGroup,
+    NewGroupSession,
     Market,
     Memory,
     Details,
@@ -66,9 +67,10 @@ pub enum Action {
     Appearance(super::super::appearance::Appearance),
 }
 
-pub const ACTIONS: [(&str, &str, Action); 19] = [
+pub const ACTIONS: [(&str, &str, Action); 20] = [
     ("New bot…", "n", Action::NewBot),
     ("New group chat…", "m", Action::NewGroup),
+    ("Create new group session", "", Action::NewGroupSession),
     ("Extensions: agents, connectors, skills…", "A", Action::Market),
     ("Memory of this bot…", "M", Action::Memory),
     ("Details of this bot…", "R", Action::Details),

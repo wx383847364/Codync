@@ -366,6 +366,14 @@ extension BotStore {
         return group
     }
 
+    /// 将新群加入当前电脑的名单并发出导航选择，失败由现有提示呈现。
+    public func createGroupSession(_ botId: String) {
+        // 创建可能已经提交，连接恢复时不能重放请求。
+        perform { client in
+            self.selection = self.putHostBot(try await client.createGroupSession(botId)).id
+        }
+    }
+
     public func updateGroup(_ draft: GroupDraft) async throws {
         putHostBot(try await ready().updateGroup(draft))
     }

@@ -3,9 +3,55 @@
 use super::{BotStatus, Hub, Runtime};
 use crate::LockExt;
 use crate::store::BotConfig;
-use anyhow::Result;
+use anyhow::{Result, anyhow};
+use serde_json::{Value, json};
 
 impl Hub {
+    /// 沿用来源群设置与成员顺序，创建拥有独立历史和模型会话的新群。
+    pub fn create_group_session(&self, id: &str) -> Result<Value> {
+        let bot = {
+            // 在同一把锁下读取、分配编号、保存和广播，避免多端创建同名或看到过期名单。
+            let _guard = self.emit_lock.locked();
+            let mut cfg = self
+                .store
+                .bot(id)?
+                .filter(|row| !row.deleted && row.config.is_group())
+                .ok_or_else(|| anyhow!("group not found"))?
+                .config;
+            let base = cfg
+                .group_session_base
+                .take()
+                // 复制编号群时继续原序列。群改名后以用户当前看到的名字开始编号。
+                .filter(|base| {
+                    cfg.name
+                        .strip_prefix(base)
+                        .and_then(|suffix| suffix.strip_prefix(' '))
+                        .is_some_and(|suffix| suffix.parse::<u64>().is_ok())
+                })
+                .unwrap_or_else(|| cfg.name.trim().to_owned());
+            let rows = self.store.bots()?;
+            let names: std::collections::HashSet<_> = rows.iter().map(|row| row.config.name.as_str()).collect();
+            // 已删除群的编号仍占用。手工取过的名字只占用自身的编号。
+            cfg.name = (1..=names.len() + 1)
+                .map(|number| format!("{base} {number}"))
+                .find(|name| !names.contains(name.as_str()))
+                .ok_or_else(|| anyhow!("group session number exhausted"))?;
+            cfg.group_session_base = Some(base);
+            cfg.id = uuid::Uuid::new_v4().to_string();
+            cfg.created_at = crate::store::now_ms();
+            cfg.position = self.new_bot_position()?;
+            cfg.hidden = false;
+            cfg.members = crate::chat::group::valid_members(&self.store, &cfg.id, &cfg.members)?;
+            self.store.save_bot(&cfg)?;
+            let bot = self.bot_value(&cfg.id).ok_or_else(|| anyhow!("new group could not be read"))?;
+            let _ = self.events.send(json!({"type":"bot","rev":bot["rev"],"bot":bot}));
+            bot
+        };
+        crate::network::publish(self);
+        crate::usage::bots_changed(self);
+        Ok(bot)
+    }
+
     /// A group is busy while one of its members works in it: that member's status and activity.
     /// 群状态投影来源成员执行及保存故障，成员交接期间保留调度状态。
     pub fn group_runtime(&self, group: &BotConfig) -> Runtime {
@@ -72,6 +118,46 @@ mod tests {
     use crate::remote::identity::Identity;
     use crate::store::{BotConfig, Store};
     use serde_json::json;
+
+    /// 同时复制来源群时分别提交编号，新群仍以来源成员顺序和设置打开。
+    #[tokio::test]
+    async fn concurrent_group_sessions_keep_members_and_get_distinct_names() {
+        let dir = std::env::temp_dir().join(format!("codync-groups-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = Store::open(std::path::Path::new(":memory:")).unwrap();
+        let hub = Hub::new(store, "groups-test".into(), Identity::load_or_create(&dir).unwrap(), "test".into(), 0);
+        for v in [
+            json!({"id":"a","name":"a","backend":"claude"}),
+            json!({"id":"b","name":"Crew 99","backend":"claude"}),
+            json!({"id":"g","name":"Crew","kind":"group","members":["b","a"],"description":"Release","section":"Work"}),
+        ] {
+            hub.store.save_bot(&serde_json::from_value::<BotConfig>(v).unwrap()).unwrap();
+        }
+        let create = || {
+            // 两个阻塞请求同时提交，必须各自得到新的群记录。
+            let hub = hub.clone();
+            tokio::task::spawn_blocking(move || hub.create_group_session("g").unwrap())
+        };
+        let (a, b) = tokio::join!(create(), create());
+        let groups = [a.unwrap(), b.unwrap()];
+        let mut names = groups.each_ref().map(|group| group["name"].as_str().unwrap());
+        names.sort_unstable();
+        assert_eq!(names, ["Crew 1", "Crew 2"]);
+        assert_ne!(groups[0]["id"], groups[1]["id"]);
+        for group in &groups {
+            assert_eq!(group["members"], json!(["b", "a"]));
+            assert_eq!(group["description"], "Release");
+            assert_eq!(group["section"], "Work");
+            assert!(hub.store.history(group["id"].as_str().unwrap(), i64::MAX, 10).unwrap().is_empty());
+        }
+        assert_eq!(hub.create_group_session(groups[0]["id"].as_str().unwrap()).unwrap()["name"], "Crew 3");
+        assert_eq!(
+            crate::chat::group::with_members(&hub.store, &["a".into(), "b".into()]).unwrap().as_deref(),
+            Some("g")
+        );
+        assert!(hub.create_group_session("a").is_err());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     /// 删除成员后，存活群的queued卡片与取消终态一起发布，重连也能读到同一状态。
     #[tokio::test]

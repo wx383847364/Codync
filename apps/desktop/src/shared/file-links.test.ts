@@ -11,7 +11,8 @@ import path from 'node:path'
 import { tmpdir } from 'node:os'
 import { test } from 'node:test'
 import type { BrowserWindow } from 'electron'
-import { fileLinkPath, isHTMLFileLink } from './file-links.ts'
+import * as fileLinks from './file-links.ts'
+const { fileLinkPath, isHTMLFileLink } = fileLinks
 import { loadMainModule } from './test-support/main-module.ts'
 
 /** 文件目标在各系统的聊天里可复制，网络路径和危险字符没有本地动作。 */
@@ -59,7 +60,7 @@ test('local file actions read and save regular files only from the chat window',
   const { registerFileLinks } = loadMainModule<typeof import('../main/file-links.ts')>('file-links', {
     'node:child_process': child, 'node:crypto': crypto, 'node:events': { once }, 'node:fs': fs, 'node:fs/promises': files,
     'node:path': path, 'node:stream/promises': streams, 'node:util': util, 'node:url': url, electron,
-    '../shared/file-links': { isHTMLFileLink },
+    '../shared/file-links': fileLinks,
   }, { process, Buffer, TextDecoder })
   // 当前电脑和聊天窗口由主进程提供。
   registerFileLinks(() => window, () => 'local')
@@ -120,7 +121,7 @@ test('HTML opens in the HTTPS browser on each desktop platform', async () => {
     }
     const { registerFileLinks } = loadMainModule<typeof import('../main/file-links.ts')>('file-links', {
       electron, 'node:fs': fs, 'node:crypto': crypto, 'node:events': { once }, 'node:stream/promises': streams,
-      '../shared/file-links': { isHTMLFileLink },
+      '../shared/file-links': fileLinks,
       'node:path': win ? path.win32 : path.posix,
       'node:url': {
         // 在当前测试系统上也能生成目标平台的文件 URL。
@@ -177,4 +178,13 @@ test('HTML opens in the HTTPS browser on each desktop platform', async () => {
     assert.equal(await action({ sender, senderFrame: mainFrame }, 'local', html + ':12', 'open'), 'ok')
     assert.deepEqual(opened, [['openPath', html]])
   }
+})
+
+
+test('shared snapshots can open documents without treating shell launchers as documents', () => {
+  assert.equal(fileLinks.canOpenSharedFile('report.md', 'win32'), true)
+  assert.equal(fileLinks.canOpenSharedFile('report.js', 'darwin'), true)
+  assert.equal(fileLinks.canOpenSharedFile('report.md.CMD', 'win32'), false)
+  assert.equal(fileLinks.canOpenSharedFile('report.lnk', 'win32'), false)
+  assert.equal(fileLinks.canOpenSharedFile('report.desktop', 'linux'), false)
 })

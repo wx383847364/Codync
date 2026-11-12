@@ -68,6 +68,7 @@
   "Done": "完成",
   "Each bot runs on its own computer. Sign in to see the computers in your account.": "每個 Bot 都在自己的電腦上執行。登入後可以看到賬戶裡的電腦。",
   "Edit": "編輯",
+  "Create new group session": "建立新會話群組",
   "Edit group": "編輯群聊",
   "Edit profile": "編輯資料",
   "English": "English",
@@ -1895,6 +1896,7 @@
   "This file could not be found on this computer.": "找不到這部電腦上的檔案。",
   "This action is unavailable for this file.": "此檔案不支援該操作。",
   "Could not complete the file action.": "無法完成檔案操作。",
+  "Copy file contents supports UTF-8 text files up to 256 KiB.": "複製檔案內容支援不超過 256 KiB 的 UTF-8 文字檔。",
   "Copy file contents supports UTF-8 text files up to 1 MiB.": "複製檔案內容支援不超過 1 MiB 的 UTF-8 文字檔。",
   "File on the host computer": "主機電腦上的檔案",
   "Couldn't copy the path.": "無法複製路徑。"

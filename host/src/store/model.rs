@@ -62,6 +62,9 @@ pub struct BotConfig {
     /// A group's bots, in the order they were added.
     #[serde(default)]
     pub members: Vec<String>,
+    /// 新会话群的编号基名。存在时，成员按群使用独立的模型会话。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) group_session_base: Option<String>,
     pub name: String,
     #[serde(default)]
     pub description: String,
@@ -196,6 +199,17 @@ fn default_shape() -> String {
 /// kv key for the agent session of one of a bot's routine runs (`slot`: see `routines::session_slot`).
 pub fn run_session_key(bot_id: &str, slot: &str) -> String {
     format!("lane.session.{bot_id}@{bot_id}/{slot}")
+}
+
+/// 按群与后端生成成员的独立会话槽，后端切换时保留各自的会话。
+pub(crate) fn group_session_slot(room: &str, backend: &str) -> String {
+    format!("group/{room}/{backend}")
+}
+
+/// 识别会话槽归属的群；定时任务槽继续使用原格式。
+pub(crate) fn slotted_group(slot: &str) -> Option<&str> {
+    let (room, _) = slot.strip_prefix("group/")?.split_once('/')?;
+    Some(room)
 }
 
 /// Where entries go and a turn talks: a bot's own chat or a group's (`chat`, a bot id).

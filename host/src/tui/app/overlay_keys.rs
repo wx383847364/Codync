@@ -10,6 +10,7 @@ use super::{
 };
 
 impl App {
+    /// 会话群操作只在当前选中群时显示。
     pub fn goto_items(&self, g: &Goto) -> Vec<GotoItem> {
         let q = g.query.text.trim();
         let want = FILTERS[g.filter].1;
@@ -33,6 +34,8 @@ impl App {
             items.extend(
                 ACTIONS
                     .iter()
+                    // 操作作用于当前聊天中的群，普通机器人没有该入口。
+                    .filter(|(_, _, action)| *action != Action::NewGroupSession || self.selected_group_id().is_some())
                     .filter(|(label, _, _)| {
                         let translated = super::super::l10n::tr(label);
                         fuzzy(q, &[label, translated.as_ref()])
@@ -43,10 +46,12 @@ impl App {
         items
     }
 
+    /// 执行搜索菜单选中的操作。
     fn run_action(&mut self, a: Action) {
         match a {
             Action::NewBot => self.new_bot(),
             Action::NewGroup => self.new_group(),
+            Action::NewGroupSession => self.create_group_session(),
             Action::Market => self.open_market(),
             Action::Memory => self.open_memory(),
             Action::Details => self.open_routines(),

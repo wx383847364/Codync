@@ -6,10 +6,11 @@ use serde_json::Value;
 
 /// `stored` with `patch` laid over it: a field the patch leaves out keeps its saved value, a `null`
 /// clears it. The id, creation and lead fields never change here.
+/// 会话群的编号归属由 Host 管理，编辑群资料时保留它。
 pub(super) fn patched(stored: &BotConfig, patch: &Value) -> Result<BotConfig> {
     let mut merged = serde_json::to_value(stored)?;
     for (k, v) in patch.as_object().into_iter().flatten() {
-        if !matches!(k.as_str(), "id" | "createdAt" | "createdBy" | "lead") {
+        if !matches!(k.as_str(), "id" | "createdAt" | "createdBy" | "lead" | "groupSessionBase") {
             merged[k] = v.clone();
         }
     }

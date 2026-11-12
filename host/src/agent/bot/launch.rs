@@ -165,12 +165,15 @@ pub(crate) async fn start_agent(command: &str, cwd: &str, env: &[(String, String
         // Claude's, Codex's and omp's adapters say so in the top-level `_meta`.
         steering: init["_meta"]["steering"]["supported"] == true,
     };
+    // 工具桥归属由发起会话的调用方设置；普通连接没有独立群身份。
     Ok(Conn {
         acp,
         rx,
         sessions,
         adapter: adapter(&init),
+        tool_group: None,
         loaded: HashMap::new(),
+        session_slots: HashMap::new(),
         started: Instant::now(),
         opening: false,
         fast_options: HashMap::new(),

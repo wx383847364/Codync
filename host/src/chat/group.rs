@@ -83,13 +83,15 @@ pub fn valid_members(store: &Store, group_id: &str, ids: &[String]) -> Result<Ve
 }
 
 /// A group whose members are exactly `members`.
+/// 普通建群只查找普通群，会话群通过显式操作创建与打开。
 pub fn with_members(store: &Store, members: &[String]) -> Result<Option<String>> {
     let mut wanted = members.to_vec();
     wanted.sort();
     Ok(store.bots()?.into_iter().find_map(|row| {
         let mut have = row.config.members.clone();
         have.sort();
-        (!row.deleted && row.config.is_group() && have == wanted).then_some(row.config.id)
+        (!row.deleted && row.config.is_group() && row.config.group_session_base.is_none() && have == wanted)
+            .then_some(row.config.id)
     }))
 }
 

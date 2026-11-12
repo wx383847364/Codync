@@ -105,8 +105,11 @@ impl Store {
         codync_mem::store::drop_bot(&c, id)?;
         // Its dreaming bookmark, notices' revisions and the record of its moved memory.
         c.execute("DELETE FROM kv WHERE k GLOB ?1", [format!("memory.*{id}*")])?;
-        // Its routine runs' sessions (see `run_session_key`).
-        c.execute("DELETE FROM kv WHERE k GLOB ?1", [format!("lane.session.{id}@*")])?;
+        // 清理成员的所有独立会话，以及被删除群在其他成员名下的会话槽。
+        c.execute(
+            "DELETE FROM kv WHERE k GLOB ?1 OR k GLOB ?2",
+            [format!("lane.session.{id}@*"), super::run_session_key("*", &super::group_session_slot(id, "*"))],
+        )?;
         // Its fallback chain's place and each agent's parked session (`agent::bot::fallback::park`).
         c.execute(
             "DELETE FROM kv WHERE k GLOB ?1 OR k GLOB ?2",
@@ -136,6 +139,23 @@ impl Store {
             params![format!("fallback.fresh.{bot}"), seq.to_string()],
         )?;
         tx.commit()?;
+        Ok(())
+    }
+
+    /// 只有群和成员仍存在时才保存群会话，避免删除与正在打开的会话交错后留下记录。
+    pub(crate) fn save_slotted_session(&self, bot: &str, slot: &str, sid: &str) -> Result<()> {
+        let key = super::run_session_key(bot, slot);
+        let Some(room) = super::slotted_group(slot) else {
+            return self.kv_set(&key, sid);
+        };
+        let c = self.db.locked();
+        c.execute(
+            "INSERT INTO kv(k,v) SELECT ?1,?2 WHERE
+             EXISTS (SELECT 1 FROM bots WHERE id=?3 AND deleted=0)
+             AND EXISTS (SELECT 1 FROM bots WHERE id=?4 AND deleted=0)
+             ON CONFLICT(k) DO UPDATE SET v=excluded.v",
+            params![key, sid, bot, room],
+        )?;
         Ok(())
     }
 
@@ -212,6 +232,7 @@ mod tests {
             id: "b1".into(),
             kind: BotKind::Agent,
             members: vec![],
+            group_session_base: None,
             name: "Rev".into(),
             description: String::new(),
             avatar_color: "blue".into(),

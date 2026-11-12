@@ -1,4 +1,4 @@
-import type { FileLinkAction, FileLinkEditor, FileLinkResult } from './file-links'
+import type { FileLinkAction, FileLinkEditor, FileLinkResult, SharedFileAction } from './file-links'
 import type { SignInFailure, SignInProvider } from './analytics'
 import type { SharedFile } from './models'
 import type { SSHBridge } from './ssh'
@@ -242,10 +242,11 @@ export interface CodyncBridge {
     openInBrowser(id: string, html: Uint8Array): Promise<void>
   }
   files: {
-    begin(file: SharedFile): Promise<string | null>
+    begin(file: SharedFile, action?: SharedFileAction): Promise<string | null>
     write(id: string, offset: number, data: Uint8Array): Promise<void>
-    finish(id: string): Promise<void>
+    finish(id: string): Promise<FileLinkResult>
     cancel(id: string): Promise<void>
+    editors(): Promise<FileLinkEditor[]>
   }
   fileLinks: {
     act(computerId: string, path: string, action: FileLinkAction): Promise<FileLinkResult>

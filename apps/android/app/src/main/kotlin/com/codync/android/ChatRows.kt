@@ -121,7 +121,7 @@ internal fun chatItems(entries: List<Entry>, pending: List<PendingSend>, busy: B
  *  `openArtifact` opens an artifact card's artifact. */
 /** 呈现群投递聚合卡和原有聊天消息，重试使用投递身份。 */
 @Composable internal fun ChatRow(entry: Entry, groupStart: Boolean, chat: Bot?, state: AppState, store: AppStore,
-    openTrace: () -> Unit, reply: (() -> Unit)?, connect: ConnectionRequestActions, addFallback: (Bot) -> Unit, openArtifact: (OpenArtifact) -> Unit) {
+    openTrace: () -> Unit, reply: (() -> Unit)?, connect: ConnectionRequestActions, addFallback: (Bot) -> Unit, openArtifact: (OpenArtifact) -> Unit, saveSharedFile: (Entry, SharedFile) -> Unit) {
     val group = chat?.kind == "group"
     when (entry.kind) {
         "user" -> Column(Modifier.fillMaxWidth().padding(top = if (groupStart) 12.dp else 4.dp).animateContentSize(Motion.layoutSize),
@@ -132,7 +132,7 @@ internal fun chatItems(entries: List<Entry>, pending: List<PendingSend>, busy: B
         "agent" -> Column(Modifier.fillMaxWidth().padding(top = if (groupStart) 12.dp else 4.dp).animateContentSize(Motion.layoutSize),
             verticalArrangement = Arrangement.spacedBy(4.dp)) {
             if (group && groupStart) AuthorLabel(entry.data.text("author"), state)
-            AgentBubble(entry, state, store, openTrace, reply, openArtifact)
+            AgentBubble(entry, state, store, openTrace, reply, openArtifact, saveSharedFile)
             Box(Modifier.padding(start = if (group) 34.dp else 0.dp)) { ReactionsRow(entry, state, store) }
         }
         "permission" -> Column(Modifier.padding(top = 12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -255,7 +255,7 @@ internal val Entry.reactions: List<String> get() = (data["reactions"] as? JsonAr
 }
 
 @Composable private fun AgentBubble(entry: Entry, state: AppState, store: AppStore, openTrace: () -> Unit, reply: (() -> Unit)?,
-    openArtifact: (OpenArtifact) -> Unit) {
+    openArtifact: (OpenArtifact) -> Unit, saveSharedFile: (Entry, SharedFile) -> Unit) {
     val context = LocalContext.current
     val focus = LocalFocusManager.current
     val files = entry.files
@@ -264,9 +264,10 @@ internal val Entry.reactions: List<String> get() = (data["reactions"] as? JsonAr
         // An artifact card or a message with files is that: the text is only the computer's fallback.
         if (artifact != null) ArtifactCardView(artifact, entry.botId, state, store, Modifier.contextActions(reactions = reactionPick(entry, store),
             onClick = { focus.clearFocus(); openArtifact(OpenArtifact(entry.botId, artifact.id, artifact.title, entry.id)) }) { messageMenu(context, entry, reply, openTrace) })
-        else if (files.isNotEmpty()) Column(Modifier.contextActions(reactions = reactionPick(entry, store), onClick = { focus.clearFocus() }) { messageMenu(context, entry, reply, openTrace) },
-            verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            for (file in files) FileDownloadCard(entry, file, state, store)
+        else if (files.isNotEmpty()) Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            for (file in files) FileDownloadCard(entry, file, state, store, reactionPick(entry, store), saveAs = { saveSharedFile(entry, file) }) {
+                messageMenu(context, entry, reply, openTrace)
+            }
         } else if (entry.text.isNotEmpty()) Box(Modifier.clip(RoundedRectangle(18.dp)).background(Palette.bubbleAgent)
             .contextActions(reactions = reactionPick(entry, store), onClick = { focus.clearFocus() }, preview = { AgentText(entry.text, selectable = true) }) {
                 messageMenu(context, entry, reply, openTrace)

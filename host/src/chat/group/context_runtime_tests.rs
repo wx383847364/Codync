@@ -249,11 +249,21 @@ async fn stopping_maintenance_preserves_its_scope_and_rejects_late_tools() {
         assert_eq!(room.hub.store.delivery(&id).unwrap().unwrap().status, expected);
         // 也覆盖已越过工具桥但尚未由 actor 处理的迟到消息和审批命令。
         let (reply, answer) = oneshot::channel();
-        room.hub.send_cmd("a", Cmd::SendToUser { text: "COMPACT_PRIVATE_LATE_ACTOR".into(), reply }).unwrap();
+        room.hub
+            .send_cmd("a", Cmd::SendToUser { group_session: None, text: "COMPACT_PRIVATE_LATE_ACTOR".into(), reply })
+            .unwrap();
         assert!(tokio::time::timeout(WAIT, answer).await.unwrap().unwrap().is_err());
         let (reply, answer) = oneshot::channel();
         room.hub
-            .send_cmd("a", Cmd::Approve { title: "COMPACT_PRIVATE_APPROVAL".into(), detail: "late".into(), reply })
+            .send_cmd(
+                "a",
+                Cmd::Approve {
+                    group_session: None,
+                    title: "COMPACT_PRIVATE_APPROVAL".into(),
+                    detail: "late".into(),
+                    reply,
+                },
+            )
             .unwrap();
         assert!(!tokio::time::timeout(WAIT, answer).await.unwrap().unwrap());
         std::fs::write(room.dir.join("a/compact-cancel-release"), "").unwrap();
@@ -437,4 +447,53 @@ async fn first_message_profile_and_putback_are_budgeted_without_consuming_the_qu
         room.settle().await;
         close(room, server).await;
     }
+}
+
+/// 编号群重新打开自己的模型会话，整理和业务提示始终使用相同的群会话身份。
+#[tokio::test]
+async fn group_session_reopens_and_compacts_without_using_the_shared_session() {
+    let (room, server) = context_room().await;
+    script(
+        &room,
+        "a",
+        "group-script.json",
+        &json!({"steps":[
+            {"reply":"original reply"},
+            {"reply":"first new group reply","usage":{"used":70_000,"size":200_000}},
+            {"reply":"second new group reply"},
+            {"reply":"third new group reply"}
+        ]}),
+    );
+    script(&room, "a", "group-compact.json", &json!({"usage":{"used":20_000,"size":200_000}}));
+    room.send("@a ORIGINAL_SESSION_MARKER", None).await;
+    room.settle().await;
+    let shared = room.hub.store.bot("a").unwrap().unwrap().session_id.unwrap();
+    let created = room.hub.create_group_session(&room.group).unwrap();
+    let id = created["id"].as_str().unwrap();
+    assert_eq!(created["members"], json!(["a", "b"]));
+    assert!(room.hub.store.history(id, i64::MAX, 500).unwrap().is_empty());
+
+    for text in ["@a first new group message", "@a second new group message", "@a after reopening"] {
+        if text == "@a after reopening" {
+            // 模拟工具定义更新引起的进程重启，下一次请求须重开已保存的独立会话。
+            room.hub.send_cmd("a", Cmd::RefreshTools).unwrap();
+        }
+        crate::api::dispatch(&room.hub, &Caller::Local, "send", json!({"botId":id,"text":text})).await.unwrap();
+        room.settle().await;
+    }
+
+    let requests = records(&room, "a", "prompt-requests.jsonl");
+    assert_eq!(requests.len(), 5);
+    assert_eq!(requests[0]["sessionId"], shared);
+    assert_ne!(requests[1]["sessionId"], shared);
+    for request in &requests[1..] {
+        assert_eq!(request["sessionId"], requests[1]["sessionId"]);
+        assert!(!request["prompt"][0]["text"].as_str().unwrap().contains("ORIGINAL_SESSION_MARKER"));
+    }
+    assert!(requests[2]["prompt"][0]["text"].as_str().unwrap().starts_with("/compact"));
+    assert!(records(&room, "a", "sessions.jsonl").iter().any(|request| {
+        request["method"] == "session/load" && request["params"]["sessionId"] == requests[1]["sessionId"]
+    }));
+    assert_eq!(room.hub.store.bot("a").unwrap().unwrap().session_id.as_deref(), Some(shared.as_str()));
+    close(room, server).await;
 }

@@ -14,7 +14,7 @@ use tokio::sync::mpsc;
 impl Actor {
     /// 根据持久投递身份处理取消与会话操作，旧通知不得取消新的群执行。
     pub(super) async fn on_cmd(&mut self, cmd: Cmd, done_tx: &mpsc::UnboundedSender<Done>) -> bool {
-        let Some(cmd) = self.maintenance_command(cmd) else { return true };
+        let Some(cmd) = self.guard_tool_command(cmd) else { return true };
         match cmd {
             Cmd::Delivery { id, reply } => self.begin_delivery(id, reply, done_tx).await,
             Cmd::RetryDeliverySave => {
@@ -67,19 +67,19 @@ impl Actor {
             Cmd::BotRequest(request) => self.enqueue(Queued::BotRequest(request), done_tx).await,
             Cmd::BotReply(reply) => self.enqueue(Queued::BotReply(reply), done_tx).await,
             Cmd::Prompt { text, call } => self.enqueue(Queued::Prompt { text, call }, done_tx).await,
-            Cmd::SendToUser { text, reply } => {
+            Cmd::SendToUser { text, reply, .. } => {
                 let _ = reply.send(self.send_to_user(text));
             }
-            Cmd::React { emoji, to, reply } => {
+            Cmd::React { emoji, to, reply, .. } => {
                 let _ = reply.send(self.react(&emoji, to.as_deref()));
             }
-            Cmd::SendFile { path, name, cancelled, reply } => self.begin_file(path, name, cancelled, reply),
-            Cmd::PostArtifact { data, reply } => {
+            Cmd::SendFile { path, name, cancelled, reply, .. } => self.begin_file(path, name, cancelled, reply),
+            Cmd::PostArtifact { data, reply, .. } => {
                 let _ = reply.send(self.post_artifact(data));
             }
             Cmd::Stop => self.stop().await,
             Cmd::Permission { entry_id, option_id } => self.answer_permission(&entry_id, option_id).await,
-            Cmd::Approve { title, detail, reply } => self.ask_approval(&title, &detail, reply),
+            Cmd::Approve { title, detail, reply, .. } => self.ask_approval(&title, &detail, reply),
             Cmd::SwitchBack => self.switch_back().await,
             Cmd::CallEnded { call } => {
                 if self.turn_call.as_ref() == Some(&call) {

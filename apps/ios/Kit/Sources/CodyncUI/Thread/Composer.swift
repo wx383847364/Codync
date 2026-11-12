@@ -121,7 +121,7 @@ struct Composer: View {
                     model.retryDeliverySave(member.id)
                 }.buttonStyle(.secondary)
             }
-            if bot?.pendingNewSession == true { Text("将在当前任务结束后新建会话；主会话与群共享。输入 /new-cancel 取消切换。").font(.footnote) }
+            if bot?.pendingNewSession == true { Text("将在当前任务结束后新建会话；主会话与普通群共享。输入 /new-cancel 取消切换。").font(.footnote) }
             if !queued.isEmpty {
                 // Over the box, past the + button.
                 QueuedMessages(entries: queued)

@@ -93,6 +93,14 @@ fun AppStore.saveGroup(draft: GroupDraft, onSaved: () -> Unit) = action("editor"
     onSaved()
 }
 
+/** 创建独立会话群，将 Host 返回的新群加入名单并打开聊天。 */
+fun AppStore.createGroupSession(botId: String) = action("groupSession:$botId") {
+    // 创建请求直接发送一次，断线时沿用现有错误提示。
+    val response = ready().call("createGroupSession", body("botId" to botId))
+    receiveReply(response)
+    openBot(response.jsonObject.getValue("bot").jsonObject.getValue("id").jsonPrimitive.content)
+}
+
 /** `/fast`: a bot's own Fast mode, or a group's members' together (each member's own setting, so it holds in their chats too). */
 fun AppStore.toggleFastMode(bot: Bot) {
     if (bot.kind != "group") return setFastMode(bot, !bot.fastMode)

@@ -84,6 +84,7 @@ pub struct App {
     pub pairing_requests: Vec<Value>,
     pub backends: Vec<Value>,
     pub custom_icons: bool,
+    group_sessions: bool,
     pub selected: Option<String>,
     pub focus: Focus,
     pub typing: bool,
@@ -187,6 +188,7 @@ impl App {
             pairing_requests: vec![],
             backends: vec![],
             custom_icons: false,
+            group_sessions: false,
             selected: None,
             focus: Focus::Roster,
             typing: false,
@@ -443,7 +445,7 @@ pub fn copy(text: &str) {
     if cfg!(test) {
         return;
     }
-    let mut out = std::io::stdout();
+    let mut out = std::io::stdout().lock();
     let _ = write!(out, "\x1b]52;c;{}\x07", base64::Engine::encode(&base64::engine::general_purpose::STANDARD, text));
     let _ = out.flush();
 }
