@@ -121,12 +121,10 @@ pub fn roster_lines<'a>(roster: &[&'a Bot], folded: &HashSet<String>) -> Vec<Ros
 /// 阶段展开后显示当前成员；只在展开时增加可导航的行。
 fn stage_lines<'a>(lines: &mut Vec<RosterLine<'a>>, group: &'a Bot, roster: &[&'a Bot], expanded: &HashSet<String>) {
     lines.push(RosterLine::Bot(group));
-    if let Some(stage) = &group.stage
-        && expanded.contains(&format!("\0stage:{}", group.id))
-    {
-        for id in group.members.iter().filter(|id| stage.owned_members.contains(id)) {
+    if group.group && expanded.contains(&format!("\0stage:{}", group.id)) {
+        for id in &group.members {
             if let Some(member) = roster.iter().find(|bot| &bot.id == id) {
-                lines.push(RosterLine::StageMember(member, *id == stage.leader_id));
+                lines.push(RosterLine::StageMember(member, group.group_leader() == Some(id.as_str())));
             }
         }
     }
@@ -180,7 +178,15 @@ pub fn rename_fold(folded: &mut HashSet<String>, from: &str, to: Option<&str>) {
 /// What the cursor can stop on, in order, as (line, bot id): the bots shown and each folded section
 /// (at its first bot). The number keys, j/k and the compact strip all count these.
 pub fn stops<'l>(lines: &'l [RosterLine<'_>]) -> Vec<(usize, &'l str)> {
-    lines.iter().enumerate().filter_map(|(i, l)| Some((i, l.stop()?))).collect()
+    let mut seen = HashSet::new();
+    lines
+        .iter()
+        .enumerate()
+        .filter_map(|(i, line)| {
+            let id = line.stop()?;
+            seen.insert(id).then_some((i, id))
+        })
+        .collect()
 }
 
 /// The bot `delta` stops from the cursor (no cursor: the first). A folded section is one stop.
@@ -231,7 +237,7 @@ impl App {
     /// `z`: folds the section under the cursor, or unfolds it.
     pub(super) fn toggle_section(&mut self) {
         let Some(bot) = self.bot() else { return };
-        if bot.stage.is_some() {
+        if bot.group {
             let archived = bot.stage.as_ref().is_some_and(|stage| stage.archived_at.is_some());
             let key = if archived && !self.folded.contains("\0stage:archives") {
                 "\0stage:archives".into()

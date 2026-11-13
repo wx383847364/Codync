@@ -44,7 +44,7 @@ export function stageRoster<T extends { bot: { id: string; members: string[]; st
   return {
     roots: items.filter(({ bot }) => !owned.has(bot.id)),
     /** 展开阶段时显示其当前可见成员。 */
-    children: (item: T) => item.bot.members.filter((id) => item.bot.stage?.ownedMembers?.includes(id)).flatMap((id) => byId.get(id) ?? []),
+    children: (item: T) => item.bot.members.flatMap((id) => byId.get(id) ?? []),
   }
 }
 
