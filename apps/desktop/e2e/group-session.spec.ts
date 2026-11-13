@@ -254,6 +254,27 @@ test('stage opens with fresh roles, saves a versioned handoff and closes indepen
       await heading.getByRole('button', { name: 'Expand stage members' }).click()
       await expect(heading.locator('..').locator(`[data-roster-row$="/${group.members[1]}"]`)).toBeVisible()
       await heading.getByRole('button', { name: 'Collapse stage members' }).click()
+      // 旧群可以展开复用的项目机器人，阶段群与旧群可在同一项目内拖动互换位置。
+      const old = page.locator(`[data-roster-row$="/${original.id}"]`)
+      const oldHeading = old.locator('..')
+      await oldHeading.getByRole('button', { name: 'Expand stage members' }).click()
+      await expect(oldHeading.locator('..').locator('.stage-member').getByText(lead.name, { exact: true })).toBeVisible()
+      await expect(page.locator(`[data-roster-row$="/${lead.id}"]`)).toHaveCount(1)
+      await oldHeading.getByRole('button', { name: 'Collapse stage members' }).click()
+      const rows = page.locator('.roster-row')
+      const stageKey = (await selected.getAttribute('data-roster-row'))!
+      const oldKey = (await old.getAttribute('data-roster-row'))!
+      const order = async () => rows.evaluateAll((nodes) => nodes.map((node) => node.getAttribute('data-roster-row')))
+      const before = await order()
+      const originallyFirst = before.indexOf(stageKey) < before.indexOf(oldKey)
+      await selected.dragTo(old)
+      await expect.poll(async () => {
+        const after = await order()
+        return after.indexOf(stageKey) < after.indexOf(oldKey)
+      }).toBe(!originallyFirst)
+      const position = db.prepare("SELECT json_extract(config, '$.position') AS value FROM bots WHERE id = ?")
+      await expect.poll(() => (Number(position.get(id)?.value) - Number(position.get(original.id)?.value))
+        * (originallyFirst ? 1 : -1)).toBeGreaterThan(0)
       expect(group.members.every((member: string) => member !== reviewer.id && member !== lead.id)).toBe(true)
       expect(group.stage.leaderId).toBe(group.members[1])
       expect(JSON.parse(get.get(original.id)!.config as string).members).toEqual([reviewer.id, lead.id])
@@ -281,7 +302,7 @@ test('stage opens with fresh roles, saves a versioned handoff and closes indepen
     expect((await conflict.json()).error).toContain('changed while you were reviewing the role')
 
     // 通过真实弹层保存、验收和结束，再选择同一版本创建下一阶段。
-    const stage = page.locator('.roster-row').getByText(`${name} next`, { exact: true })
+    const stage = page.locator(`[data-roster-row$="/${id}"]`)
     await stage.click({ button: 'right' })
     // 先从尚未验收的阶段创建后继，只选择一个机器人。
     await stageAction.click()

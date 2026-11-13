@@ -66,7 +66,7 @@ export function useComputerRoster(app: AppModel, shown: Set<string>) {
       // A folded section shows no order to change.
       if (!section || !moved || (shown && folded.includes(shown))) return
       const group = stageRoster(items).roots.filter((item) => !item.bot.stage?.archivedAt
-        && !!item.bot.stage === !!moved.bot.stage && sameRosterGroup(item.bot, moved.bot))
+        && (item.bot.pinned || (item.bot.kind === 'group') === (moved.bot.kind === 'group')) && sameRosterGroup(item.bot, moved.bot))
       const index = group.indexOf(moved)
       if (index < 0) return
       const target = group[index + offset]

@@ -283,11 +283,11 @@ private fun LazyListScope.botLines(state: AppState, store: AppStore, roster: Com
 /** 阶段成员默认折叠，展开后点击成员打开该机器人的聊天。 */
 @Composable private fun StageRosterRow(bot: Bot, state: AppState, store: AppStore, drag: ContextDrag?, sections: List<String>,
     grouped: Boolean, agent: AgentMark?, actions: RosterActions) {
-    val stage = bot.stage
+    val isGroup = bot.kind == "group"
     var expanded by remember(bot.id) { mutableStateOf(false) }
     Column {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            if (stage != null) {
+            if (isGroup) {
                 val disclosure = tr(if (expanded) "Collapse stage members" else "Expand stage members")
                 Box(Modifier.size(40.dp).clickable(role = Role.Button) { expanded = !expanded }
                     .semantics { contentDescription = disclosure },
@@ -302,13 +302,13 @@ private fun LazyListScope.botLines(state: AppState, store: AppStore, roster: Com
                     stageDetails = { actions.stageDetails(bot) })
             }
         }
-        if (stage != null) AnimatedVisibility(expanded) {
+        if (isGroup) AnimatedVisibility(expanded) {
             Column(Modifier.padding(start = 28.dp)) {
                 val members = state.bots.associateBy { it.id }
-                for (member in bot.members.filter { it in stage.ownedMembers }.mapNotNull(members::get).filter { !it.hidden && !it.deleted }) {
+                for (member in bot.members.mapNotNull(members::get).filter { !it.hidden && !it.deleted }) {
                     Row(Modifier.clickable { store.openBot(member.id) }, verticalAlignment = Alignment.CenterVertically) {
                         Box(Modifier.weight(1f)) { BotRow(member, state) }
-                        if (member.id == stage.leaderId) Text(tr("Lead"), style = Type.footnote, color = Palette.secondary)
+                        if (member.id == (bot.stage?.leaderId ?: bot.groupLeaderId)) Text(tr("Lead"), style = Type.footnote, color = Palette.secondary)
                     }
                 }
             }

@@ -90,7 +90,7 @@ pub(super) fn roster(buf: &mut Buffer, r: Rect, app: &mut App, narrow: bool) {
             }
             RosterLine::Bot(b) => {
                 bot_row(buf, Rect::new(x0, yy, wd, 2), app, b, cursor_bar);
-                if b.stage.is_some() {
+                if b.group {
                     let key = format!("\0stage:{}", b.id);
                     put(buf, x0 + 1, yy, 1, if app.folded.contains(&key) { "▾" } else { "▸" }, t.dim);
                     app.hits.clicks.push((Rect::new(x0 + 1, yy, 1, 1), Click::Section(key)));
