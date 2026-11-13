@@ -1,4 +1,4 @@
-import { identity } from './environment'
+import { buildConfig, identity } from './environment'
 import { registerAppearance } from './appearance'
 import { execFileSync } from 'node:child_process'
 import { hostname } from 'node:os'
@@ -58,10 +58,13 @@ let pairing: BrowserWindow | null = null
 const quitLifecycle = new QuitLifecycle(app, autoUpdater)
 const isMac = process.platform === 'darwin'
 
+/** 本机验收包直接进入会话，避免首次启动打开账号或权限引导。 */
 function rendererURL(page: string) {
+  const preview = buildConfig.localPreview || (!app.isPackaged && process.env.CODYNC_LOCAL_PREVIEW === '1')
+  const query = `?window=${page}${preview ? '&localPreview=1' : ''}`
   return process.env.ELECTRON_RENDERER_URL
-    ? `${process.env.ELECTRON_RENDERER_URL}/?window=${page}`
-    : `file://${join(__dirname, '../renderer/index.html')}?window=${page}`
+    ? `${process.env.ELECTRON_RENDERER_URL}/${query}`
+    : `file://${join(__dirname, '../renderer/index.html')}${query}`
 }
 
 const background = () => (nativeTheme.shouldUseDarkColors ? '#0A0A0A' : '#FFFFFF')

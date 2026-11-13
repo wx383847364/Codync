@@ -140,7 +140,7 @@ pub(super) fn overlay(buf: &mut Buffer, area: Rect, app: &mut App, top: &Overlay
         Overlay::Form(form) => form_view(buf, area, app, form),
         Overlay::Group(g) => group_view(buf, area, app, g),
         Overlay::StageGroup(g) => stage_group_view(buf, area, app, g),
-        Overlay::StageDetails(g) => stage_details_view(buf, area, g),
+        Overlay::StageDetails(g) => stage_details_view(buf, area, g, app.stage_roster),
         Overlay::Usage(scroll) => usage(buf, area, app, *scroll),
         Overlay::UsageChooser { row, .. } => usage_chooser(buf, area, app, *row),
         Overlay::Pair(code) => pair(buf, area, app, code),

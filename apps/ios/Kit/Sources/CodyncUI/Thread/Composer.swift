@@ -124,7 +124,9 @@ struct Composer: View {
 
     /// 呈现候选、来源成员保存故障与编辑器，所有发送仍经 host。
     var body: some View {
-        if bot?.stage?.closedAt != nil {
+        if bot?.stage?.archivedAt != nil {
+            Text(L10n.tr("Stage archived")).foregroundStyle(Palette.secondary)
+        } else if bot?.stage?.closedAt != nil {
             Text(L10n.tr("Stage closed")).font(.footnote).foregroundStyle(Palette.secondary).padding(12)
         } else {
             editor

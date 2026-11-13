@@ -15,6 +15,8 @@ import type { BotStore } from '../store/bot-store'
 export const BotRow = memo(function BotRow({ bot, store, compact, usingComputer, members, agent }: { bot: Bot; store: BotStore; compact: boolean; usingComputer: boolean; members: Bot[]; agent: string | null }) {
   // The cached roster paints before hello names the agents. Follow the store so that arrival replaces "Custom agent".
   useModel(store)
+  const stage = [...store.bots.values()].find((group) => group.stage?.ownedMembers?.includes(bot.id) && group.members.includes(bot.id))
+  const affiliation = !isGroup(bot) ? stage?.name ?? bot.section ?? (!bot.managedWorkspace ? folderName(bot) : undefined) : undefined
   return (
     <HStack gap={compact ? 0 : 10} justify={compact ? 'center' : 'flex-start'} className="bot-row">
       <AvatarWithStatus bot={bot} members={members} size={30} agent={agent ? store.agentRegistry(agent) : null} />
@@ -22,6 +24,7 @@ export const BotRow = memo(function BotRow({ bot, store, compact, usingComputer,
         <HStack align="baseline" gap={4} shrink>
           {bot.pinned ? <Icon name="pin.fill" size={10} color="var(--tertiary)" /> : null}
           <Text size="body" weight={bot.unread > 0 ? 'semibold' : 'medium'} tone="text" truncate>{bot.name}</Text>
+          {affiliation && <Text size="caption" tone="tertiary" truncate title={affiliation}>{affiliation}</Text>}
           {usingComputer ? <Icon name="cursorarrow.motionlines" size={10} color="var(--accent)" title="Using the computer" /> : null}
         </HStack>
         <HStack gap={6} shrink>
@@ -39,6 +42,7 @@ export const BotRow = memo(function BotRow({ bot, store, compact, usingComputer,
 function Preview({ bot, store }: { bot: Bot; store: BotStore }) {
   const tr = useTr()
   const place = bot.managedWorkspace ? tr('Personal workspace') : folderName(bot)
+  if (bot.stage?.archivedAt) return <Text size="callout" tone="secondary" truncate>{tr('Stage archived')}</Text>
   if (needsInput(bot)) {
     return (
       <HStack as="span" gap={6} shrink>

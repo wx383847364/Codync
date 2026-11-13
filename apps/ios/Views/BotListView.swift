@@ -16,6 +16,8 @@ struct BotListView: View {
     @State private var creatingStage: GroupTarget?
     @State private var creatingGroupSession: GroupTarget?
     @State private var stageDetails: GroupTarget?
+    @State private var expandedStages: Set<BotReference> = []
+    @State private var expandedArchives: Set<String> = []
     @State private var confirmDelete: RosterItem?
     /// What the section name dialog names while it's open.
     @State private var naming: SectionNaming?
@@ -120,13 +122,22 @@ struct BotListView: View {
     /// folded), then the bots in no section (under the "Bots" label when there are sections).
     private func sectionLines(_ store: BotStore) -> [RosterLine] {
         let id = store.computer.id
-        let items = accounts.roster.filter { $0.ref.computerId == id }
-        return RosterSection.lines(items, folded: foldedSections, order: sectionOrder.saved(on: id)) { $0.bot }.map { line -> RosterLine in
+        let all = accounts.roster.filter { $0.ref.computerId == id }
+        let owned = Set(all.flatMap { item in
+            (item.bot.stage?.ownedMembers ?? []).filter { item.bot.members.contains($0) }
+        })
+        let items = all.filter { !owned.contains($0.bot.id) && $0.bot.stage?.archivedAt == nil }
+        let archives = Dictionary(grouping: all.filter { $0.bot.stage?.archivedAt != nil }) { $0.bot.section ?? "" }
+        let active = RosterSection.lines(items, folded: foldedSections, order: sectionOrder.saved(on: id)) { $0.bot }.map { line -> RosterLine in
             switch line {
             case let .header(section): .section(section, id, store)
             case .label: .label(id)
             case let .bot(item): .bot(item, store)
             }
+        }
+        return active + archives.keys.sorted().compactMap { name in
+            guard let groups = archives[name] else { return nil }
+            return .archived(name, id, groups, store)
         }
     }
 
@@ -163,11 +174,15 @@ struct BotListView: View {
                                     Button(L10n.tr("Move down")) { moveSection(line, by: 1) }
                                 }
                         }
+                    case let .archived(name, computer, groups, store):
+                        if !movingComputer && movingSection != computer {
+                            archiveRows(name, computer: computer, groups: groups, store: store)
+                        }
                     case let .bot(item, store):
                         // A dragged heading folds every computer's bots into their headings. Each
                         // row stays, empty: taking it out would move the lifted heading's place in
                         // the list, and the system then drops the drag.
-                        if movingComputer || movingSection == item.ref.computerId { Color.clear.frame(height: 0) } else { row(item, store: store) }
+                        if movingComputer || movingSection == item.ref.computerId { Color.clear.frame(height: 0) } else { stageRow(item, store: store) }
                     }
                 }
                 .onMove(perform: moveLines)
@@ -288,6 +303,7 @@ struct BotListView: View {
             withAnimation(Motion.reduced(Motion.layout, reduceMotion)) { accounts.move(id, to: old[to]) }
         case let .bot(item, store):
             store.drop(item.bot.id, in: after.compactMap { $0.botId(on: item.ref.computerId) })
+        case .archived: return
         case .section, .label:
             guard let computer = before[from].sectionComputer else { return }
             let names = after.compactMap { $0.sectionName(on: computer) }
@@ -353,6 +369,65 @@ struct BotListView: View {
         withAnimation(Motion.reduced(Motion.layout, reduceMotion)) { sectionOrder.set(names, on: computer) }
     }
 
+    /// 归档阶段单独折叠，点击群仍可查看历史。
+    private func archiveRows(_ name: String, computer: ComputerID, groups: [RosterItem], store: BotStore) -> some View {
+        let key = "\(computer):\(name)"
+        let expanded = expandedArchives.contains(key)
+        return VStack(alignment: .leading, spacing: 2) {
+            Button {
+                withAnimation(Motion.reduced(Motion.layout, reduceMotion)) {
+                    if expanded { expandedArchives.remove(key) } else { expandedArchives.insert(key) }
+                }
+            } label: {
+                Label(name.isEmpty ? L10n.tr("Archived stages") : "\(L10n.tr("Archived stages")) · \(name)",
+                      systemImage: expanded ? "chevron.down" : "chevron.right")
+                    .font(.caption.weight(.semibold)).foregroundStyle(Palette.secondary)
+            }
+            .buttonStyle(.plain)
+            .padding(.vertical, 8)
+            if expanded {
+                ForEach(groups, id: \.bot.id) { item in stageRow(item, store: store) }
+            }
+        }
+    }
+
+    /// 群行和折叠按钮分开，阶段机器人可从其群中打开。
+    @ViewBuilder private func stageRow(_ item: RosterItem, store: BotStore) -> some View {
+        if let stage = item.bot.stage {
+            let expanded = expandedStages.contains(item.ref)
+            VStack(spacing: 0) {
+                HStack(spacing: 5) {
+                    Button {
+                        withAnimation(Motion.reduced(Motion.layout, reduceMotion)) {
+                            if expanded { expandedStages.remove(item.ref) } else { expandedStages.insert(item.ref) }
+                        }
+                    } label: {
+                        Image(systemName: expanded ? "chevron.down" : "chevron.right")
+                            .font(.caption.weight(.semibold)).frame(width: 28, height: 44)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(L10n.tr(expanded ? "Collapse stage members" : "Expand stage members"))
+                    row(item, store: store)
+                }
+                if expanded {
+                    ForEach(store.members(of: item.bot).filter { !$0.hidden && stage.ownedMembers?.contains($0.id) == true }, id: \.id) { member in
+                        Button {
+                            accounts.selection = BotReference(accountId: item.ref.accountId, computerId: item.ref.computerId, botId: member.id)
+                        } label: {
+                            HStack {
+                                BotRow(bot: member).environment(store)
+                                if member.id == stage.leaderId {
+                                    Text(L10n.tr("Lead")).font(.caption).foregroundStyle(Palette.secondary)
+                                }
+                            }
+                        }.buttonStyle(.plain)
+                    }
+                    .padding(.leading, 25)
+                }
+            }
+        } else { row(item, store: store) }
+    }
+
     private func row(_ item: RosterItem, store: BotStore) -> some View {
         let bot = item.bot
         let line = RosterLine.bot(item, store)
@@ -371,7 +446,7 @@ struct BotListView: View {
         .background(lifted == line.id ? Palette.surface : .clear, in: card)
         .contentShape([.dragPreview, .contextMenuPreview], card)
         .padding(.horizontal, -8)
-        .itemProvider { lift(line) }
+        .itemProvider { bot.stage?.archivedAt == nil ? lift(line) : NSItemProvider() }
         .accessibilityLabel(accounts.computers.count > 1 ? "\(name), on \(store.hostName)" : name)
         .accessibilityActions {
             Button(L10n.tr("Move up")) { withAnimation(Motion.reduced(Motion.layout, reduceMotion)) { store.move(bot.id, by: -1) } }
@@ -415,6 +490,11 @@ struct BotListView: View {
                     creatingStage = GroupTarget(computerId: item.ref.computerId, group: bot)
                 })
                 if bot.stage != nil {
+                    if store.hello?.stageRoster == true, let stage = bot.stage {
+                        items.append(MenuItem(stage.archivedAt == nil ? "Archive stage" : "Restore stage", icon: "archivebox") {
+                            store.setStageArchived(bot.id, stage.archivedAt == nil)
+                        })
+                    }
                     items.append(MenuItem("Stage details", icon: "doc.text") {
                         stageDetails = GroupTarget(computerId: item.ref.computerId, group: bot)
                     })

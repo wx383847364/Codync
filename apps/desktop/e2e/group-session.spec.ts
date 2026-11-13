@@ -182,7 +182,7 @@ test('stage opens with fresh roles, saves a versioned handoff and closes indepen
       name: `${name} Reviewer`, backend: 'opencode', description: 'Review requirements', skills: [], connectors: [],
     })
     ids.push(reviewer.id)
-    const { bot: lead } = await api<{ bot: Group }>(page, 'createBot', {
+    const { bot: lead } = await api<{ bot: Group & { rev: number } }>(page, 'createBot', {
       name: `${name} Lead`, backend: 'opencode', description: 'Coordinate work', skills: [], connectors: [],
     })
     ids.push(lead.id)
@@ -205,6 +205,18 @@ test('stage opens with fresh roles, saves a versioned handoff and closes indepen
     await page.getByRole('option', { name: lead.name, exact: true }).click()
     await page.getByRole('button', { name: /Group lead/ }).click()
     await page.getByRole('listbox', { name: /Group lead/ }).getByRole('option', { name: lead.name, exact: true }).click()
+    // 模拟负责人在另一窗口被标记为已读。同步版本变化，角色配置不变。
+    const rosterDb = new DatabaseSync(join(homedir(), `.codync-dev-${sandbox().name}`, 'codync.db'))
+    try {
+      const before = rosterDb.prepare('SELECT rev, config FROM bots WHERE id = ?').get(lead.id)!
+      rosterDb.prepare(
+        "INSERT INTO entries(id, bot_id, rev, kind, turn, data, created_at, updated_at) VALUES (?, ?, ?, 'agent', 1, ?, ?, ?)",
+      ).run(`${lead.id}-read-fixture`, lead.id, before.rev, '{"text":"Ready for review","final":true}', Date.now(), Date.now())
+      await api(page, 'markRead', { botId: lead.id })
+      const after = rosterDb.prepare('SELECT rev, config FROM bots WHERE id = ?').get(lead.id)!
+      expect(Number(after.rev)).toBeGreaterThan(Number(before.rev))
+      expect(after.config).toBe(before.config)
+    } finally { rosterDb.close() }
     await page.getByRole('button', { name: 'Role settings', exact: true }).click()
     const roles = page.getByRole('dialog', { name: 'Role settings' })
     await expect(roles.getByPlaceholder('Role instructions')).toHaveValue('Review requirements')
@@ -233,6 +245,15 @@ test('stage opens with fresh roles, saves a versioned handoff and closes indepen
       const group = JSON.parse(get.get(id)!.config as string)
       ids.push(...group.members)
       expect(group.members).toHaveLength(2)
+      expect(group.stage.ownedMembers).toEqual(group.members)
+      for (const member of group.members) {
+        await expect(page.locator(`[data-roster-row$="/${member}"]`)).toHaveCount(0)
+      }
+      await expect(page.locator(`[data-roster-row$="/${lead.id}"]`)).toBeVisible()
+      const heading = selected.locator('..')
+      await heading.getByRole('button', { name: 'Expand stage members' }).click()
+      await expect(heading.locator('..').locator(`[data-roster-row$="/${group.members[1]}"]`)).toBeVisible()
+      await heading.getByRole('button', { name: 'Collapse stage members' }).click()
       expect(group.members.every((member: string) => member !== reviewer.id && member !== lead.id)).toBe(true)
       expect(group.stage.leaderId).toBe(group.members[1])
       expect(JSON.parse(get.get(original.id)!.config as string).members).toEqual([reviewer.id, lead.id])
@@ -241,6 +262,23 @@ test('stage opens with fresh roles, saves a versioned handoff and closes indepen
     await expect(page.getByText(`Default recipient · ${lead.name}`)).toBeVisible()
     await expect(page.locator('.composer textarea')).toHaveValue(/Build the next phase[\s\S]*A verified result is visible/)
     expect((await api<{ entries: unknown[] }>(page, 'history', { botId: id })).entries).toEqual([])
+
+    // 真正修改角色指令后，Host 仍拒绝用旧配置版本创建另一群。
+    const { bot: changed } = await api<{ bot: Group & { rev: number } }>(page, 'updateBot', {
+      id: lead.id, description: 'Updated coordination instructions',
+    })
+    expect(changed.rev).toBeGreaterThan(lead.rev)
+    const sandboxToken = readFileSync(join(homedir(), `.codync-dev-${sandbox().name}`, 'token'), 'utf8').trim()
+    const conflict = await fetch(`http://127.0.0.1:${sandbox().port}/api/createStageGroup`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${sandboxToken}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        botId: original.id, requestId: crypto.randomUUID(),
+        roles: [{ botId: lead.id, sourceRev: lead.rev, description: 'Coordinate work' }],
+      }),
+    })
+    expect(conflict.status).toBe(400)
+    expect((await conflict.json()).error).toContain('changed while you were reviewing the role')
 
     // 通过真实弹层保存、验收和结束，再选择同一版本创建下一阶段。
     const stage = page.locator('.roster-row').getByText(`${name} next`, { exact: true })
@@ -293,6 +331,17 @@ test('stage opens with fresh roles, saves a versioned handoff and closes indepen
     await expect(page.getByText('Host attempts · 0', { exact: true })).toBeVisible()
     await page.keyboard.press('Escape')
     await expect(page.locator('.composer').getByText('Stage closed', { exact: true })).toBeVisible()
+    // 归档移动整群，历史仍可查看；恢复后仍保持归档前的关闭状态。
+    await stage.click({ button: 'right' })
+    await page.getByRole('menuitem', { name: 'Archive stage', exact: true }).click()
+    await expect(page.locator('.composer').getByText('Stage archived', { exact: true })).toBeVisible()
+    await expect(stage).toHaveCount(0)
+    await page.getByRole('button', { name: 'Archived stages', exact: true }).click()
+    await expect(stage).toBeVisible()
+    await stage.click({ button: 'right' })
+    await page.getByRole('menuitem', { name: 'Restore stage', exact: true }).click()
+    await expect(page.locator('.composer').getByText('Stage closed', { exact: true })).toBeVisible()
+    await expect(stage).toBeVisible()
 
     await stage.click({ button: 'right' })
     await stageAction.click()

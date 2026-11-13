@@ -143,7 +143,7 @@ fn route_result(c: &Connection, d: &Delivery, source: &str, text: Option<&str>, 
     let config: String = c.query_row("SELECT config FROM bots WHERE id=? AND deleted=0", [&d.room_id], |r| r.get(0))?;
     let group: BotConfig = serde_json::from_str(&config)?;
     // 已关闭时仍可保存迟到记录，但不能在同一事务派生新的工作。
-    if group.stage.as_ref().is_some_and(|stage| stage.closed_at.is_some()) {
+    if group.stage.as_ref().is_some_and(crate::store::StageGroup::read_only) {
         return Ok(vec![]);
     }
     let mut members = Vec::new();

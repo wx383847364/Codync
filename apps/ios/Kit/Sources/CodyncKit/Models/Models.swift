@@ -240,6 +240,7 @@ public struct Hello: Codable, Sendable {
     public var stageGroups: Bool?
     public var groupMemberPicker: Bool?
     public var optionalStageSetup: Bool?
+    public var stageRoster: Bool?
     public var icons: [String: CustomIcon]?
     public var iconsRevision: Int64?
     public var hostId: String
@@ -425,6 +426,8 @@ public struct StageGroup: Codable, Hashable, Sendable {
     public var handoff: StageHandoff?
     public var incoming: StageFile?
     public var closedAt: Int64?
+    public var archivedAt: Int64?
+    public var ownedMembers: [String]?
 }
 
 public struct StageFile: Codable, Hashable, Sendable {
@@ -462,7 +465,7 @@ public struct StageDetails: Decodable, Sendable {
 }
 
 public struct StageChange: Encodable, Sendable {
-    public enum Action: String, Encodable, Sendable { case saveHandoff, accept, close, reopen }
+    public enum Action: String, Encodable, Sendable { case saveHandoff, accept, close, reopen, archive, restore }
     public var botId: String
     public var action: Action
     public var markdown: String?

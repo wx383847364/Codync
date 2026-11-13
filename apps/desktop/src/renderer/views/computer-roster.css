@@ -130,3 +130,13 @@
 .roster-section-toggle,
 button.roster-label { cursor: grab; }
 .pointer-dragging .roster-section-toggle:hover { background: none; }
+
+.stage-roster-heading, .stage-member { display: flex; align-items: center; }
+.stage-roster-heading .roster-row, .stage-member .roster-row { flex: 1; min-width: 0; }
+.stage-roster-control { display: grid; place-items: center; flex: 0 0 24px; min-height: 32px; color: var(--secondary); }
+.stage-roster-members { margin-left: 17px; padding-left: 9px; border-left: 1px solid var(--border); }
+.stage-project-label { color: var(--secondary); font-size: 12px; margin: 9px 9px 3px; }
+.stage-lead-label { font-size: 11px; margin-right: 8px; color: var(--secondary); white-space: nowrap; }
+.stage-archive-notice { position: fixed; z-index: 100; bottom: 16px; left: 16px; display: flex; align-items: center; gap: 12px;
+  padding: 10px 12px; border-radius: var(--radius-m); background: var(--surface); box-shadow: 0 3px 20px #0002; }
+.stage-archive-notice button { color: var(--accent); }

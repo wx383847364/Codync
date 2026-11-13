@@ -30,6 +30,12 @@ pub enum RosterLine<'a> {
         first: &'a Bot,
     },
     Bot(&'a Bot),
+    StageMember(&'a Bot, bool),
+    Archives {
+        folded: bool,
+        first: &'a Bot,
+        count: usize,
+    },
 }
 
 impl Bot {
@@ -63,10 +69,20 @@ fn section_key(name: &str) -> (String, String, Reverse<&str>) {
 /// `roster` (in `App::roster` order) as lines; a folded section is its label alone. Without pinned
 /// bots or sections there is nothing to tell apart, so no labels.
 pub fn roster_lines<'a>(roster: &[&'a Bot], folded: &HashSet<String>) -> Vec<RosterLine<'a>> {
-    let labeled = roster.iter().any(|b| b.pinned || b.shown_section().is_some());
+    let owned: HashSet<_> = roster
+        .iter()
+        .filter_map(|bot| bot.stage.as_ref().map(|stage| (*bot, stage)))
+        .flat_map(|(bot, stage)| stage.owned_members.iter().filter(|id| bot.members.contains(id)))
+        .collect();
+    let (archives, roots): (Vec<_>, Vec<_>) = roster
+        .iter()
+        .copied()
+        .filter(|b| !owned.contains(&b.id))
+        .partition(|b| b.stage.as_ref().is_some_and(|stage| stage.archived_at.is_some()));
+    let labeled = roots.iter().any(|b| b.pinned || b.shown_section().is_some());
     let mut lines = vec![];
     let mut group = None;
-    for &b in roster {
+    for &b in &roots {
         let here = b.roster_group();
         if labeled && group != Some(here) {
             lines.push(match here {
@@ -74,7 +90,7 @@ pub fn roster_lines<'a>(roster: &[&'a Bot], folded: &HashSet<String>) -> Vec<Ros
                 (_, None) => RosterLine::Label("BOTS"),
                 (_, Some(name)) => {
                     let members: Vec<&Bot> =
-                        roster.iter().copied().filter(|m| m.shown_section() == Some(name)).collect();
+                        roots.iter().copied().filter(|m| m.shown_section() == Some(name)).collect();
                     RosterLine::Section {
                         name,
                         bots: members.len(),
@@ -87,17 +103,41 @@ pub fn roster_lines<'a>(roster: &[&'a Bot], folded: &HashSet<String>) -> Vec<Ros
         }
         group = Some(here);
         if !here.1.is_some_and(|name| folded.contains(name)) {
-            lines.push(RosterLine::Bot(b));
+            stage_lines(&mut lines, b, roster, folded);
+        }
+    }
+    if let Some(&first) = archives.first() {
+        let is_folded = !folded.contains("\0stage:archives");
+        lines.push(RosterLine::Archives { folded: is_folded, first, count: archives.len() });
+        if !is_folded {
+            for b in archives {
+                stage_lines(&mut lines, b, roster, folded);
+            }
         }
     }
     lines
+}
+
+/// 阶段展开后显示当前成员；只在展开时增加可导航的行。
+fn stage_lines<'a>(lines: &mut Vec<RosterLine<'a>>, group: &'a Bot, roster: &[&'a Bot], expanded: &HashSet<String>) {
+    lines.push(RosterLine::Bot(group));
+    if let Some(stage) = &group.stage
+        && expanded.contains(&format!("\0stage:{}", group.id))
+    {
+        for id in group.members.iter().filter(|id| stage.owned_members.contains(id)) {
+            if let Some(member) = roster.iter().find(|bot| &bot.id == id) {
+                lines.push(RosterLine::StageMember(member, *id == stage.leader_id));
+            }
+        }
+    }
 }
 
 /// The line the cursor is on: the selected bot's, or its folded section's label.
 pub fn cursor_line(lines: &[RosterLine<'_>], selected: Option<&Bot>) -> Option<usize> {
     let selected = selected?;
     lines.iter().position(|line| match line {
-        RosterLine::Bot(b) => b.id == selected.id,
+        RosterLine::Bot(b) | RosterLine::StageMember(b, _) => b.id == selected.id,
+        RosterLine::Archives { first, folded: true, .. } => first.id == selected.id,
         RosterLine::Section { name, folded: true, .. } => selected.shown_section() == Some(*name),
         _ => false,
     })
@@ -107,7 +147,10 @@ impl RosterLine<'_> {
     /// The bot the cursor selects on this line: a bot's own, a folded section's first.
     fn stop(&self) -> Option<&str> {
         match self {
-            Self::Bot(b) | Self::Section { first: b, folded: true, .. } => Some(b.id.as_str()),
+            Self::Bot(b)
+            | Self::StageMember(b, _)
+            | Self::Section { first: b, folded: true, .. }
+            | Self::Archives { first: b, folded: true, .. } => Some(b.id.as_str()),
             _ => None,
         }
     }
@@ -116,7 +159,8 @@ impl RosterLine<'_> {
     pub fn click(&self) -> Option<Click> {
         match self {
             Self::Section { name, .. } => Some(Click::Section((*name).to_owned())),
-            Self::Bot(b) => Some(Click::Bot(b.id.clone())),
+            Self::Bot(b) | Self::StageMember(b, _) => Some(Click::Bot(b.id.clone())),
+            Self::Archives { .. } => Some(Click::Section("\0stage:archives".into())),
             Self::Label(_) => None,
         }
     }
@@ -187,6 +231,16 @@ impl App {
     /// `z`: folds the section under the cursor, or unfolds it.
     pub(super) fn toggle_section(&mut self) {
         let Some(bot) = self.bot() else { return };
+        if bot.stage.is_some() {
+            let archived = bot.stage.as_ref().is_some_and(|stage| stage.archived_at.is_some());
+            let key = if archived && !self.folded.contains("\0stage:archives") {
+                "\0stage:archives".into()
+            } else {
+                format!("\0stage:{}", bot.id)
+            };
+            self.toggle_fold(&key);
+            return;
+        }
         let Some(name) = bot.shown_section().map(str::to_owned) else {
             self.flash(NOT_IN_A_SECTION);
             return;
@@ -301,7 +355,8 @@ mod tests {
                 RosterLine::Label(l) => (*l).to_owned(),
                 RosterLine::Section { name, bots, folded: false, .. } => format!("▾ {name} ({bots})"),
                 RosterLine::Section { name, bots, unread, .. } => format!("▸ {name} ({bots}) {unread}"),
-                RosterLine::Bot(b) => b.id.clone(),
+                RosterLine::Bot(b) | RosterLine::StageMember(b, _) => b.id.clone(),
+                RosterLine::Archives { count, .. } => format!("Archived stages ({count})"),
             })
             .collect()
     }

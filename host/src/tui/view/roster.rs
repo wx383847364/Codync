@@ -79,7 +79,23 @@ pub(super) fn roster(buf: &mut Buffer, r: Rect, app: &mut App, narrow: bool) {
             RosterLine::Section { name, bots: count, unread, folded, .. } => {
                 section_row(buf, Rect::new(x0, yy, wd, 1), cursor_bar, name, *count, *unread, *folded);
             }
-            RosterLine::Bot(b) => bot_row(buf, Rect::new(x0, yy, wd, 2), app, b, cursor_bar),
+            RosterLine::Archives { count, folded, .. } => {
+                section_row(buf, Rect::new(x0, yy, wd, 1), cursor_bar, &tr("Archived stages"), *count, 0, *folded)
+            }
+            RosterLine::StageMember(b, lead) => {
+                bot_row(buf, Rect::new(x0 + 2, yy, wd.saturating_sub(2), 2), app, b, cursor_bar);
+                if *lead {
+                    put(buf, x0 + 1, yy, 1, "★", t.amber);
+                }
+            }
+            RosterLine::Bot(b) => {
+                bot_row(buf, Rect::new(x0, yy, wd, 2), app, b, cursor_bar);
+                if b.stage.is_some() {
+                    let key = format!("\0stage:{}", b.id);
+                    put(buf, x0 + 1, yy, 1, if app.folded.contains(&key) { "▾" } else { "▸" }, t.dim);
+                    app.hits.clicks.push((Rect::new(x0 + 1, yy, 1, 1), Click::Section(key)));
+                }
+            }
         }
     }
     if !narrow {
@@ -95,7 +111,7 @@ pub(super) fn roster(buf: &mut Buffer, r: Rect, app: &mut App, narrow: bool) {
 
 /// (rows a line takes in the list, rows it draws): a bot has a gap row below it.
 fn extent(line: &RosterLine<'_>) -> (u16, u16) {
-    if matches!(line, RosterLine::Bot(_)) { (3, 2) } else { (1, 1) }
+    if matches!(line, RosterLine::Bot(_) | RosterLine::StageMember(..)) { (3, 2) } else { (1, 1) }
 }
 
 /// A section's label row, `▾ name (bots)`: the name is cut so `(bots)` and a gap before the unread
@@ -207,7 +223,7 @@ pub(super) fn compact_roster(buf: &mut Buffer, r: Rect, app: &mut App) {
             RosterLine::Section { bots: count, unread, .. } => {
                 compact_section(buf, row, *count, (*unread > 0).then(|| glyph(app, Mark::Unread)));
             }
-            RosterLine::Bot(b) => {
+            RosterLine::Bot(b) | RosterLine::StageMember(b, _) => {
                 put_line(buf, r.x + 1, y, 2, &avatar(app, b));
                 let (g, gs) = glyph(app, b.mark());
                 put(buf, r.x + 3, y, 1, g, gs);
@@ -216,6 +232,7 @@ pub(super) fn compact_roster(buf: &mut Buffer, r: Rect, app: &mut App) {
                     app.hits.clicks.push((Rect::new(r.x + 2, y + 1, 1, 1), Click::LeadAgent));
                 }
             }
+            RosterLine::Archives { count, .. } => compact_section(buf, row, *count, None),
             RosterLine::Label(_) => {}
         }
     }

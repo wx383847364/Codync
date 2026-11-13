@@ -15,7 +15,7 @@ interface Props {
   folded: boolean
   compact: boolean
   toggle: () => void
-  onContext: (x: number, y: number) => void
+  onContext?: (x: number, y: number) => void
   drag?: ReturnType<typeof pointerDrag>
   move?: (offset: number) => void
   children: ReactNode
@@ -32,7 +32,7 @@ export function RosterSection({ name, count, unread, folded, compact, toggle, on
       }} aria-expanded={!folded} aria-label={name} title={name} onClick={toggle}
         onContextMenu={(e) => {
           e.preventDefault()
-          onContext(e.clientX, e.clientY)
+          onContext?.(e.clientX, e.clientY)
         }}>
         <HStack gap={5} justify={compact ? 'center' : undefined}>
           <span className={`computer-roster-chevron ${folded ? 'collapsed' : ''}`}><Icon name="chevron.down" size={9} /></span>

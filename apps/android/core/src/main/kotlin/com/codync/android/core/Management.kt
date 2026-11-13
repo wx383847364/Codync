@@ -5,7 +5,8 @@ import kotlinx.serialization.json.*
 
 /** 阶段群的负责人、确认材料和准入状态由 Host 保存。 */
 @Serializable data class StageGroup(val leaderId: String, val goal: String, val acceptance: String,
-    val handoff: StageHandoff? = null, val incoming: StageFile? = null, val closedAt: Long? = null)
+    val handoff: StageHandoff? = null, val incoming: StageFile? = null, val closedAt: Long? = null,
+    val archivedAt: Long? = null, val ownedMembers: List<String> = emptyList())
 
 @Serializable data class StageFile(val id: String, val name: String, val sha256: String, val size: Long)
 @Serializable data class StageHandoff(val file: StageFile, val evidence: String, val acceptedAt: Long? = null)
