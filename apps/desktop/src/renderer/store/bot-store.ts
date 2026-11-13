@@ -300,6 +300,7 @@ export class BotStore extends BotSending {
   async stageDetails(botId: string, change?: StageChange): Promise<StageDetails> {
     const details = await (await this.ready()).call<StageDetails>(change ? 'changeStage' : 'stageDetails', { botId, ...change })
     this.putHostBot(normalizeBot(details.bot))
+    if (change) this.onRosterChanged?.()
     this.changed()
     return details
   }

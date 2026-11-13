@@ -1,5 +1,6 @@
 package com.codync.android
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -73,7 +74,7 @@ private class ComputerRoster(private val context: Context, val key: String) {
     /** Points the drags at [state]'s bots and sections as [list] shows them. */
     fun sync(state: AppState, list: LazyListState) {
         val bots = roster(state.bots)
-        reorder.roster = bots
+        reorder.roster = stageRoots(bots).filter { it.stage?.archivedAt == null }
         sections.names = orderedSections(sectionNames(bots.filterNot { it.pinned }) +
             if (bots.any { !it.pinned && it.section == null }) listOf("") else emptyList(), order)
         sections.save = { order = it; sections.names = it; SectionOrders.save(context, key, it) }
@@ -239,7 +240,10 @@ private fun LazyListScope.botLines(state: AppState, store: AppStore, roster: Com
     // The agent's logo marks each avatar only while the computer's bots mix agents. Not before hello: it names
     // the logos, and without it every badge would be the same generic one.
     val logos = agentLogos && state.hello != null && roster(state.bots).mixesAgents()
-    items(rosterLines(reorder.shown(roster(state.bots)), folded, sectionReorder.shown, sectionReorder.dragged != null), key = { "$id:${it.key}" }) { line ->
+    val visible = roster(state.bots)
+    val active = stageRoots(visible).filter { it.stage?.archivedAt == null }
+    val archives = visible.filter { it.stage?.archivedAt != null }.groupBy { it.section }
+    items(rosterLines(reorder.shown(active), folded, sectionReorder.shown, sectionReorder.dragged != null), key = { "$id:${it.key}" }) { line ->
         when (line) {
             // Folding drops the section's rows from the list; animateItem fades them out and slides the rest up.
             is RosterLine.Header -> SectionHeader(line, toggle = { actions.toggleSection(line.name) },
@@ -255,9 +259,57 @@ private fun LazyListScope.botLines(state: AppState, store: AppStore, roster: Com
                 Box(Modifier.onSizeChanged { reorder.heights[bot.id] = it.height }
                     .then(if (lifted) Modifier.zIndex(1f).graphicsLayer { translationY = reorder.offset; scaleX = 1.02f; scaleY = 1.02f }
                         else Modifier.animateItem())) {
-                    BotRowItem(bot, state, store, reorder.handle(bot.id) { store.reorder(it) }, sections, grouped, agent, edit = { actions.edit(bot) },
-                        delete = { actions.delete(bot) }, newSection = { actions.newSection(bot) },
-                        createSession = { actions.createSession(bot) }, createStage = { actions.createStage(bot) }, stageDetails = { actions.stageDetails(bot) })
+                    StageRosterRow(bot, state, store, reorder.handle(bot.id) { store.reorder(it) }, sections, grouped, agent, actions)
+                }
+            }
+        }
+    }
+    for ((section, groups) in archives) {
+        item(key = "$id:archived:$section") {
+            var expanded by remember { mutableStateOf(false) }
+            val title = listOfNotNull(tr("Archived stages"), section).joinToString(" · ")
+            Column {
+                SectionHeader(RosterLine.Header(title, groups.size, 0, !expanded), toggle = { expanded = !expanded }, actions = emptyList())
+                AnimatedVisibility(expanded) {
+                    Column {
+                        for (group in groups) StageRosterRow(group, state, store, null, sections, grouped, null, actions)
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** 阶段成员默认折叠，展开后点击成员打开该机器人的聊天。 */
+@Composable private fun StageRosterRow(bot: Bot, state: AppState, store: AppStore, drag: ContextDrag?, sections: List<String>,
+    grouped: Boolean, agent: AgentMark?, actions: RosterActions) {
+    val stage = bot.stage
+    var expanded by remember(bot.id) { mutableStateOf(false) }
+    Column {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            if (stage != null) {
+                val disclosure = tr(if (expanded) "Collapse stage members" else "Expand stage members")
+                Box(Modifier.size(40.dp).clickable(role = Role.Button) { expanded = !expanded }
+                    .semantics { contentDescription = disclosure },
+                    contentAlignment = Alignment.Center) {
+                    Symbol(if (expanded) "chevron.down" else "chevron.right", size = 13.dp)
+                }
+            }
+            Box(Modifier.weight(1f)) {
+                BotRowItem(bot, state, store, drag, sections, grouped, agent, edit = { actions.edit(bot) },
+                    delete = { actions.delete(bot) }, newSection = { actions.newSection(bot) },
+                    createSession = { actions.createSession(bot) }, createStage = { actions.createStage(bot) },
+                    stageDetails = { actions.stageDetails(bot) })
+            }
+        }
+        if (stage != null) AnimatedVisibility(expanded) {
+            Column(Modifier.padding(start = 28.dp)) {
+                val members = state.bots.associateBy { it.id }
+                for (member in bot.members.filter { it in stage.ownedMembers }.mapNotNull(members::get).filter { !it.hidden && !it.deleted }) {
+                    Row(Modifier.clickable { store.openBot(member.id) }, verticalAlignment = Alignment.CenterVertically) {
+                        Box(Modifier.weight(1f)) { BotRow(member, state) }
+                        if (member.id == stage.leaderId) Text(tr("Lead"), style = Type.footnote, color = Palette.secondary)
+                    }
                 }
             }
         }
@@ -305,6 +357,12 @@ private class RosterReorder {
 }
 
 /** Roster order: pinned bots, then where the user dragged them, then most recent activity. */
+/** 归属明确且仍是阶段成员的机器人跟随群显示。 */
+private fun stageRoots(bots: List<Bot>): List<Bot> {
+    val owned = bots.flatMap { group -> group.stage?.ownedMembers.orEmpty().filter { it in group.members } }.toSet()
+    return bots.filter { it.id !in owned }
+}
+
 internal fun roster(bots: List<Bot>): List<Bot> = bots.filter { !it.deleted && !it.hidden }
     .sortedWith(compareBy<Bot> { it.band }.thenBy { it.position }.thenByDescending { it.lastAt })
 
@@ -324,7 +382,7 @@ internal fun moved(roster: List<Bot>, id: String, offset: Int): List<String>? {
 private fun Bot.movesWith(other: Bot) = band == other.band && (pinned || section == other.section)
 
 /** 显示群所属电脑支持的操作；新群创建成功后由 Store 打开。 */
-@Composable private fun BotRowItem(bot: Bot, state: AppState, store: AppStore, drag: ContextDrag, sections: List<String>, grouped: Boolean,
+@Composable private fun BotRowItem(bot: Bot, state: AppState, store: AppStore, drag: ContextDrag?, sections: List<String>, grouped: Boolean,
     agent: AgentMark?, edit: () -> Unit, delete: () -> Unit, newSection: () -> Unit, createSession: () -> Unit, createStage: () -> Unit,
     stageDetails: () -> Unit) {
     Box(Modifier.fillMaxWidth().contextActions(onClick = { store.openBot(bot.id) }, reorder = drag, preview = {
@@ -356,6 +414,14 @@ private fun Bot.movesWith(other: Bot) = band == other.band && (pinned || section
             } else null,
             if (bot.stage != null && state.supportsStageGroups)
                 MenuItem("Stage details", icon = "doc.text", action = stageDetails) else null,
+            bot.stage?.takeIf { state.supportsStageRoster }?.let { stage ->
+                MenuItem(if (stage.archivedAt == null) "Archive stage" else "Restore stage", icon = "archivebox") {
+                    store.command("changeStage", buildJsonObject {
+                        put("botId", bot.id)
+                        put("action", if (stage.archivedAt == null) "archive" else "restore")
+                    }, "roster:" + bot.id)
+                }
+            },
             MenuItem("Mark as read", icon = "checkmark.message") {
                 store.command("markRead", buildJsonObject { put("botId", bot.id) }, "roster:" + bot.id)
             },
@@ -373,8 +439,11 @@ private fun Bot.movesWith(other: Bot) = band == other.band && (pinned || section
         // With several computers, which one it's on.
         contentDescription = if (grouped) "${bot.name}, on ${state.hostName}" else bot.name
         // TalkBack's way to reorder (the drag needs a touch and hold, then a move).
-        customActions = listOf(-1 to "Move up", 1 to "Move down").map { (offset, title) ->
-            CustomAccessibilityAction(title) { moved(roster(state.bots), bot.id, offset)?.let(store::reorder) != null }
+        if (bot.stage?.archivedAt == null) {
+            val roots = stageRoots(roster(state.bots)).filter { it.stage?.archivedAt == null }
+            customActions = listOf(-1 to "Move up", 1 to "Move down").map { (offset, title) ->
+                CustomAccessibilityAction(title) { moved(roots, bot.id, offset)?.let(store::reorder) != null }
+            }
         }
     }) {
         BotRow(bot, state, agent)
@@ -383,6 +452,9 @@ private fun Bot.movesWith(other: Bot) = band == other.band && (pinned || section
 
 /** One bot: avatar with its status dot (and [agent]'s logo, if any), name and day, then the live activity or last message. */
 @Composable internal fun BotRow(bot: Bot, state: AppState, agent: AgentMark? = null) {
+    val owner = state.bots.firstOrNull { bot.id in it.stage?.ownedMembers.orEmpty() && bot.id in it.members }
+    val affiliation = (owner?.name ?: bot.section ?: bot.cwd.trimEnd('/').substringAfterLast('/')
+        .takeIf { !bot.managedWorkspace && it.isNotBlank() }).takeIf { bot.kind != "group" }
     Row(Modifier.fillMaxWidth().padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp)) {
         AvatarWithStatus(bot, state.bots, 46.dp, agent)
@@ -392,6 +464,8 @@ private fun Bot.movesWith(other: Bot) = band == other.band && (pinned || section
                     if (bot.pinned) Symbol("pin.fill", size = 13.dp, tint = Palette.tertiary)
                     Text(bot.name, Modifier.weight(1f, fill = false), style = Type.body.semibold, color = Palette.text, maxLines = 1,
                         overflow = TextOverflow.Ellipsis)
+                    if (affiliation != null) Text(affiliation, style = Type.caption2, color = Palette.tertiary,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis)
                     if (state.screen?.agentBot == bot.id) Symbol("cursorarrow.motionlines", size = 14.dp, tint = Palette.accent,
                         contentDescription = tr("Using the computer"))
                 }
@@ -417,7 +491,9 @@ private fun Bot.movesWith(other: Bot) = band == other.band && (pinned || section
 
 /** Live activity while working, otherwise the last message (Grok Bot row behavior). */
 @Composable private fun Preview(bot: Bot, state: AppState) {
+    val place = if (bot.managedWorkspace) tr("Personal workspace") else bot.cwd.trimEnd('/').substringAfterLast('/')
     when {
+        bot.stage?.archivedAt != null -> Text(tr("Stage archived"), style = Type.subheadline, color = Palette.secondary)
         bot.status == "needsInput" -> Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             ThinkingOrb(ThinkingOrbState.Listening, 16.dp, Palette.warning)
             Text(tr(bot.activity.ifEmpty { "Needs your approval" }), style = Type.subheadline, color = Palette.warning, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -429,7 +505,7 @@ private fun Bot.movesWith(other: Bot) = band == other.band && (pinned || section
         bot.status == "error" -> Text(messagePreview(bot.lastMessage ?: "Something went wrong"), style = Type.subheadline, color = Palette.danger,
             maxLines = 1, overflow = TextOverflow.Ellipsis)
         else -> Text(messagePreview(bot.lastMessage ?: if (bot.kind == "group") "${bot.members.size} bots"
-            else "${backendName(state, bot.backend)} · ${if (bot.managedWorkspace) tr("Personal workspace") else bot.cwd.trimEnd('/').substringAfterLast('/')}"),
+            else "${backendName(state, bot.backend)} · $place"),
             style = Type.subheadline, color = Palette.secondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }

@@ -245,6 +245,15 @@ test('stage opens with fresh roles, saves a versioned handoff and closes indepen
       const group = JSON.parse(get.get(id)!.config as string)
       ids.push(...group.members)
       expect(group.members).toHaveLength(2)
+      expect(group.stage.ownedMembers).toEqual(group.members)
+      for (const member of group.members) {
+        await expect(page.locator(`[data-roster-row$="/${member}"]`)).toHaveCount(0)
+      }
+      await expect(page.locator(`[data-roster-row$="/${lead.id}"]`)).toBeVisible()
+      const heading = selected.locator('..')
+      await heading.getByRole('button', { name: 'Expand stage members' }).click()
+      await expect(heading.locator('..').locator(`[data-roster-row$="/${group.members[1]}"]`)).toBeVisible()
+      await heading.getByRole('button', { name: 'Collapse stage members' }).click()
       expect(group.members.every((member: string) => member !== reviewer.id && member !== lead.id)).toBe(true)
       expect(group.stage.leaderId).toBe(group.members[1])
       expect(JSON.parse(get.get(original.id)!.config as string).members).toEqual([reviewer.id, lead.id])
@@ -322,6 +331,17 @@ test('stage opens with fresh roles, saves a versioned handoff and closes indepen
     await expect(page.getByText('Host attempts · 0', { exact: true })).toBeVisible()
     await page.keyboard.press('Escape')
     await expect(page.locator('.composer').getByText('Stage closed', { exact: true })).toBeVisible()
+    // 归档移动整群，历史仍可查看；恢复后仍保持归档前的关闭状态。
+    await stage.click({ button: 'right' })
+    await page.getByRole('menuitem', { name: 'Archive stage', exact: true }).click()
+    await expect(page.locator('.composer').getByText('Stage archived', { exact: true })).toBeVisible()
+    await expect(stage).toHaveCount(0)
+    await page.getByRole('button', { name: 'Archived stages', exact: true }).click()
+    await expect(stage).toBeVisible()
+    await stage.click({ button: 'right' })
+    await page.getByRole('menuitem', { name: 'Restore stage', exact: true }).click()
+    await expect(page.locator('.composer').getByText('Stage closed', { exact: true })).toBeVisible()
+    await expect(stage).toBeVisible()
 
     await stage.click({ button: 'right' })
     await stageAction.click()

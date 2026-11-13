@@ -296,23 +296,26 @@ extension BotStore {
     /// One place up (-1) or down (+1) among the bots it moves with (`isRosterPeer`: its band and, below the top, its section; VoiceOver).
     public func move(_ botId: String, by offset: Int) {
         guard let bot = bots[botId] else { return }
-        var peers = roster.filter { $0.isRosterPeer(of: bot) }.map(\.id)
+        let owned = Set(roster.flatMap { group in
+            (group.stage?.ownedMembers ?? []).filter { group.members.contains($0) }
+        })
+        var peers = roster.filter { !owned.contains($0.id) && $0.stage?.archivedAt == nil && $0.isRosterPeer(of: bot) }.map(\.id)
         guard let i = peers.firstIndex(of: botId), peers.indices.contains(i + offset) else { return }
         peers.swapAt(i, i + offset)
         drop(botId, in: peers)
     }
 
     /// A drop of `botId` where `order` (the rows on screen, top first) puts it among the bots it
-    /// moves with; every other bot keeps its place. Dropped among others (another section, the
-    /// pinned bots), it goes first or last of its own. Nothing moves unless `order` holds all of them.
+    /// moves with. 折叠和归档的行保留自己的位置，只重排界面提交的同级成员。
     public func drop(_ botId: String, in order: [String]) {
         guard let bot = bots[botId] else { return }
         let ids = roster.map(\.id)
-        let isPeer = { (id: String) in self.bots[id]?.isRosterPeer(of: bot) == true }
-        let placed = order.filter(isPeer)
-        guard Set(placed) == Set(ids.filter(isPeer)) else { return }
+        let visible = Set(ids)
+        let placed = order.filter { visible.contains($0) && self.bots[$0]?.isRosterPeer(of: bot) == true }
+        let slots = Set(placed)
+        guard slots.contains(botId), slots.count == placed.count else { return }
         var next = placed.makeIterator()
-        reorder(ids.map { isPeer($0) ? next.next() ?? $0 : $0 })
+        reorder(ids.map { slots.contains($0) ? next.next() ?? $0 : $0 })
     }
 
     // MARK: sections
@@ -403,6 +406,15 @@ extension BotStore {
         }
         putHostBot(result.bot)
         return result
+    }
+
+    /// 归档或恢复阶段，失败使用与其他侧栏操作相同的提示。
+    public func setStageArchived(_ botId: String, _ archived: Bool) {
+        perform { client in
+            let change = StageChange(botId: botId, action: archived ? .archive : .restore)
+            let result: StageDetails = try await client.call("changeStage", change)
+            self.putHostBot(result.bot)
+        }
     }
 
     /// 按需读取阶段用量，独立于阶段详情和写入操作。

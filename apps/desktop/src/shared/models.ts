@@ -21,7 +21,7 @@ export interface StageGroupDraft {
 
 export interface StageFile { id: string; name: string; sha256: string; size: number }
 export interface StageGroup {
-  leaderId: string; goal: string; acceptance: string; closedAt?: number
+  leaderId: string; goal: string; acceptance: string; closedAt?: number; archivedAt?: number; ownedMembers?: string[]
   handoff?: { file: StageFile; evidence: string; acceptedAt?: number }
   incoming?: StageFile
 }
@@ -39,7 +39,7 @@ export interface StageDetails {
 }
 
 export type StageChange = { action: 'saveHandoff'; markdown: string; evidence: string; previousVersion?: string }
-  | { action: 'accept'; version: string } | { action: 'close' | 'reopen' }
+  | { action: 'accept'; version: string } | { action: 'close' | 'reopen' | 'archive' | 'restore' }
 
 export interface StageUsage {
   observedSince: number
@@ -565,6 +565,7 @@ export interface Hello {
   stageGroups?: boolean
   groupMemberPicker?: boolean
   optionalStageSetup?: boolean
+  stageRoster?: boolean
   /** 主机能按附件身份校验原图尺寸，不包含正文路径读取能力。 */
   fileImageInfo?: boolean
   iconsRevision?: number

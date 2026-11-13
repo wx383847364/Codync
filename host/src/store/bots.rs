@@ -273,7 +273,8 @@ fn stage_work(c: &rusqlite::Connection, id: &str) -> Result<Value> {
 /// 队列准入只限制已关闭的阶段群，普通群沿用现有规则。
 pub(super) fn stage_closed(c: &rusqlite::Connection, id: &str) -> Result<bool> {
     Ok(c.query_row(
-        "SELECT json_extract(config,'$.stage.closedAt') IS NOT NULL FROM bots WHERE id=? AND deleted=0",
+        "SELECT coalesce(json_extract(config,'$.stage.closedAt'), json_extract(config,'$.stage.archivedAt')) IS NOT NULL
+         FROM bots WHERE id=? AND deleted=0",
         [id],
         |r| r.get(0),
     )

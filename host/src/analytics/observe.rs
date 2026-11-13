@@ -115,8 +115,9 @@ fn call_event(method: &str, b: &Value, p: &mut Map<String, Value>) -> Option<Eve
         }
         "changeStage" => {
             // 只记录固定动作类别，交接正文与证据引用留在本机。
-            let action =
-                b["action"].as_str().filter(|s| matches!(*s, "saveHandoff" | "accept" | "close" | "reopen"))?;
+            let action = b["action"]
+                .as_str()
+                .filter(|s| matches!(*s, "saveHandoff" | "accept" | "close" | "reopen" | "archive" | "restore"))?;
             p.insert("stage_action".into(), action.into());
             Event::BotUpdated
         }

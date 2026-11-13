@@ -55,6 +55,8 @@ enum Change {
     Accept { version: String },
     Close,
     Reopen,
+    Archive,
+    Restore,
 }
 
 impl Hub {
@@ -166,6 +168,7 @@ impl Hub {
                 leader_id,
                 goal: draft.goal,
                 acceptance: draft.acceptance,
+                owned_members: bots.iter().map(|bot| bot.id.clone()).collect(),
                 incoming: archive.as_ref().map(|snapshot| snapshot.meta.clone()),
                 incoming_files: evidence_files.iter().map(|snapshot| snapshot.meta.clone()).collect(),
                 ..StageGroup::default()
@@ -260,7 +263,7 @@ impl Hub {
             self.store.update_stage(room, |stage, pending| {
                 match change {
                     Change::SaveHandoff { markdown, evidence, previous_version } => {
-                        ensure!(stage.closed_at.is_none(), "Reopen the stage to edit its handoff.");
+                        ensure!(!stage.read_only(), "Reopen the stage to edit its handoff.");
                         let markdown = markdown.trim();
                         let evidence = evidence.trim();
                         ensure!(!markdown.is_empty() && markdown.len() <= 64_000 && evidence.len() <= 8_000,
@@ -278,6 +281,7 @@ impl Hub {
                         archive = Some(saved);
                     }
                     Change::Accept { version } => {
+                        ensure!(stage.archived_at.is_none(), "Restore the stage before accepting its handoff.");
                         let handoff = stage.handoff.as_mut().filter(|handoff| handoff.file.id == version)
                             .context("Save and review the current handoff before accepting the stage.")?;
                         ensure!(!handoff.evidence_files.is_empty() || durable_evidence(&handoff.evidence), "Add a durable evidence reference before accepting the stage.");
@@ -287,10 +291,19 @@ impl Hub {
                         handoff.accepted_at.get_or_insert_with(now_ms);
                     }
                     Change::Close => {
+                        ensure!(stage.archived_at.is_none(), "Restore the stage before closing it.");
                         ensure!(!pending, "Finish or stop pending work before closing the stage.");
                         stage.closed_at.get_or_insert_with(now_ms);
                     }
-                    Change::Reopen => stage.closed_at = None,
+                    Change::Reopen => {
+                        ensure!(stage.archived_at.is_none(), "Restore the stage before reopening it.");
+                        stage.closed_at = None;
+                    }
+                    Change::Archive => {
+                        ensure!(!pending, "Finish or stop pending work before archiving the stage.");
+                        stage.archived_at.get_or_insert_with(now_ms);
+                    }
+                    Change::Restore => stage.archived_at = None,
                 }
                 Ok(())
             })?;

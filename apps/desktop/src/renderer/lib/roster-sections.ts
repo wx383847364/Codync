@@ -37,6 +37,17 @@ export function rosterLines<T extends { bot: Placed }>(items: T[], folded: reado
     group.name !== '' ? [group] : [...(labeled ? [{ kind: 'label' } as const] : []), ...group.items.map(row)])]
 }
 
+/** 按创建归属收起仍在阶段中的机器人，移出阶段后恢复独立入口。 */
+export function stageRoster<T extends { bot: { id: string; members: string[]; stage?: { ownedMembers?: string[] } } }>(items: T[]) {
+  const owned = new Set(items.flatMap(({ bot }) => bot.stage?.ownedMembers?.filter((id) => bot.members.includes(id)) ?? []))
+  const byId = new Map(items.map((item) => [item.bot.id, item]))
+  return {
+    roots: items.filter(({ bot }) => !owned.has(bot.id)),
+    /** 展开阶段时显示其当前可见成员。 */
+    children: (item: T) => item.bot.members.filter((id) => item.bot.stage?.ownedMembers?.includes(id)).flatMap((id) => byId.get(id) ?? []),
+  }
+}
+
 /** The same whole groups for rendering, keyboard navigation, dragging, and renaming. */
 export function rosterGroups<T extends { bot: Placed }>(items: T[], folded: readonly string[], order: readonly string[] = []): Extract<RosterLine<T>, { kind: 'section' }>[] {
   const unpinned = items.filter((item) => !item.bot.pinned)

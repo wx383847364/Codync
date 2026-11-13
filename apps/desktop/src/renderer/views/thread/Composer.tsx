@@ -45,6 +45,7 @@ export function Composer({ botId, reply = null, about = null, cancelReply, onCal
 }) {
   const store = useStore()
   const tr = useTr()
+  if (store.bots.get(botId)?.stage?.archivedAt) return <div className="composer">{tr('Stage archived')}</div>
   if (store.bots.get(botId)?.stage?.closedAt) return <div className="composer">{tr('Stage closed')}</div>
   // Remount transient editor state (selection, attachments, IME) when its destination changes.
   return <DestinationComposer key={JSON.stringify([store.contextId, store.computer.id, botId, about?.id])}

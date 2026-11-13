@@ -33,6 +33,9 @@ public struct BotRow: View {
                         .font(.body.weight(.semibold))
                         .foregroundStyle(Palette.text)
                         .lineLimit(1)
+                    if !bot.isGroup, let affiliation = owner?.name ?? bot.section ?? (bot.managedWorkspace ? nil : bot.folderName) {
+                        Text(affiliation).font(.caption2).foregroundStyle(Palette.tertiary).lineLimit(1)
+                    }
                     if model.screen?.agentBot == bot.id {
                         Image(systemName: "cursorarrow.motionlines")
                             .font(.caption)
@@ -57,9 +60,16 @@ public struct BotRow: View {
         .accessibilityElement(children: .combine)
     }
 
+    /// 阶段机器人使用所属群名称作为归属，原机器人显示项目名称。
+    private var owner: Bot? {
+        model.bots.values.first { $0.stage?.ownedMembers?.contains(bot.id) == true && $0.members.contains(bot.id) }
+    }
+
     /// Live activity while working, otherwise the last message (Grok Bot row behavior).
     @ViewBuilder private var preview: some View {
-        if bot.needsInput {
+        if bot.stage?.archivedAt != nil {
+            Text(L10n.tr("Stage archived")).font(.subheadline).foregroundStyle(Palette.secondary)
+        } else if bot.needsInput {
             Label {
                 Text(L10n.tr(bot.activity.isEmpty ? "Needs your approval" : bot.activity))
             } icon: {
@@ -82,7 +92,10 @@ public struct BotRow: View {
                 .foregroundStyle(Palette.danger)
                 .lineLimit(1)
         } else {
-            Text(MessagePreview.text(bot.lastMessage ?? (bot.isGroup ? "\(bot.members.count) bots" : "\(model.backendName(bot.backend)) · \(bot.managedWorkspace ? L10n.tr("Personal workspace") : bot.folderName)")))
+            let place = bot.managedWorkspace ? L10n.tr("Personal workspace") : bot.folderName
+            let detail = bot.isGroup ? "\(bot.members.count) bots"
+                : "\(model.backendName(bot.backend)) · \(place)"
+            Text(MessagePreview.text(bot.lastMessage ?? detail))
                 .font(.subheadline)
                 .foregroundStyle(Palette.secondary)
                 .lineLimit(1)

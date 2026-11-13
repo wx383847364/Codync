@@ -7,7 +7,7 @@ use std::path::Path;
 use std::sync::Mutex;
 
 /// Current schema version (kv `schema`).
-const SCHEMA: i64 = 9;
+const SCHEMA: i64 = 10;
 
 /// 3: authorized devices (keys, not push tickets) with their push and Live Activity
 /// tickets. The old ticket-only `devices` table is dropped; phones re-register on connect.
@@ -43,7 +43,38 @@ fn migrate(c: &Connection) -> Result<()> {
     if version < 8 {
         migrate_8(c)?;
     }
-    migrate_9(c)
+    if version < 9 {
+        migrate_9(c)?;
+    }
+    migrate_10(c)
+}
+
+/// 从创建回执恢复旧阶段的机器人归属。普通群和复用会话没有独立创建回执。
+fn migrate_10(c: &Connection) -> Result<()> {
+    let tx = Transaction::new_unchecked(c, TransactionBehavior::Immediate)?;
+    let groups = tx
+        .prepare(
+            "SELECT b.id, json_extract(k.v, '$.members')
+         FROM kv k JOIN bots b ON b.id = CASE WHEN json_valid(k.v) THEN json_extract(k.v, '$.room') END
+         WHERE k.k GLOB 'stage.creation.*' AND b.deleted = 0
+           AND CASE WHEN json_valid(b.config) THEN
+               json_type(b.config, '$.stage') = 'object'
+               AND json_type(b.config, '$.stage.ownedMembers') IS NULL
+           END
+           AND CASE WHEN json_valid(k.v) THEN json_type(k.v, '$.members') = 'array' END",
+        )?
+        .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    for (id, members) in groups {
+        let rev = super::next_rev(&tx)?;
+        tx.execute(
+            "UPDATE bots SET config = json_set(config, '$.stage.ownedMembers', json(?2)), rev = ?3 WHERE id = ?1",
+            rusqlite::params![id, members, rev],
+        )?;
+    }
+    tx.execute_batch("INSERT INTO kv(k, v) VALUES('schema', '10') ON CONFLICT(k) DO UPDATE SET v = '10';")?;
+    tx.commit()?;
+    Ok(())
 }
 
 /// 以现有同步版本为起点。触发器也能记录旧版 Host 对配置表的写入。
@@ -281,6 +312,27 @@ mod tests {
         assert!(row.matches_config_at(new_rev));
     }
 
+    /// 旧阶段仅认领创建回执列出的机器人，忽略损坏的回执。
+    #[test]
+    fn stage_ownership_backfills_from_creation_receipt() {
+        let db = temp_db();
+        let s = Store::open(&db).unwrap();
+        let group = serde_json::from_value(serde_json::json!({
+            "id":"stage", "name":"Stage", "kind":"group", "members":["copy","original"],
+            "stage":{"leaderId":"","goal":"","acceptance":""}
+        }))
+        .unwrap();
+        s.save_bot(&group).unwrap();
+        s.kv_set("stage.creation.valid", r#"{"room":"stage","members":["copy"]}"#).unwrap();
+        s.kv_set("stage.creation.invalid", "broken").unwrap();
+        s.kv_set("schema", "9").unwrap();
+        drop(s);
+        let migrated = Store::open(&db).unwrap();
+        let row = migrated.bot("stage").unwrap().unwrap();
+        assert_eq!(row.config.members, ["copy", "original"]);
+        assert_eq!(row.config.stage.unwrap().owned_members, ["copy"]);
+    }
+
     #[test]
     fn migrations_replace_the_old_ticket_table() {
         let db = temp_db();
@@ -295,7 +347,7 @@ mod tests {
         }
         let s = Store::open(&db).unwrap();
         assert!(s.devices().unwrap().is_empty());
-        assert_eq!(s.kv_get("schema").as_deref(), Some("9"));
+        assert_eq!(s.kv_get("schema").as_deref(), Some("10"));
         drop(s);
         let s = Store::open(&db).unwrap();
         assert!(s.devices().unwrap().is_empty(), "reopening keeps the new table");
@@ -321,7 +373,7 @@ mod tests {
         let s = Store::open(&db).unwrap();
         let chat: Vec<String> = s.history("b", i64::MAX, 10).unwrap().into_iter().map(|e| e.id).collect();
         assert_eq!(chat, ["info"]);
-        assert_eq!(s.kv_get("schema").as_deref(), Some("9"));
+        assert_eq!(s.kv_get("schema").as_deref(), Some("10"));
     }
 
     #[test]

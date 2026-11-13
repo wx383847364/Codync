@@ -91,8 +91,8 @@ private enum class Trailing { Interrupt, Stop, Call, Send }
 @Composable fun MessageComposer(bot: Bot, state: AppState, store: AppStore, onCall: (() -> Unit)?,
     onInterrupt: (() -> Unit)? = null, replyTo: ReplyQuote? = null, cancelReply: () -> Unit = {}, about: String? = null,
     draftKey: String = bot.id, queued: List<Entry> = emptyList()) {
-    if (bot.stage?.closedAt != null) {
-        Text(tr("Stage closed"), modifier = Modifier.padding(12.dp), style = Type.footnote, color = Palette.secondary)
+    if (bot.stage?.archivedAt != null || bot.stage?.closedAt != null) {
+        Text(tr(if (bot.stage?.archivedAt != null) "Stage archived" else "Stage closed"), modifier = Modifier.padding(12.dp), style = Type.footnote, color = Palette.secondary)
         return
     }
     val draft = state.drafts[draftKey]

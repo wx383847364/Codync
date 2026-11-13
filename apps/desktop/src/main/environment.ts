@@ -8,6 +8,7 @@ interface BuildConfig {
   environment: 'main' | 'dev'
   clerkPublishableKey: string | null
   cloudURL: string | null
+  localPreview?: boolean
 }
 
 const path = app.isPackaged

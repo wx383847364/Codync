@@ -22,6 +22,7 @@ enum RosterLine: Identifiable {
     case section(RosterSection, ComputerID, BotStore)
     case label(ComputerID)
     case bot(RosterItem, BotStore)
+    case archived(String, ComputerID, [RosterItem], BotStore)
 
     var id: String {
         switch self {
@@ -29,6 +30,7 @@ enum RosterLine: Identifiable {
         case let .section(section, computerId, _): "section:\(computerId):\(section.name)"
         case let .label(computerId): "label:\(computerId)"
         case let .bot(item, _): "bot:\(item.ref.computerId):\(item.bot.id)"
+        case let .archived(name, computer, _, _): "archived:\(computer):\(name)"
         }
     }
 

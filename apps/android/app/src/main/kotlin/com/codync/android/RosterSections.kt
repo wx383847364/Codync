@@ -71,6 +71,10 @@ internal val AppState.supportsGroupSessions: Boolean
 internal val AppState.supportsOptionalStageSetup: Boolean
     get() = hello?.get("optionalStageSetup")?.jsonPrimitive?.booleanOrNull == true
 
+/** 只有支持阶段归档的 Host 才展示对应菜单。 */
+internal val AppState.supportsStageRoster: Boolean
+    get() = hello?.get("stageRoster")?.jsonPrimitive?.booleanOrNull == true
+
 /** 新版 Host 支持确认群成员和留空阶段字段。 */
 internal val AppState.supportsGroupMemberPicker: Boolean
     get() = hello?.get("groupMemberPicker")?.jsonPrimitive?.booleanOrNull == true

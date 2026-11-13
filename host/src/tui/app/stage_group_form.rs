@@ -87,8 +87,14 @@ pub struct StageDetailsForm {
 
 impl StageDetailsForm {
     /// 关闭后的交接仅浏览，草稿输入和保存均不可用。
+    /// 归档和关闭均以只读模式显示交接。
     pub(in crate::tui) fn closed(&self) -> bool {
-        self.state.as_ref().is_some_and(|v| v["bot"]["stage"]["closedAt"].is_number())
+        self.archived() || self.state.as_ref().is_some_and(|v| v["bot"]["stage"]["closedAt"].is_number())
+    }
+
+    /// 归档状态与关闭分开，恢复时由 Host 保留原关闭状态。
+    pub(in crate::tui) fn archived(&self) -> bool {
+        self.state.as_ref().is_some_and(|v| v["bot"]["stage"]["archivedAt"].is_number())
     }
 
     /// 只有存在待恢复文本且仍可首次发送时才提供首条草稿。
@@ -370,10 +376,19 @@ impl App {
                 self.call("stageDetails", json!({"botId":room}), After::StageDetails { room, saved: false });
                 return Some(Overlay::StageDetails(form));
             }
-            KeyCode::F(4) if version.is_string() && version.as_str() == form.base_version.as_deref() && !changed => {
+            KeyCode::F(4)
+                if !form.archived()
+                    && version.is_string()
+                    && version.as_str() == form.base_version.as_deref()
+                    && !changed =>
+            {
                 Some((json!({"botId":room,"action":"accept","version":version}), false))
             }
-            KeyCode::F(5) if form.state.is_some() => {
+            KeyCode::F(9) if self.stage_roster && form.state.is_some() => {
+                let action = if form.archived() { "restore" } else { "archive" };
+                Some((json!({"botId":room,"action":action}), false))
+            }
+            KeyCode::F(5) if form.state.is_some() && !form.archived() => {
                 Some((json!({"botId":room,"action":if closed {"reopen"} else {"close"}}), false))
             }
             KeyCode::F(6) => {
@@ -474,7 +489,11 @@ impl App {
         if let Some(Overlay::StageDetails(form)) = self.overlays.last_mut()
             && form.room == room
         {
-            if saved || form.state.is_none() || result["bot"]["stage"]["closedAt"].is_number() {
+            if saved
+                || form.state.is_none()
+                || result["bot"]["stage"]["closedAt"].is_number()
+                || result["bot"]["stage"]["archivedAt"].is_number()
+            {
                 form.markdown = Editor::with(
                     result["markdown"].as_str().or_else(|| result["template"].as_str()).unwrap_or_default(),
                 );

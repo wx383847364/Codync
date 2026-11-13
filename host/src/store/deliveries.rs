@@ -141,7 +141,7 @@ pub(super) fn eligible(c: &Connection, room: &str, target: &str, source: Option<
 
 /// 同一写事务内分配顺序、写入投递，避免跨房间或重试分配冲突。
 fn insert(c: &Connection, delivery: &Delivery) -> Result<Delivery> {
-    ensure!(!super::bots::stage_closed(c, &delivery.room_id)?, "This stage is closed. Reopen it to send work.");
+    ensure!(!super::bots::stage_closed(c, &delivery.room_id)?, "Restore or reopen the stage to send work.");
     ensure!(
         eligible(c, &delivery.room_id, &delivery.target_bot_id, delivery.source_bot_id.as_deref())?,
         "成员已不在群内"
@@ -303,8 +303,8 @@ impl Store {
             .context("The group is no longer available.")?;
         let group: super::BotConfig = serde_json::from_str(&raw)?;
         ensure!(
-            group.stage.as_ref().is_none_or(|stage| stage.closed_at.is_none()),
-            "This stage is closed. Reopen it to send work."
+            group.stage.as_ref().is_none_or(|stage| !stage.read_only()),
+            "Restore or reopen the stage to send work."
         );
         // 明确提及与回复优先。普通群的负责人离群时按最新成员名单广播。
         let mut default = Vec::new();
@@ -407,7 +407,7 @@ impl Store {
         if delivery.status != Status::Queued || delivery.target_bot_id != bot {
             return Ok((None, vec![]));
         }
-        ensure!(!super::bots::stage_closed(&tx, &delivery.room_id)?, "This stage is closed. Reopen it to send work.");
+        ensure!(!super::bots::stage_closed(&tx, &delivery.room_id)?, "Restore or reopen the stage to send work.");
         if !eligible(&tx, &delivery.room_id, bot, delivery.source_bot_id.as_deref())? {
             tx.execute("UPDATE deliveries SET status='cancelled',finished_at=?2,last_error='已不在群内' WHERE id=?1 AND status='queued'", params![id,now_ms()])?;
             let card = completion::card(&tx, &delivery)?;
@@ -462,7 +462,7 @@ impl Store {
         let mut c = self.db.locked();
         let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let Some(d) = get(&tx, id)? else { return Ok((false, vec![])) };
-        ensure!(!super::bots::stage_closed(&tx, &d.room_id)?, "This stage is closed. Reopen it to send work.");
+        ensure!(!super::bots::stage_closed(&tx, &d.room_id)?, "Restore or reopen the stage to send work.");
         if !eligible(&tx, &d.room_id, bot, d.source_bot_id.as_deref())? {
             bail!("已不在群内");
         }
@@ -508,7 +508,7 @@ impl Store {
         let mut c = self.db.locked();
         let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let mut d = get(&tx, id)?.ok_or_else(|| anyhow::anyhow!("unknown delivery"))?;
-        ensure!(!super::bots::stage_closed(&tx, &d.room_id)?, "This stage is closed. Reopen it to send work.");
+        ensure!(!super::bots::stage_closed(&tx, &d.room_id)?, "Restore or reopen the stage to send work.");
         ensure!(matches!(d.status, Status::Failed | Status::Interrupted | Status::NoReply), "投递不可重试");
         if let Some(existing) = tx
             .query_row(
