@@ -316,6 +316,15 @@ pub struct BotRow {
     pub deleted: bool,
     pub session_id: Option<String>,
     pub read_rev: i64,
+    /// 配置内容最后一次变更时的同步版本。
+    pub config_rev: i64,
+}
+
+impl BotRow {
+    /// 判断指定同步版本的角色配置是否仍有效，允许其后发生已读和运行态更新。
+    pub(crate) fn matches_config_at(&self, source_rev: i64) -> bool {
+        (self.config_rev..=self.rev).contains(&source_rev)
+    }
 }
 
 #[cfg(test)]

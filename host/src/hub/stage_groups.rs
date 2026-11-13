@@ -65,11 +65,9 @@ impl Hub {
         let key = format!("stage.creation.{request}");
         if self.store.kv_read(&key)?.is_none() {
             for role in &draft.roles {
-                if self
-                    .store
-                    .bot(&role.bot_id)?
-                    .is_some_and(|row| !row.deleted && row.rev == role.source_rev && !row.config.connectors.is_empty())
-                {
+                if self.store.bot(&role.bot_id)?.is_some_and(|row| {
+                    !row.deleted && row.matches_config_at(role.source_rev) && !row.config.connectors.is_empty()
+                }) {
                     crate::market::vault::unlock(self.clone())
                         .await
                         .context("open connector access for the selected roles")?;
@@ -135,9 +133,9 @@ impl Hub {
                     .bot(&role.bot_id)?
                     .filter(|row| !row.deleted && !row.config.is_group())
                     .ok_or_else(|| anyhow!("one of the selected roles was deleted"))?;
-                // 目录及授权属于同一次确认。预览期间发生变化时请用户重新查看角色。
+                // 目录及授权等配置必须与预览一致，运行态与已读变化允许继续。
                 ensure!(
-                    original.rev == role.source_rev,
+                    original.matches_config_at(role.source_rev),
                     "{} changed while you were reviewing the role; reopen the form",
                     original.config.name
                 );

@@ -28,6 +28,8 @@ npm run e2e            # in a second shell: e2e/*.spec.ts against that sandbox
 
 For a signed-out run with no account creation or real agent checks, start the sandbox with `CODYNC_CLERK_SECRET_KEY= CODYNC_AGENT_CHECKS=off npm run dev -- --cdp`. The empty secret-key environment value disables automatic sandbox test-account sign-in, including when the shared env file has a key. The test connection restores English and chooses **Continue without an account** before each flow. Tests that require an existing signed-in account skip before enabling the cloud; the local signed-out pairing and welcome flows still run.
 
+本地开发和验收群聊、阶段群等本地功能时，直接选择 **不登录继续**（**Continue without an account**），跳过 Apple ID 登录。需要交付本机 macOS 测试包时，可使用临时签名并跳过 Apple 公证。只有测试 Apple 登录流程时才需要登录 Apple ID。
+
 `e2e/sandbox.ts` finds the sandbox from its `sandbox.json` and attaches to its main window; `e2e/smoke.spec.ts` checks the app renders and runs against the sandbox's own host. A spec reaches the main process only through the `window.codync` bridge, as the renderer does. One worker per worktree, since one app runs per sandbox; worktrees run in parallel with each other.
 
 ## Phones: Maestro

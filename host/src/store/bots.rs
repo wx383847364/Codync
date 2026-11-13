@@ -9,16 +9,17 @@ use rusqlite::{OptionalExtension, params};
 use serde_json::Value;
 
 /// Raw `bots` row before the config JSON is parsed.
-type RawBot = (String, String, i64, bool, Option<String>, i64);
+type RawBot = (String, String, i64, bool, Option<String>, i64, i64);
 
+/// 按机器人表查询的列顺序读取同步版本及配置版本。
 fn row_bot(r: &rusqlite::Row) -> rusqlite::Result<RawBot> {
-    Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get::<_, i64>(3)? != 0, r.get(4)?, r.get(5)?))
+    Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get::<_, i64>(3)? != 0, r.get(4)?, r.get(5)?, r.get(6)?))
 }
 
-/// A stored config that no longer parses is skipped (and logged) rather than failing every listing.
-fn parse_bot((id, cfg, rev, deleted, session_id, read_rev): RawBot) -> Option<BotRow> {
+/// 遇到无法解析的配置时记录日志并跳过该行，其他机器人仍可读取。
+fn parse_bot((id, cfg, rev, deleted, session_id, read_rev, config_rev): RawBot) -> Option<BotRow> {
     match serde_json::from_str(&cfg) {
-        Ok(config) => Some(BotRow { config, rev, deleted, session_id, read_rev }),
+        Ok(config) => Some(BotRow { config, rev, deleted, session_id, read_rev, config_rev }),
         Err(error) => {
             tracing::warn!(bot = %id, %error, "skipping unreadable bot config");
             None
@@ -26,7 +27,7 @@ fn parse_bot((id, cfg, rev, deleted, session_id, read_rev): RawBot) -> Option<Bo
     }
 }
 
-const BOT_COLS: &str = "id, config, rev, deleted, session_id, read_rev";
+const BOT_COLS: &str = "id, config, rev, deleted, session_id, read_rev, config_rev";
 const SAVE_BOT: &str = "INSERT INTO bots(id, rev, config) VALUES(?1, ?2, ?3)
      ON CONFLICT(id) DO UPDATE SET rev = ?2, config = ?3 WHERE deleted = 0";
 

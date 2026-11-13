@@ -2,12 +2,12 @@
 
 use super::Store;
 use anyhow::Result;
-use rusqlite::{Connection, OptionalExtension};
+use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior};
 use std::path::Path;
 use std::sync::Mutex;
 
 /// Current schema version (kv `schema`).
-const SCHEMA: i64 = 8;
+const SCHEMA: i64 = 9;
 
 /// 3: authorized devices (keys, not push tickets) with their push and Live Activity
 /// tickets. The old ticket-only `devices` table is dropped; phones re-register on connect.
@@ -18,6 +18,7 @@ const SCHEMA: i64 = 8;
 /// 7: each device records the account it was let in for (`devices.account`), so a computer that changes
 /// accounts drops the old account's devices.
 /// 8: a phone that paired with no account is told apart from a device paired before 2.36.0 (`devices.no_account`).
+/// 9: 单独记录机器人配置变更的版本，聊天运行态和已读标记仍使用同步版本。
 fn migrate(c: &Connection) -> Result<()> {
     let version: i64 =
         c.query_row("SELECT CAST(v AS INTEGER) FROM kv WHERE k = 'schema'", [], |r| r.get(0)).optional()?.unwrap_or(0);
@@ -39,7 +40,38 @@ fn migrate(c: &Connection) -> Result<()> {
     if version < 7 {
         migrate_7(c)?;
     }
-    migrate_8(c)
+    if version < 8 {
+        migrate_8(c)?;
+    }
+    migrate_9(c)
+}
+
+/// 以现有同步版本为起点。触发器也能记录旧版 Host 对配置表的写入。
+fn migrate_9(c: &Connection) -> Result<()> {
+    let tx = Transaction::new_unchecked(c, TransactionBehavior::Immediate)?;
+    // 另一个 Host 进程可能已完成升级，取得写锁后重新确认表结构。
+    let has_column: bool =
+        tx.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('bots') WHERE name = 'config_rev')", [], |r| {
+            r.get(0)
+        })?;
+    if has_column {
+        return Ok(());
+    }
+    tx.execute_batch(
+        "ALTER TABLE bots ADD COLUMN config_rev INTEGER NOT NULL DEFAULT 0;
+         UPDATE bots SET config_rev = rev;
+         CREATE TRIGGER bots_config_insert AFTER INSERT ON bots
+         BEGIN
+            UPDATE bots SET config_rev = NEW.rev WHERE id = NEW.id;
+         END;
+         CREATE TRIGGER bots_config_update AFTER UPDATE OF config ON bots WHEN OLD.config <> NEW.config
+         BEGIN
+            UPDATE bots SET config_rev = NEW.rev WHERE id = NEW.id;
+         END;
+         INSERT INTO kv(k, v) VALUES('schema', '9') ON CONFLICT(k) DO UPDATE SET v = '9';",
+    )?;
+    tx.commit()?;
+    Ok(())
 }
 
 fn migrate_3(c: &Connection) -> Result<()> {
@@ -212,6 +244,43 @@ mod tests {
         dir.join("t.db")
     }
 
+    /// 升级后已读和运行态只推进同步版本，旧版 Host 写入的新配置也会使旧预览失效。
+    #[test]
+    fn bot_config_revision_survives_sync_and_detects_edits() {
+        let db = temp_db();
+        {
+            let c = Connection::open(&db).unwrap();
+            c.execute_batch(
+                "CREATE TABLE kv(k TEXT PRIMARY KEY, v TEXT NOT NULL);
+                 INSERT INTO kv VALUES('schema', '8'), ('rev', '10');
+                 CREATE TABLE bots(
+                    id TEXT PRIMARY KEY, rev INTEGER NOT NULL, deleted INTEGER NOT NULL DEFAULT 0,
+                    config TEXT NOT NULL, session_id TEXT, read_rev INTEGER NOT NULL DEFAULT 0);
+                 INSERT INTO bots(id, rev, config) VALUES('b', 10, '{\"id\":\"b\",\"name\":\"Bot\"}');",
+            )
+            .unwrap();
+        }
+        let s = Store::open(&db).unwrap();
+        assert_eq!(s.bot("b").unwrap().unwrap().config_rev, 10);
+        let read_rev = s.mark_read("b").unwrap();
+        s.touch_bot("b").unwrap();
+        let row = s.bot("b").unwrap().unwrap();
+        assert!(row.rev > read_rev && row.matches_config_at(10));
+        let mut config = row.config;
+        config.description = "Updated role".into();
+        let new_rev = row.rev + 1;
+        Connection::open(&db)
+            .unwrap()
+            .execute(
+                "UPDATE bots SET rev = ?1, config = ?2 WHERE id = 'b'",
+                (new_rev, serde_json::to_string(&config).unwrap()),
+            )
+            .unwrap();
+        let row = s.bot("b").unwrap().unwrap();
+        assert!(!row.matches_config_at(read_rev));
+        assert!(row.matches_config_at(new_rev));
+    }
+
     #[test]
     fn migrations_replace_the_old_ticket_table() {
         let db = temp_db();
@@ -226,7 +295,7 @@ mod tests {
         }
         let s = Store::open(&db).unwrap();
         assert!(s.devices().unwrap().is_empty());
-        assert_eq!(s.kv_get("schema").as_deref(), Some("8"));
+        assert_eq!(s.kv_get("schema").as_deref(), Some("9"));
         drop(s);
         let s = Store::open(&db).unwrap();
         assert!(s.devices().unwrap().is_empty(), "reopening keeps the new table");
@@ -239,7 +308,10 @@ mod tests {
             let c = Connection::open(&db).unwrap();
             Store::open(&db).unwrap();
             c.execute_batch(
-                "UPDATE kv SET v = '5' WHERE k = 'schema';
+                "DROP TRIGGER bots_config_insert;
+                 DROP TRIGGER bots_config_update;
+                 ALTER TABLE bots DROP COLUMN config_rev;
+                 UPDATE kv SET v = '5' WHERE k = 'schema';
                  INSERT INTO entries(id, bot_id, rev, kind, turn, data, created_at, updated_at) VALUES
                    ('reset', 'b', 1, 'notice', 0, '{\"text\":\"New session\",\"style\":\"divider\"}', 0, 0),
                    ('info', 'b', 2, 'notice', 0, '{\"text\":\"Routine · News\"}', 0, 0);",
@@ -249,7 +321,7 @@ mod tests {
         let s = Store::open(&db).unwrap();
         let chat: Vec<String> = s.history("b", i64::MAX, 10).unwrap().into_iter().map(|e| e.id).collect();
         assert_eq!(chat, ["info"]);
-        assert_eq!(s.kv_get("schema").as_deref(), Some("8"));
+        assert_eq!(s.kv_get("schema").as_deref(), Some("9"));
     }
 
     #[test]
@@ -259,7 +331,10 @@ mod tests {
             let c = Connection::open(&db).unwrap();
             Store::open(&db).unwrap();
             c.execute_batch(
-                "UPDATE kv SET v = '4' WHERE k = 'schema';
+                "DROP TRIGGER bots_config_insert;
+                 DROP TRIGGER bots_config_update;
+                 ALTER TABLE bots DROP COLUMN config_rev;
+                 UPDATE kv SET v = '4' WHERE k = 'schema';
                  ALTER TABLE entries ADD COLUMN thread_id TEXT;
                  INSERT INTO kv(k, v) VALUES('rev', '10'), ('read.root', '9'), ('lane.session.b@b/root', 's1'),
                    ('lane.session.b@b/routine-r1', 's2');
