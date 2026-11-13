@@ -12,12 +12,12 @@ else a generic "Bug fixes and improvements" line. Delete old sections.
 ### zh-Hant
 - 長按 Bot 分享的檔案，即可開啟、另存或複製分享當時的檔案內容。
 - 搜尋並加入群組成員，選擇預設負責人。從原群組開啟空白會話時可調整成員。
-- 建立下一階段任務群組時可留空目標和驗收標準。階段詳情提供交接驗收、關閉與用量。
+- 選擇至少一位成員即可建立下一階段任務群組，名稱、負責人、目標、驗收標準與交接皆可選填。階段詳情提供交接驗收、關閉與用量。
 
 ### en-US
 - Touch and hold a shared file to open it, save a copy, or copy its text.
 - Search for group members, choose a default lead, and adjust the roster when starting a fresh group session.
-- Create a next-stage group with optional goals and acceptance criteria. Accept handoffs, close stages, and view stage usage.
+- Create a next-stage group by selecting at least one member. The name, lead, goal, acceptance criteria, and handoff are optional. Accept handoffs, close stages, and view stage usage.
 
 ## 2.43.0
 

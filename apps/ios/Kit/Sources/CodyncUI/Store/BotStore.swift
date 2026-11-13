@@ -256,6 +256,9 @@ public final class BotStore {
     /// 由当前 Host 公布的能力决定是否展示阶段入口。
     public var supportsStageGroups: Bool { hello?.stageGroups == true }
 
+    /// 当前 Host 允许仅选择成员就创建阶段群。
+    public var supportsOptionalStageSetup: Bool { hello?.optionalStageSetup == true }
+
     /// 新版 Host 支持新会话成员选择与可选阶段字段。
     public var supportsGroupMemberPicker: Bool { hello?.groupMemberPicker == true }
 

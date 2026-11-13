@@ -171,7 +171,7 @@ pub(super) fn chat(buf: &mut Buffer, r: Rect, app: &mut App, narrow: bool) {
             tr("Reply…").into_owned()
         } else if let Some(lead) = b.group_leader().and_then(|id| app.bots.get(id)) {
             tr("Ask {name} · @ to choose another recipient").replace("{name}", &lead.name)
-        } else if b.stage.is_some() {
+        } else if b.stage.as_ref().is_some_and(|stage| !stage.leader_id.is_empty()) {
             tr("Choose a recipient with @").into_owned()
         } else if b.group {
             tr("Ask everyone · @ to ask one bot").into_owned()
@@ -216,7 +216,7 @@ pub(super) fn chat(buf: &mut Buffer, r: Rect, app: &mut App, narrow: bool) {
     if !draft.text.is_empty()
         && app.reply.is_none()
         && strip_top > top + 1
-        && (b.group_leader().is_some() || b.stage.is_some())
+        && (b.group_leader().is_some() || b.stage.as_ref().is_some_and(|stage| !stage.leader_id.is_empty()))
     {
         // 草稿有正文时仍显示默认接收范围，保留已有任务队列的显示位置。
         strip_top -= 1;

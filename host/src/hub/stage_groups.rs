@@ -18,11 +18,13 @@ use uuid::Uuid;
 struct Draft {
     bot_id: String,
     request_id: String,
+    #[serde(default)]
     name: String,
     #[serde(default)]
     goal: String,
     #[serde(default)]
     acceptance: String,
+    #[serde(default)]
     leader_id: String,
     roles: Vec<Role>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -102,10 +104,7 @@ impl Hub {
                     .ok_or_else(|| anyhow!("this stage group was deleted"))?;
                 return Ok(stage_result(&bot, &receipt.members, true));
             }
-            ensure!(
-                !draft.name.trim().is_empty() && draft.name.len() <= 512,
-                "a stage name is required (512 bytes maximum)"
-            );
+            ensure!(draft.name.len() <= 512, "stage name exceeds 512 bytes");
             ensure!(
                 draft.goal.len() + draft.acceptance.len() <= 24_000,
                 "goal and acceptance criteria exceed 24,000 bytes combined"
@@ -117,8 +116,10 @@ impl Hub {
                 .ok_or_else(|| anyhow!("source group not found"))?
                 .config;
             let selected: HashSet<_> = draft.roles.iter().map(|role| role.bot_id.as_str()).collect();
+            ensure!(!selected.is_empty(), "Choose at least one bot.");
+            ensure!(selected.len() == draft.roles.len(), "Select each role only once.");
             ensure!(
-                selected.len() == draft.roles.len() && selected.contains(draft.leader_id.as_str()),
+                draft.leader_id.is_empty() || selected.contains(draft.leader_id.as_str()),
                 "choose a lead from the selected roles"
             );
             ensure!(
@@ -142,13 +143,29 @@ impl Hub {
                 );
                 bots.push(self.stage_role(&original.config, role, position)?);
             }
-            let leader =
-                draft.roles.iter().position(|role| role.bot_id == draft.leader_id).context("choose a stage lead")?;
+            // 空字符串保留既有协议类型，表示此阶段默认询问所有成员。
+            let leader_id = draft
+                .roles
+                .iter()
+                .position(|role| role.bot_id == draft.leader_id)
+                .map(|index| bots[index].id.clone())
+                .unwrap_or_default();
+            let name = if draft.name.trim().is_empty() {
+                format!("{} · {}", source.name, bots.iter().map(|bot| bot.name.as_str()).collect::<Vec<_>>().join(", "))
+                    .chars()
+                    .scan(0, |bytes, ch| {
+                        *bytes += ch.len_utf8();
+                        (*bytes <= 512).then_some(ch)
+                    })
+                    .collect()
+            } else {
+                draft.name.trim().to_owned()
+            };
             let handoff = accepted_handoff(&source, draft.handoff_version.as_deref())?;
             let (mut archive, mut evidence_files) = prepared?;
             ensure!(handoff.is_some() == archive.is_some(), "The accepted handoff changed. Review it and try again.");
             let stage = StageGroup {
-                leader_id: bots[leader].id.clone(),
+                leader_id,
                 goal: draft.goal,
                 acceptance: draft.acceptance,
                 incoming: archive.as_ref().map(|snapshot| snapshot.meta.clone()),
@@ -156,7 +173,7 @@ impl Hub {
                 ..StageGroup::default()
             };
             bots.push(serde_json::from_value(json!({
-                "id": room, "kind": "group", "name": draft.name.trim(), "position": position,
+                "id": room, "kind": "group", "name": name, "position": position,
                 "members": bots.iter().map(|bot| &bot.id).collect::<Vec<_>>(),
                 "section": source.section, "stage": stage, "createdAt": now_ms()
             }))?);
@@ -467,14 +484,13 @@ fn incoming_archive(
 
 /// 只接受用户预览过的已验收版本，准备副本期间源配置仍可更新。
 fn accepted_handoff<'a>(source: &'a BotConfig, version: Option<&str>) -> Result<Option<&'a StageHandoff>> {
-    let Some(stage) = &source.stage else {
-        ensure!(version.is_none(), "The source group has no confirmed handoff.");
-        return Ok(None);
-    };
-    stage
-        .handoff
+    // 只有用户明确选择交接时，才校验来源阶段与验收版本。
+    let Some(version) = version else { return Ok(None) };
+    source
+        .stage
         .as_ref()
-        .filter(|handoff| handoff.accepted_at.is_some() && version == Some(handoff.file.id.as_str()))
+        .and_then(|stage| stage.handoff.as_ref())
+        .filter(|handoff| handoff.accepted_at.is_some() && version == handoff.file.id)
         .map(Some)
         .context("Review and select the accepted handoff before creating the next stage.")
 }

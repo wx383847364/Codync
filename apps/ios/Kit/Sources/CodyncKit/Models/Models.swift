@@ -239,6 +239,7 @@ public struct Hello: Codable, Sendable {
     public var groupSessions: Bool?
     public var stageGroups: Bool?
     public var groupMemberPicker: Bool?
+    public var optionalStageSetup: Bool?
     public var icons: [String: CustomIcon]?
     public var iconsRevision: Int64?
     public var hostId: String

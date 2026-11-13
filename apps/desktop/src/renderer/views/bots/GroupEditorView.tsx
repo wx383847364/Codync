@@ -40,7 +40,7 @@ export function GroupEditorView({ group }: { group: Bot }) {
   const current = store.bots.get(group.id)
   const lead = picked.find((member) => member.id === (group.stage?.leaderId ?? group.groupLeaderId))
   const route = lead ? tr('Ask {name} · @ to choose another recipient').replace('{name}', () => lead.name)
-    : group.stage ? tr('Choose a recipient with @') : tr('Everyone answers in turn unless you @mention someone.')
+    : group.stage?.leaderId ? tr('Choose a recipient with @') : tr('Everyone answers in turn unless you @mention someone.')
 
   const toggle = (id: string) => {
     setMembers((list) => (list.includes(id) ? list.filter((m) => m !== id) : [...list, id]))

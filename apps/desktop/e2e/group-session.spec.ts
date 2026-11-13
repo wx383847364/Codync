@@ -196,8 +196,6 @@ test('stage opens with fresh roles, saves a versioned handoff and closes indepen
     const stageAction = page.getByRole('menuitem', { name: 'Create next stage group', exact: true })
     await expect(sessionAction.getByText('Original members are preselected. You can change them.')).toBeVisible()
     await expect(sessionAction).toHaveAccessibleDescription('Original members are preselected. You can change them.')
-    await expect(stageAction.getByText('Create new bots and choose a lead.')).toBeVisible()
-    await expect(stageAction).toHaveAccessibleDescription('Create new bots and choose a lead.')
     await stageAction.click()
     await page.getByPlaceholder('Stage name').fill(`${name} next`)
     await page.getByPlaceholder('Stage goal (optional)').fill('Build the next phase')
@@ -206,7 +204,7 @@ test('stage opens with fresh roles, saves a versioned handoff and closes indepen
     await page.getByRole('option', { name: reviewer.name, exact: true }).click()
     await page.getByRole('option', { name: lead.name, exact: true }).click()
     await page.getByRole('button', { name: /Group lead/ }).click()
-    await page.getByRole('listbox', { name: 'Group lead' }).getByRole('option', { name: lead.name, exact: true }).click()
+    await page.getByRole('listbox', { name: /Group lead/ }).getByRole('option', { name: lead.name, exact: true }).click()
     await page.getByRole('button', { name: 'Role settings', exact: true }).click()
     const roles = page.getByRole('dialog', { name: 'Role settings' })
     await expect(roles.getByPlaceholder('Role instructions')).toHaveValue('Review requirements')
@@ -247,7 +245,29 @@ test('stage opens with fresh roles, saves a versioned handoff and closes indepen
     // 通过真实弹层保存、验收和结束，再选择同一版本创建下一阶段。
     const stage = page.locator('.roster-row').getByText(`${name} next`, { exact: true })
     await stage.click({ button: 'right' })
-    await expect(stageAction.getByText('Review and accept a handoff in Stage details first.')).toBeVisible()
+    // 先从尚未验收的阶段创建后继，只选择一个机器人。
+    await stageAction.click()
+    const form = page.getByRole('dialog', { name: 'Create next stage group' })
+    const create = form.getByRole('button', { name: 'Create', exact: true })
+    await expect(create).toBeDisabled()
+    await form.getByRole('combobox', { name: 'Search or add bots' }).fill('Lead')
+    await form.getByRole('option', { name: lead.name, exact: true }).click()
+    await expect(create).toBeEnabled()
+    await create.click()
+    const generatedName = `${name} next · ${lead.name}`
+    await expect(selected.getByText(generatedName, { exact: true })).toBeVisible()
+    const generated = (await selected.getAttribute('data-roster-row'))!.split('/').at(-1)!
+    ids.unshift(generated)
+    const generatedDetails = await api<{ bot: Group & { stage: { leaderId: string } }; initialDraft: string }>(
+      page, 'stageDetails', { botId: generated },
+    )
+    ids.push(...generatedDetails.bot.members)
+    expect(generatedDetails.bot.stage.leaderId).toBe('')
+    expect(generatedDetails.initialDraft).toBe('')
+    await expect(page.locator('.composer textarea')).toHaveAttribute('placeholder', 'Ask everyone · @ to ask one bot')
+    // 切回来源阶段，再验收交接并验证该阶段关闭后的聊天状态。
+    await stage.click()
+    await stage.click({ button: 'right' })
     await page.getByRole('menuitem', { name: 'Stage details' }).click()
     const handoff = '# Stage result\n\nVerified marker and fixed constraints.'
     await page.getByPlaceholder('Handoff Markdown').fill(handoff)
@@ -275,8 +295,6 @@ test('stage opens with fresh roles, saves a versioned handoff and closes indepen
     await expect(page.locator('.composer').getByText('Stage closed', { exact: true })).toBeVisible()
 
     await stage.click({ button: 'right' })
-    await expect(stageAction.getByText('Create new bots and use the accepted handoff.')).toBeVisible()
-    await expect(stageAction).toHaveAccessibleDescription('Create new bots and use the accepted handoff.')
     await stageAction.click()
     await page.getByPlaceholder('Stage name').fill(`${name} successor`)
     // 两个阶段字段同时留空，交接仍可由现有开关明确带入。
@@ -284,7 +302,7 @@ test('stage opens with fresh roles, saves a versioned handoff and closes indepen
     await page.getByRole('combobox', { name: 'Search or add bots' }).fill('Lead')
     await page.getByRole('option', { name: lead.name, exact: true }).click()
     await page.getByRole('button', { name: /Group lead/ }).click()
-    await page.getByRole('listbox', { name: 'Group lead' }).getByRole('option', { name: lead.name, exact: true }).click()
+    await page.getByRole('listbox', { name: /Group lead/ }).getByRole('option', { name: lead.name, exact: true }).click()
     await page.getByRole('button', { name: 'Create', exact: true }).click()
     await expect(selected.getByText(`${name} successor`, { exact: true })).toBeVisible()
     const successor = (await selected.getAttribute('data-roster-row'))!.split('/').at(-1)!

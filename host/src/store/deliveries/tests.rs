@@ -51,6 +51,21 @@ fn stage_default_recipient_is_saved_with_the_message() {
     assert_eq!(direct.data["resolvedMentions"], json!(["a"]));
 }
 
+/// 无负责人阶段群默认询问所有成员，显式提及优先，失效引用不会广播。
+#[test]
+fn leaderless_stage_defaults_to_members_unless_addressed() {
+    let s = stage_store();
+    let mut group = s.bot("g").unwrap().unwrap().config;
+    group.stage.as_mut().unwrap().leader_id.clear();
+    s.save_bot(&group).unwrap();
+    let body = json!({"text":"review the result"});
+    assert_eq!(s.post_group("g", &body, &[]).unwrap().0.data["resolvedMentions"], json!(["a", "b", "c"]));
+    assert_eq!(s.post_group("g", &body, &["b".into()]).unwrap().0.data["resolvedMentions"], json!(["b"]));
+    let reply = json!({"text":"review the result","replyTo":{"author":"removed"}});
+    assert!(s.post_group("g", &reply, &[]).unwrap_err().to_string().contains("quoted member"));
+    assert_eq!(s.post_group("g", &reply, &["b".into()]).unwrap().0.data["resolvedMentions"], json!(["b"]));
+}
+
 /// 普通群有负责人时默认定向，移除负责人后恢复按成员顺序询问。
 #[test]
 fn ordinary_group_default_recipient_yields_to_explicit_mentions() {

@@ -52,6 +52,11 @@ an optional member selection for `createGroupSession`. Updated clients show the 
 recipient in the composer. Earlier clients show their generic group prompt and can still
 choose recipients with `@`. The host applies the saved group lead to unaddressed messages.
 
+Hosts that advertise `optionalStageSetup` can create a stage with only the selected roles.
+An empty `stage.leaderId` denotes a newly created stage without a lead, whose unaddressed
+messages go to all members. Earlier clients still show the stage prompt to choose a recipient
+with `@` for these new stages. An explicit `@` continues to select the addressed members.
+
 ## Changing what crosses the wire
 
 The policy is to move people forward rather than carry old formats: a breaking change ships

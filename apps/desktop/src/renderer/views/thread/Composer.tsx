@@ -93,7 +93,7 @@ function DestinationComposer({ botId, reply, about, cancelReply, onCall, onInter
     ? tr('Reply…')
     : bot && isGroup(bot)
       ? leader ? tr('Ask {name} · @ to choose another recipient').replace('{name}', () => leader.name)
-        : bot.stage ? tr('Choose a recipient with @') : tr('Ask everyone · @ to ask one bot')
+        : bot.stage?.leaderId ? tr('Choose a recipient with @') : tr('Ask everyone · @ to ask one bot')
       : working
         ? tr('Queue a message for {name}').replace('{name}', name)
         : tr('Ask {name}').replace('{name}', name)
@@ -229,7 +229,7 @@ function DestinationComposer({ botId, reply, about, cancelReply, onCall, onInter
         <div className="composer-surface">
           <MentionMenu menu={{ ...mentionMenu, pick: mentionMenu.choose }} />
           <CommandMenu menu={commandMenu} />
-          {(leader || bot?.stage) && draft && !reply && !about && <div className="composer-reply">{route}</div>}
+          {(leader || bot?.stage?.leaderId) && draft && !reply && !about && <div className="composer-reply">{route}</div>}
           <ComposerReveal open={!!reply}>
             {reply ? (
               <HStack gap={4} className="composer-reply">

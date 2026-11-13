@@ -57,17 +57,16 @@ pub(super) fn stage_group_view(buf: &mut Buffer, area: Rect, app: &App, stage: &
         let style = if stage.field == 2 && current == position { t.bold.patch(t.sel) } else { t.text.patch(t.panel) };
         put(buf, inner.x, inner.y + 3 + u(line), inner.width, &format!("{selected} {name}"), style);
     }
-    let lead = stage
-        .leader
-        .as_ref()
-        .and_then(|id| app.bots.get(id))
-        .map_or_else(|| tr("Choose").into_owned(), |bot| bot.name.clone());
+    let lead = stage.leader.as_ref().and_then(|id| app.bots.get(id)).map_or_else(
+        || tr(if app.optional_stage_setup { "No lead" } else { "Choose" }).into_owned(),
+        |bot| bot.name.clone(),
+    );
     put(
         buf,
         inner.x,
         inner.bottom() - 8,
         inner.width,
-        &format!("{}   ‹ {lead} ›", tr("Group lead")),
+        &format!("{}   ‹ {lead} ›", tr(if app.optional_stage_setup { "Group lead (optional)" } else { "Group lead" })),
         if stage.field == 3 { t.bold.patch(t.sel) } else { t.text.patch(t.panel) },
     );
     if let Some(role) = indices.get(current).and_then(|index| stage.roles.get(*index)) {
@@ -92,7 +91,7 @@ pub(super) fn stage_group_view(buf: &mut Buffer, area: Rect, app: &App, stage: &
             false,
         );
     }
-    if stage.from_stage {
+    if stage.from_stage && (stage.handoff.is_some() || !app.optional_stage_setup) {
         let summary = stage.handoff.as_ref().map_or_else(
             || tr("Review and accept a handoff in Stage details first.").into_owned(),
             |file| {
