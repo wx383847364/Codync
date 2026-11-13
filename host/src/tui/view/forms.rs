@@ -440,7 +440,11 @@ pub(super) fn group_view(buf: &mut Buffer, area: Rect, app: &App, g: &GroupForm)
     }
     let by = inner.bottom() - 1;
     let leader = g.leader.as_ref().and_then(|id| app.bots.get(id));
-    let stage = g.group_id.as_ref().and_then(|id| app.bots.get(id)).is_some_and(|group| group.stage.is_some());
+    let stage = g
+        .group_id
+        .as_ref()
+        .and_then(|id| app.bots.get(id))
+        .is_some_and(|group| group.stage.as_ref().is_some_and(|stage| !stage.leader_id.is_empty()));
     if g.show_leader {
         let value = leader.map_or_else(|| tr("No lead").into_owned(), |bot| bot.name.clone());
         put(

@@ -90,7 +90,7 @@ import com.codync.android.design.*
                 val lead = state.bots.firstOrNull { it.id in draft.members && it.id == (source?.stage?.leaderId ?: source?.groupLeaderId) }
                 val route = when {
                     lead != null -> tr("Ask {name} · @ to choose another recipient").replace("{name}", lead.name)
-                    source?.stage != null -> tr("Choose a recipient with @")
+                    !source?.stage?.leaderId.isNullOrEmpty() -> tr("Choose a recipient with @")
                     else -> tr("Everyone answers in turn unless you @mention someone.")
                 }
                 Text(route, Modifier.padding(top = 10.dp), style = Type.caption, color = Palette.tertiary)

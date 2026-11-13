@@ -401,8 +401,10 @@ struct BotListView: View {
                 })
             }
             if bot.isGroup && store.supportsStageGroups {
-                let detail: String
-                if let stage = bot.stage {
+                let detail: String?
+                if store.supportsOptionalStageSetup {
+                    detail = nil
+                } else if let stage = bot.stage {
                     detail = stage.handoff?.acceptedAt == nil ? "Review and accept a handoff in Stage details first."
                         : "Create new bots and use the accepted handoff."
                 } else {

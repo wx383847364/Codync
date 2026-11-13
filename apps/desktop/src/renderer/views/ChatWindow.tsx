@@ -313,7 +313,7 @@ function ChatSplitView() {
     }] : []),
     // 复用资料弹层承载阶段预览，来源群及电脑在打开时固定。
     ...(bot.kind === 'group' && store.hasStageGroups ? [{ title: 'Create next stage group', icon: 'person.2',
-      detail: !bot.stage ? 'Create new bots and choose a lead.'
+      detail: store.hasOptionalStageSetup ? undefined : !bot.stage ? 'Create new bots and choose a lead.'
         : bot.stage.handoff?.acceptedAt ? 'Create new bots and use the accepted handoff.'
           : 'Review and accept a handoff in Stage details first.',
       action: () => setEditing({ id: crypto.randomUUID(), stage: bot, store }) }] : []),

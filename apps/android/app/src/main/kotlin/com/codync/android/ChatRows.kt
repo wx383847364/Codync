@@ -464,7 +464,7 @@ internal val Entry.botReactions: Map<String, List<String>> get() =
         val lead = members.firstOrNull { it.id == (bot.stage?.leaderId ?: bot.groupLeaderId) }
         Text(when {
             lead != null -> tr("Ask {name} · @ to choose another recipient").replace("{name}", lead.name)
-            bot.stage != null -> tr("Choose a recipient with @")
+            !bot.stage?.leaderId.isNullOrEmpty() -> tr("Choose a recipient with @")
             bot.kind == "group" -> tr("Everyone answers in turn. @mention a bot to ask just that one.")
             else -> tr("Tell it what you need. You'll get a notification when it's done or needs you.")
         },

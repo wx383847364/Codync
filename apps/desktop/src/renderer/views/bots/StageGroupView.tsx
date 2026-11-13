@@ -33,6 +33,7 @@ export function StageGroupView({ group }: { group: Bot }) {
   const leader = picked.find((bot) => bot.id === leaderId)
   const accepted = handoff && handoffVersion === handoff.file.id
   const optional = store.hasGroupMemberPicker
+  const membersOnly = store.hasOptionalStageSetup
 
   /** 只复制来源群已选角色，移除角色时同步清空其负责人选择。 */
   function select(bot: Bot) {
@@ -51,9 +52,9 @@ export function StageGroupView({ group }: { group: Bot }) {
 
   /** 固定来源成员顺序与创建 ID，连接失败时由共用表单保留输入。 */
   async function save() {
-    if (!leader) return
+    if (!picked.length) return
     await store.createStageGroup({
-      botId: group.id, requestId, name, goal, acceptance, leaderId: leader.id,
+      botId: group.id, requestId, name, goal, acceptance, leaderId: leader?.id ?? '',
       handoffVersion: accepted ? handoff.file.id : undefined,
       roles: group.members.flatMap((id) => roles.filter((role) => role.botId === id)),
     })
@@ -63,9 +64,9 @@ export function StageGroupView({ group }: { group: Bot }) {
     <CreateLayout title="Create next stage group" group
       preview={<GroupAvatar members={picked} size={80} />}
       name={name} placeholder="Stage name" onName={setName} create={save}
-      canCreate={!!leader && !!name.trim() && (optional || (!!goal.trim() && !!acceptance.trim())) && (!group.stage || !!accepted)}>
+      canCreate={membersOnly ? picked.length > 0 : !!leader && !!name.trim() && (optional || (!!goal.trim() && !!acceptance.trim())) && (!group.stage || !!accepted)}>
       <GroupMemberPicker bots={bots} picked={picked} onToggle={select} />
-      <GroupBotPicker bots={picked} selected={leader?.id} onChange={setLeader} label="Group lead" />
+      <GroupBotPicker bots={picked} selected={leader?.id} onChange={setLeader} label={membersOnly ? "Group lead (optional)" : "Group lead"} allowsNone={membersOnly} />
       <AutoTextArea className="field-box" value={goal} placeholder={optional ? 'Stage goal (optional)' : 'Stage goal'} minRows={2} maxRows={5} onChange={setGoal} />
       <AutoTextArea className="field-box" value={acceptance} placeholder={optional ? 'Acceptance criteria (optional)' : 'Acceptance criteria'} minRows={2} maxRows={5} onChange={setAcceptance} />
       {group.stage && (handoff
@@ -73,7 +74,7 @@ export function StageGroupView({ group }: { group: Bot }) {
           <Switch label="Use accepted handoff" on={!!accepted}
             onChange={(on) => setHandoffVersion(on ? handoff.file.id : undefined)}>{tr('Use accepted handoff')} · {handoff.file.sha256.slice(0, 12)}</Switch>
         </div>
-        : <Text as="div" size="footnote" tone="secondary" className="create-group-note">{tr('Review and accept a handoff in Stage details first.')}</Text>)}
+        : !membersOnly && <Text as="div" size="footnote" tone="secondary" className="create-group-note">{tr('Review and accept a handoff in Stage details first.')}</Text>)}
       <button type="button" className="field-box stage-role-settings" disabled={!picked.length}
         onClick={() => setRoleEditor(picked[0]?.id)}>
         {tr('Role settings')}

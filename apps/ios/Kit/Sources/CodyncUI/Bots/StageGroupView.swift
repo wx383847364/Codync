@@ -27,17 +27,18 @@ public struct StageGroupView: View {
 
     /// 阶段群沿用统一的成员布局，交接和角色配置在成员区后面。
     public var body: some View {
+        let membersOnly = store.supportsOptionalStageSetup
         let validFields = !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && (optional || [goal, acceptance].allSatisfy { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
         CreateForm(title: "Create next stage group", placeholder: "Stage name", name: $name, saving: saving,
-                   canCreate: !saving && validFields && picked.contains { $0.id == leaderId }
-                       && (group.stage == nil || handoffVersion != nil),
+                   canCreate: !saving && (membersOnly ? !picked.isEmpty : validFields && picked.contains { $0.id == leaderId }
+                       && (group.stage == nil || handoffVersion != nil)),
                    error: error, create: save, group: true) {
             GroupAvatar(members: picked, size: 80)
         } content: {
             VStack(alignment: .leading, spacing: 12) {
                 GroupMemberPicker(bots: candidates, picked: picked, toggle: toggleRole)
-                GroupBotPicker(bots: picked, selection: $leaderId, label: "Group lead")
+                GroupBotPicker(bots: picked, selection: $leaderId, label: membersOnly ? "Group lead (optional)" : "Group lead", allowsNone: membersOnly)
                 TextField(L10n.tr(optional ? "Stage goal (optional)" : "Stage goal"), text: $goal, axis: .vertical)
                     .lineLimit(2...5).fieldBox(fill: Palette.surface)
                 TextField(L10n.tr(optional ? "Acceptance criteria (optional)" : "Acceptance criteria"), text: $acceptance, axis: .vertical)
@@ -48,7 +49,7 @@ public struct StageGroupView: View {
                             set: { handoffVersion = $0 ? handoff.file.id : nil })) {
                             Text("\(L10n.tr("Use accepted handoff")) · \(handoff.file.sha256.prefix(12))")
                         }.toggleStyle(.codync)
-                    } else {
+                    } else if !membersOnly {
                         Text(L10n.tr("Review and accept a handoff in Stage details first."))
                             .font(.footnote).foregroundStyle(Palette.secondary)
                     }
@@ -122,9 +123,10 @@ public struct StageGroupView: View {
 
     /// 用同一个创建 ID 重试，失败时保留预览字段。
     private func save() {
-        guard let leaderId, picked.contains(where: { $0.id == leaderId }), !saving else { return }
+        guard !picked.isEmpty, !saving else { return }
+        let lead = picked.first { $0.id == leaderId }?.id ?? ""
         let draft = StageGroupDraft(botId: group.id, requestId: requestId, name: name, goal: goal, acceptance: acceptance,
-                                    leaderId: leaderId, roles: group.members.compactMap { roles[$0] }, handoffVersion: handoffVersion)
+                                    leaderId: lead, roles: group.members.compactMap { roles[$0] }, handoffVersion: handoffVersion)
         saving = true
         error = nil
         Task {

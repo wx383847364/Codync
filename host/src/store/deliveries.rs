@@ -309,13 +309,16 @@ impl Store {
         // 明确提及与回复优先。普通群的负责人离群时按最新成员名单广播。
         let mut default = Vec::new();
         if targets.is_empty() {
+            // 已失效的阶段群引用不能隐式改发给负责人或全员。
+            let quoted_member = data["replyTo"]["author"].as_str().is_some_and(|author| author != "user");
+            ensure!(
+                group.stage.is_none() || !quoted_member,
+                "The quoted member is unavailable. Choose a recipient with @."
+            );
             if let Some(leader) = group.group_leader() {
                 if eligible(&tx, room, leader, None)? {
                     // 引用已离群成员的回复不能隐式改发给负责人。
-                    ensure!(
-                        data["replyTo"]["author"].as_str().is_none_or(|author| author == "user"),
-                        "The quoted member is unavailable. Choose a recipient with @."
-                    );
+                    ensure!(!quoted_member, "The quoted member is unavailable. Choose a recipient with @.");
                     default.push(leader.to_owned());
                 } else {
                     ensure!(group.stage.is_none(), "The stage lead is unavailable. Choose a recipient with @.");

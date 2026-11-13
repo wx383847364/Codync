@@ -68,7 +68,7 @@ struct Composer: View {
         if let lead = stageLead {
             return L10n.tr("Ask {name} · @ to choose another recipient").replacingOccurrences(of: "{name}", with: lead.name)
         }
-        if bot?.stage != nil { return L10n.tr("Choose a recipient with @") }
+        if bot?.stage?.leaderId.isEmpty == false { return L10n.tr("Choose a recipient with @") }
         if bot?.isGroup == true { return L10n.tr("Ask everyone · @ to ask one bot") }
         let key = working ? "Queue a message for {name}" : "Ask {name}"
         return L10n.tr(key).replacingOccurrences(of: "{name}", with: name)
@@ -134,7 +134,7 @@ struct Composer: View {
     /// 已开放的群沿用现有草稿、选择与发送操作。
     private var editor: some View {
         VStack(alignment: .leading, spacing: 6) {
-            if (bot?.stage != nil || stageLead != nil) && !draft.isEmpty && replyingTo == nil && artifact == nil {
+            if (bot?.stage?.leaderId.isEmpty == false || stageLead != nil) && !draft.isEmpty && replyingTo == nil && artifact == nil {
                 Text(stageLead.map { L10n.tr("Default recipient · {name}").replacingOccurrences(of: "{name}", with: $0.name) }
                      ?? L10n.tr("Choose a recipient with @"))
                     .font(.footnote).foregroundStyle(Palette.secondary)
