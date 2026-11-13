@@ -393,7 +393,7 @@ struct BotListView: View {
 
     /// 群行和折叠按钮分开，阶段机器人可从其群中打开。
     @ViewBuilder private func stageRow(_ item: RosterItem, store: BotStore) -> some View {
-        if let stage = item.bot.stage {
+        if item.bot.isGroup {
             let expanded = expandedStages.contains(item.ref)
             VStack(spacing: 0) {
                 HStack(spacing: 5) {
@@ -410,13 +410,13 @@ struct BotListView: View {
                     row(item, store: store)
                 }
                 if expanded {
-                    ForEach(store.members(of: item.bot).filter { !$0.hidden && stage.ownedMembers?.contains($0.id) == true }, id: \.id) { member in
+                    ForEach(store.members(of: item.bot).filter { !$0.hidden }, id: \.id) { member in
                         Button {
                             accounts.selection = BotReference(accountId: item.ref.accountId, computerId: item.ref.computerId, botId: member.id)
                         } label: {
                             HStack {
                                 BotRow(bot: member).environment(store)
-                                if member.id == stage.leaderId {
+                                if member.id == (item.bot.stage?.leaderId ?? item.bot.groupLeaderId) {
                                     Text(L10n.tr("Lead")).font(.caption).foregroundStyle(Palette.secondary)
                                 }
                             }

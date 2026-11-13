@@ -35,15 +35,14 @@ export function SectionRoster({ computerId, items, compact, folded, order, save,
   const groups = rosterGroups(groupedItems, folded, order)
   /** 在项目底部提供独立的归档入口。 */
   const projectRows = (name: string, rows: RosterItem[]) => {
-    const stages = rows.filter(({ bot }) => bot.stage && !bot.stage.archivedAt)
+    const active = rows.filter(({ bot }) => !bot.stage?.archivedAt)
     const archived = rows.filter(({ bot }) => bot.stage?.archivedAt)
     const originals = rows.filter(({ bot }) => bot.kind !== 'group')
-    const groups = rows.filter(({ bot }) => bot.kind === 'group' && !bot.stage)
+    const groups = active.filter(({ bot }) => bot.kind === 'group')
     const open = archives.includes(name)
     return <>
-      {stages.map((item) => row(item, children(item)))}
-      {groups.map((item) => row(item))}
-      {!!originals.length && !!(stages.length || archived.length) && !compact && <div className="stage-project-label">{tr('Project bots')}</div>}
+      {groups.map((item) => row(item, children(item)))}
+      {!!originals.length && !!(groups.length || archived.length) && !compact && <div className="stage-project-label">{tr('Project bots')}</div>}
       {originals.map((item) => row(item))}
       {!!archived.length && <RosterSection name={tr('Archived stages')} count={archived.length} unread={0} compact={compact}
         folded={!open} toggle={() => setArchives((list) => open ? list.filter((key) => key !== name) : [...list, name])}>
@@ -91,7 +90,7 @@ export function SectionRoster({ computerId, items, compact, folded, order, save,
     </RosterSection>
   }
   return <div ref={container} data-section-computer={computerId}>
-    {groupedItems.filter((item) => item.bot.pinned).map((item) => row(item, item.bot.stage ? children(item) : undefined))}
+    {groupedItems.filter((item) => item.bot.pinned).map((item) => row(item, item.bot.kind === 'group' ? children(item) : undefined))}
     {shown.map((name) => <SectionBlock key={name} name={name} lifted={drag?.name === name}>
       {name === '' && !custom ? null : label(name)}
       {name === '' ? <div className={`computer-roster-content ${drag ? 'collapsed' : ''}`} inert={drag !== null} aria-hidden={drag !== null}>

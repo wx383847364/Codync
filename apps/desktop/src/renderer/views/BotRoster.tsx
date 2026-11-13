@@ -152,9 +152,10 @@ export function BotRoster({ roster, compact, onContext, onSectionContext, openEx
   const makeRoom = (under: Element | null) => {
     const current = drag.current
     const row = under?.closest<HTMLElement>('[data-roster-row]')
+      ?? under?.closest('.stage-roster-heading')?.querySelector<HTMLElement>('[data-roster-row]')
     const item = row && itemsByKey.current.get(row.dataset.rosterRow!)
     if (!current || !row || !item || row.closest('.stage-member') || item.bot.stage?.archivedAt
-      || !!item.bot.stage !== !!current.item.bot.stage || current.item.ref.computerId !== item.ref.computerId) return
+      || (!item.bot.pinned && isGroup(item.bot) !== isGroup(current.item.bot)) || current.item.ref.computerId !== item.ref.computerId) return
     // A row still sliding out of the way would be hit again where it was.
     if (item.bot.id === current.item.bot.id || !sameRosterGroup(item.bot, current.item.bot) || row.getAnimations().length) return
     setBotDrag({ ...current, ids: moveInOrder(current.ids, current.item.bot.id, item.bot.id) })
@@ -192,9 +193,9 @@ export function BotRoster({ roster, compact, onContext, onSectionContext, openEx
   }
 
   /** 阶段成员沿用聊天入口，排序跟随所属群。 */
-  const row = (item: RosterItem, siblings: RosterItem[], nested = false) => {
+  const row = (item: RosterItem, siblings: RosterItem[], nested = false, owned = false) => {
     const key = refKey(item.ref)
-    const isSelected = sameRef(item.ref, selected)
+    const isSelected = (!nested || owned) && sameRef(item.ref, selected)
     // The held row shows as hovered, or as an empty slot while its lifted copy follows the pointer.
     const held = botDrag?.item.bot.id === item.bot.id && botDrag.item.ref.computerId === item.ref.computerId
     const many = roster.sections.length > 1
@@ -208,7 +209,7 @@ export function BotRoster({ roster, compact, onContext, onSectionContext, openEx
         label={many ? `${name}, on ${item.store.hostName}` : name}
         title={many ? `${item.bot.name} · ${item.store.hostName}` : item.bot.name}
         selected={isSelected}
-        dragKey={key}
+        dragKey={!nested || owned ? key : undefined}
         onHover={(on) => setHovered((h) => (on ? key : h === key ? null : h))}
         onClick={() => app.select(item.ref)}
         onContext={(x, y) => onContext(item.bot, item.store, x, y)}
@@ -248,8 +249,8 @@ export function BotRoster({ roster, compact, onContext, onSectionContext, openEx
           <div className={`computer-roster-content ${open ? '' : 'collapsed'}`} inert={!open} aria-hidden={!open}>
             <div className={compact ? '' : 'stage-roster-members'}>
               {open && members.map((member) => <div className="stage-member" key={member.bot.id}>
-                {row(member, items, true)}
-                {!compact && member.bot.id === item.bot.stage?.leaderId && <span className="stage-lead-label">{tr('Lead')}</span>}
+                {row(member, items, true, item.bot.stage?.ownedMembers?.includes(member.bot.id))}
+                {!compact && member.bot.id === (item.bot.stage?.leaderId || item.bot.groupLeaderId) && <span className="stage-lead-label">{tr('Lead')}</span>}
               </div>)}
             </div>
           </div>
@@ -310,7 +311,7 @@ function RosterRow({ hovered, lifted, compact, label, title, selected, dragKey, 
   label: string
   title: string
   selected: boolean
-  dragKey: string
+  dragKey?: string
   onHover: (on: boolean) => void
   onClick: () => void
   onContext: (x: number, y: number) => void
