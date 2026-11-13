@@ -195,7 +195,10 @@ impl App {
                         .map_or(if left { choices.len() - 1 } else { 0 }, |i| {
                             (i + if left { choices.len() - 1 } else { 1 }) % choices.len()
                         });
-                    form.leader = Some(choices[next].clone());
+                    // 支持选填的 Host 在名单首尾之间保留「不设置」。
+                    let at_edge =
+                        form.leader.as_ref() == Some(if left { choices[0] } else { choices[choices.len() - 1] });
+                    form.leader = if self.optional_stage_setup && at_edge { None } else { Some(choices[next].clone()) };
                 }
             }
             KeyCode::Char(' ' | 'p') if form.field == 2 => {
@@ -226,7 +229,7 @@ impl App {
         let valid = !form.name.text.trim().is_empty()
             && (self.group_member_picker
                 || [&form.goal, &form.acceptance].iter().all(|field| !field.text.trim().is_empty()));
-        let Some(lead) = form.leader.as_ref().filter(|_| valid) else {
+        if !self.optional_stage_setup && (!valid || form.leader.is_none()) {
             form.error = Some(
                 if self.group_member_picker {
                     "Enter a stage name and choose a lead."
@@ -236,8 +239,8 @@ impl App {
                 .into(),
             );
             return;
-        };
-        if form.from_stage && !form.use_handoff {
+        }
+        if !self.optional_stage_setup && form.from_stage && !form.use_handoff {
             form.error = Some("Review and accept a handoff in Stage details first.".into());
             return;
         }
@@ -247,13 +250,17 @@ impl App {
             .filter(|role| role.selected)
             .map(|role| json!({"botId":role.id,"sourceRev":role.source_rev,"description":role.instructions.text,"reuseProject":role.reuse_project}))
             .collect();
+        if roles.is_empty() {
+            form.error = Some("Choose at least one bot.".into());
+            return;
+        }
         form.saving = true;
         form.error = None;
         self.call(
             "createStageGroup",
             json!({
                 "botId":form.source, "requestId":form.request_id, "name":form.name.text, "goal":form.goal.text,
-                "acceptance":form.acceptance.text, "leaderId":lead, "roles":roles,
+                "acceptance":form.acceptance.text, "leaderId":form.leader.as_deref().unwrap_or_default(), "roles":roles,
                 "handoffVersion":form.handoff.as_ref().filter(|_| form.use_handoff).map(|file| &file.id)
             }),
             After::StageGroupCreated,

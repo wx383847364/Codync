@@ -118,6 +118,7 @@ pub(super) fn goto(buf: &mut Buffer, area: Rect, app: &mut App, g: &super::super
         } else {
             "Reuse the same bots in a fresh chat."
         }),
+        Some(GotoItem::Action(Action::NewStageGroup)) if app.optional_stage_setup => None,
         Some(GotoItem::Action(Action::NewStageGroup)) => {
             Some(match app.stage_source().and_then(|bot| bot.stage.as_ref()) {
                 None => "Create new bots and choose a lead.",

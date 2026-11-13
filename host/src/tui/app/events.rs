@@ -263,6 +263,7 @@ impl App {
                 self.custom_icons = v["icons"].is_object();
                 self.group_sessions = v["groupSessions"] == true;
                 self.group_member_picker = v["groupMemberPicker"] == true;
+                self.optional_stage_setup = v["optionalStageSetup"] == true;
                 self.stage_groups = v["stageGroups"] == true;
                 self.mismatch = crate::compat::check(env!("CARGO_PKG_VERSION"), crate::compat::MIN_HOST, &v);
                 v["name"].as_str().unwrap_or("computer").clone_into(&mut self.host);

@@ -456,7 +456,7 @@ function GroupIntroCard({ group }: { group: Bot }) {
   const names = members.map((m) => m.name)
   const lead = members.find((member) => member.id === (group.stage?.leaderId ?? group.groupLeaderId))
   const hint = lead ? tr('Ask {name} · @ to choose another recipient').replace('{name}', () => lead.name)
-    : group.stage ? tr('Choose a recipient with @') : tr('Everyone answers in turn. @mention a bot to ask just that one.')
+    : group.stage?.leaderId ? tr('Choose a recipient with @') : tr('Everyone answers in turn. @mention a bot to ask just that one.')
   return (
     <div className="intro-card">
       <GroupAvatar members={members} size={72} />

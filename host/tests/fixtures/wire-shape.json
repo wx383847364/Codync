@@ -234,6 +234,7 @@
     "hello.device": "string",
     "hello.fileImageInfo": "bool",
     "hello.groupMemberPicker": "bool",
+    "hello.optionalStageSetup": "bool",
     "hello.groupSessions": "bool",
     "hello.home": "string",
     "hello.hostId": "string",

@@ -56,6 +56,7 @@ pub enum BotKind {
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct StageGroup {
+    /// 空字符串表示无负责人，默认询问所有成员。
     pub leader_id: String,
     pub goal: String,
     pub acceptance: String,
@@ -196,7 +197,11 @@ pub struct BotConfig {
 impl BotConfig {
     /// 返回当前群的默认负责人，阶段群继续使用阶段内的身份。
     pub(crate) fn group_leader(&self) -> Option<&str> {
-        self.stage.as_ref().map(|stage| stage.leader_id.as_str()).or(self.group_leader_id.as_deref())
+        self.stage
+            .as_ref()
+            .map(|stage| stage.leader_id.as_str())
+            .or(self.group_leader_id.as_deref())
+            .filter(|id| !id.is_empty())
     }
 
     /// 普通群的负责人离群时，同时清除其默认接收身份。

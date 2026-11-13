@@ -47,19 +47,18 @@ import kotlinx.coroutines.launch
     val picked = candidates.filter { it.id in roles }
     val selectedLead = picked.firstOrNull { it.id == leader }
     val optional = state.supportsGroupMemberPicker
+    val membersOnly = state.supportsOptionalStageSetup
     val handoff = group.stage?.handoff?.takeIf { it.acceptedAt != null }
     val accepted = handoff != null && handoffVersion == handoff.file.id
 
     CreateLayout(state, "Create next stage group", name, { name = it }, "Stage name",
-        selectedLead != null && name.isNotBlank() && (optional || (goal.isNotBlank() && acceptance.isNotBlank())) &&
+        if (membersOnly) picked.isNotEmpty() else selectedLead != null && name.isNotBlank() && (optional || (goal.isNotBlank() && acceptance.isNotBlank())) &&
             (group.stage == null || accepted),
         {
             // 固定来源顺序与请求 ID，Host 可识别重试。
-            selectedLead?.let {
-                val draft = StageGroupDraft(group.id, requestId, name, goal, acceptance, it.id,
-                    group.members.mapNotNull(roles::get), handoffVersion)
-                store.createStageGroup(draft) { dismiss() }
-            }
+            val draft = StageGroupDraft(group.id, requestId, name, goal, acceptance, selectedLead?.id.orEmpty(),
+                group.members.mapNotNull(roles::get), handoffVersion.takeIf { accepted })
+            store.createStageGroup(draft) { dismiss() }
         }, { GroupAvatar(picked.map { AvatarFace(it.avatarShape, it.avatarColor, it.status) }, 80.dp) },
         group = true, busyKey = "stage-group") {
         GroupMemberPicker(candidates, picked, state.bots) { bot ->
@@ -69,15 +68,15 @@ import kotlinx.coroutines.launch
                 if (leader == bot.id) leader = null
             } else roles = roles + (bot.id to StageGroupDraft.Role(bot.id, bot.rev, bot.description))
         }
-        GroupBotPicker(picked, state.bots, selectedLead?.id, "Group lead") { leader = it }
+        GroupBotPicker(picked, state.bots, selectedLead?.id, if (membersOnly) "Group lead (optional)" else "Group lead", allowsNone = membersOnly) { leader = it }
         FieldBox(goal, { goal = it }, if (optional) "Stage goal (optional)" else "Stage goal",
             minLines = 2, maxLines = 5, fill = Palette.surface)
         FieldBox(acceptance, { acceptance = it }, if (optional) "Acceptance criteria (optional)" else "Acceptance criteria",
             minLines = 2, maxLines = 5, fill = Palette.surface)
         if (group.stage != null) {
-            if (handoff == null) {
+            if (handoff == null && !membersOnly) {
                 Text(tr("Review and accept a handoff in Stage details first."), style = Type.footnote, color = Palette.secondary)
-            } else {
+            } else if (handoff != null) {
                 CodyncSwitch(accepted, { on -> handoffVersion = handoff.file.id.takeIf { on } }) {
                     Text(tr("Use accepted handoff") + " · " + handoff.file.sha256.take(12), style = Type.body)
                 }

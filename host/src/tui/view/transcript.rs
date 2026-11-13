@@ -119,8 +119,12 @@ fn intro(out: &mut Built, app: &App, b: &Bot, width: usize) {
             format!("group · {}", names.join(", ")),
             b.group_leader().and_then(|id| app.bots.get(id)).map_or_else(
                 || {
-                    tr(if b.stage.is_some() { "Choose a recipient with @" } else { "Ask everyone · @ to ask one bot" })
-                        .into_owned()
+                    tr(if b.stage.as_ref().is_some_and(|stage| !stage.leader_id.is_empty()) {
+                        "Choose a recipient with @"
+                    } else {
+                        "Ask everyone · @ to ask one bot"
+                    })
+                    .into_owned()
                 },
                 |bot| tr("Ask {name} · @ to choose another recipient").replace("{name}", &bot.name),
             ),

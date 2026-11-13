@@ -347,6 +347,7 @@ private fun Bot.movesWith(other: Bot) = band == other.band && (pinned || section
             if (bot.kind == "group" && state.supportsStageGroups) {
                 val stage = bot.stage
                 val detail = when {
+                    state.supportsOptionalStageSetup -> null
                     stage == null -> "Create new bots and choose a lead."
                     stage.handoff?.acceptedAt == null -> "Review and accept a handoff in Stage details first."
                     else -> "Create new bots and use the accepted handoff."
