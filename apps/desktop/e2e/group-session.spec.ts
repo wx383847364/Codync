@@ -356,8 +356,12 @@ test('stage opens with fresh roles, saves a versioned handoff and closes indepen
     await stage.click({ button: 'right' })
     await page.getByRole('menuitem', { name: 'Archive stage', exact: true }).click()
     await expect(page.locator('.composer').getByText('Stage archived', { exact: true })).toBeVisible()
+    const archiveToggle = page.getByRole('button', { name: 'Archived stages', exact: true })
+    await expect(archiveToggle).toBeVisible()
+    // 沙箱可能在上一次运行展开过归档区，先统一到折叠状态再检查。
+    if (await archiveToggle.getAttribute('aria-expanded') === 'true') await archiveToggle.click()
     await expect(stage).toHaveCount(0)
-    await page.getByRole('button', { name: 'Archived stages', exact: true }).click()
+    await archiveToggle.click()
     await expect(stage).toBeVisible()
     await stage.click({ button: 'right' })
     await page.getByRole('menuitem', { name: 'Restore stage', exact: true }).click()
