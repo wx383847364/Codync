@@ -2,7 +2,7 @@ import { computerSections, moveInOrder, orderedComputers } from '../lib/computer
 import { renamedSectionOrder } from '../lib/roster-section-order'
 import { prefs, usePref } from '../lib/prefs'
 import { useModel } from '../lib/observable'
-import { foldsAfterRename, rosterGroups, rosterLines, sameRosterGroup, sectionRename, shownRows, shownSection } from '../lib/roster-sections'
+import { foldsAfterRename, rosterGroups, rosterLines, sameRosterGroup, sectionRename, shownRows, shownSection, stageRoster } from '../lib/roster-sections'
 import type { BotStore } from './bot-store'
 import type { AppModel, BotRef } from './app-model'
 
@@ -65,8 +65,11 @@ export function useComputerRoster(app: AppModel, shown: Set<string>) {
       const shown = moved && shownSection(moved.bot)
       // A folded section shows no order to change.
       if (!section || !moved || (shown && folded.includes(shown))) return
-      const group = items.filter((item) => sameRosterGroup(item.bot, moved.bot))
-      const target = group[group.indexOf(moved) + offset]
+      const group = stageRoster(items).roots.filter((item) => !item.bot.stage?.archivedAt
+        && !!item.bot.stage === !!moved.bot.stage && sameRosterGroup(item.bot, moved.bot))
+      const index = group.indexOf(moved)
+      if (index < 0) return
+      const target = group[index + offset]
       if (target) section.store.reorder(moveInOrder(items.map((item) => item.bot.id), ref.botId, target.bot.id))
     },
   }

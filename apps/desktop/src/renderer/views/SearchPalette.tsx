@@ -91,7 +91,8 @@ function PaletteBody({ items, onPick, onClose }: { items: RosterItem[]; onPick: 
 
 /** What the bot is for; a group lists its members. */
 function subtitle({ bot, store }: { bot: Bot; store: RosterItem['store'] }) {
-  if (!isGroup(bot) || bot.description) return bot.description
+  const stage = [...store.bots.values()].find((group) => group.stage?.ownedMembers?.includes(bot.id) && group.members.includes(bot.id))
+  if (!isGroup(bot) || bot.description) return [stage?.name ?? bot.section, bot.description].filter(Boolean).join(' · ')
   const names = store.members(bot).map((m) => m.name).join(', ')
   return names === bot.name ? '' : names
 }

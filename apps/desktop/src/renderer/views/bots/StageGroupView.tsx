@@ -140,13 +140,14 @@ export function StageDetailsView({ botId }: { botId: string }) {
 
   const stage = details?.bot.stage
   const handoff = stage?.handoff
+  const readOnly = stage?.closedAt || stage?.archivedAt
   const changed = markdown.trim() !== (details?.markdown ?? '').trim() || evidence.trim() !== (handoff?.evidence ?? '')
   const pending = details?.work.pending ?? []
   return <SheetPage>
     <ModalHeader icon="doc.text" title={tr('Stage details')} />
     <div className="group-scroll"><div className="group-form">
       {details && stage && <>
-        <Text as="div" weight="semibold">{details.bot.name} · {tr(stage.closedAt ? 'Stage closed' : 'Stage open')}</Text>
+        <Text as="div" weight="semibold">{details.bot.name} · {tr(stage.archivedAt ? 'Stage archived' : stage.closedAt ? 'Stage closed' : 'Stage open')}</Text>
         <Text as="div" size="footnote" tone="secondary">{tr(handoff?.acceptedAt ? 'Stage accepted' : 'Stage awaiting acceptance')}</Text>
         {Object.entries(details.work.counts).map(([status, count]) => <Text as="div" key={status} size="footnote">{tr(status)} · {count}</Text>)}
         {pending.map((item) => <Text as="div" key={item.id} size="footnote">{item.name} · {tr(item.status)}</Text>)}
@@ -154,7 +155,7 @@ export function StageDetailsView({ botId }: { botId: string }) {
           <pre style={{ whiteSpace: 'pre-wrap' }}>{details.incomingMarkdown}</pre></details>}
         {(details.handoffUnavailable || details.incomingUnavailable) && <Text tone="danger">{tr('The handoff file is unavailable.')}</Text>}
         {handoff && <Text size="caption" tone="secondary">{handoff.file.name} · {handoff.file.sha256.slice(0, 12)}</Text>}
-        {stage.closedAt ? <>
+        {readOnly ? <>
           <pre style={{ whiteSpace: 'pre-wrap' }}>{details.markdown}</pre>
           {handoff?.evidence && <Text as="div">{handoff.evidence}</Text>}
         </> : <>
@@ -167,12 +168,14 @@ export function StageDetailsView({ botId }: { botId: string }) {
           }}><span>{file.name} · {file.sha256.slice(0, 12)}</span></Button>)}
           <Button kind="secondary" disabled={busy || !markdown.trim() || !changed} onClick={() => void load({ action: 'saveHandoff', markdown, evidence, previousVersion: baseVersion })}>Save handoff</Button>
         </>}
-        {handoff && <Button kind="secondary" disabled={busy || changed || baseVersion !== handoff.file.id || !handoff.evidence || !!handoff.acceptedAt || !!pending.length || details.handoffUnavailable}
+        {handoff && <Button kind="secondary" disabled={busy || !!stage.archivedAt || changed || baseVersion !== handoff.file.id || !handoff.evidence || !!handoff.acceptedAt || !!pending.length || details.handoffUnavailable}
           onClick={() => void load({ action: 'accept', version: handoff.file.id })}>Accept stage</Button>}
-        <Button kind="secondary" disabled={busy || (!stage.closedAt && !!pending.length)} onClick={() => void load({ action: stage.closedAt ? 'reopen' : 'close' })}>
-          {stage.closedAt ? 'Reopen stage' : 'Close stage'}
+        <Button kind="secondary" disabled={busy || (!readOnly && !!pending.length)} onClick={() => void load({
+          action: stage.archivedAt ? 'restore' : stage.closedAt ? 'reopen' : 'close',
+        })}>
+          {stage.archivedAt ? 'Restore stage' : stage.closedAt ? 'Reopen stage' : 'Close stage'}
         </Button>
-        {!!details.initialDraft && !details.bot.lastMessage && !stage.closedAt && !store.composerDrafts.get(botId) && <Button kind="secondary" onClick={() => {
+        {!!details.initialDraft && !details.bot.lastMessage && !readOnly && !store.composerDrafts.get(botId) && <Button kind="secondary" onClick={() => {
           store.composerDrafts.set(botId, details.initialDraft)
           store.setSelection(botId)
           dismiss()

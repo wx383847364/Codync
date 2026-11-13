@@ -175,11 +175,12 @@ public struct StageDetailsView: View {
     /// 编辑只在开放阶段可用，查看交接和重开操作在关闭后仍可用。
     @ViewBuilder private func content(_ details: StageDetails, _ stage: StageGroup) -> some View {
         let handoff = stage.handoff
-        let closed = stage.closedAt != nil
+        let archived = stage.archivedAt != nil
+        let closed = archived || stage.closedAt != nil
         let pending = !details.work.pending.isEmpty
         let changed = markdown.trimmingCharacters(in: .whitespacesAndNewlines) != (details.markdown ?? "")
             || evidence.trimmingCharacters(in: .whitespacesAndNewlines) != (handoff?.evidence ?? "")
-        Text("\(details.bot.name) · \(L10n.tr(closed ? "Stage closed" : "Stage open"))").font(.headline)
+        Text("\(details.bot.name) · \(L10n.tr(archived ? "Stage archived" : closed ? "Stage closed" : "Stage open"))").font(.headline)
         Text(L10n.tr(handoff?.acceptedAt == nil ? "Stage awaiting acceptance" : "Stage accepted")).font(.footnote)
         ForEach(details.work.counts.keys.sorted(), id: \.self) { status in
             Text("\(L10n.tr(status)) · \(details.work.counts[status] ?? 0)").font(.footnote)
@@ -214,10 +215,10 @@ public struct StageDetailsView: View {
         }
         if let handoff {
             Button(L10n.tr("Accept stage")) { Task { await load(StageChange(botId: botId, action: .accept, version: handoff.file.id)) } }
-                .buttonStyle(.secondary).disabled(busy || changed || baseVersion != handoff.file.id || handoff.evidence.isEmpty || handoff.acceptedAt != nil || pending || details.handoffUnavailable)
+                .buttonStyle(.secondary).disabled(busy || archived || changed || baseVersion != handoff.file.id || handoff.evidence.isEmpty || handoff.acceptedAt != nil || pending || details.handoffUnavailable)
         }
-        Button(L10n.tr(closed ? "Reopen stage" : "Close stage")) {
-            Task { await load(StageChange(botId: botId, action: closed ? .reopen : .close)) }
+        Button(L10n.tr(archived ? "Restore stage" : closed ? "Reopen stage" : "Close stage")) {
+            Task { await load(StageChange(botId: botId, action: archived ? .restore : closed ? .reopen : .close)) }
         }.buttonStyle(.secondary).disabled(busy || (!closed && pending))
         if !details.initialDraft.isEmpty && !closed && details.bot.lastMessage == nil && store.composerDraft(for: botId).isEmpty {
             Button(L10n.tr("Restore first draft")) { store.restoreStageDraft(details); dismiss() }.buttonStyle(.secondary)

@@ -2,10 +2,12 @@ import { useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { moveInOrder } from '../lib/computer-roster'
 import { pointerDrag, type Point } from '../lib/pointer-drag'
-import { rosterGroups } from '../lib/roster-sections'
+import { rosterGroups, stageRoster } from '../lib/roster-sections'
 import { useSlide } from '../lib/slide'
 import type { RosterItem } from '../store/app-model'
 import { RosterLabel, RosterSection } from './RosterSection'
+
+import { useTr } from '../lib/use-language'
 
 interface Drag { name: string; order: string[]; at: Point; grab: Point; width: number }
 
@@ -19,13 +21,36 @@ export function SectionRoster({ computerId, items, compact, folded, order, save,
   save: (names: string[]) => void
   toggle: (name: string) => void
   onContext: (name: string, x: number, y: number) => void
-  row: (item: RosterItem) => ReactNode
+  row: (item: RosterItem, members?: RosterItem[]) => ReactNode
 }) {
   const [drag, setDrag] = useState<Drag | null>(null)
   const current = useRef<Drag | null>(null)
   const container = useRef<HTMLDivElement>(null)
   const ghost = useRef<HTMLDivElement>(null)
-  const groups = rosterGroups(items, folded, order)
+  const tr = useTr()
+  const [archives, setArchives] = useState<string[]>([])
+  const { roots, children } = stageRoster(items)
+  const groupedItems = roots.map((item) => item.bot.stage?.archivedAt && item.bot.pinned
+    ? { ...item, bot: { ...item.bot, pinned: false } } : item)
+  const groups = rosterGroups(groupedItems, folded, order)
+  /** 在项目底部提供独立的归档入口。 */
+  const projectRows = (name: string, rows: RosterItem[]) => {
+    const stages = rows.filter(({ bot }) => bot.stage && !bot.stage.archivedAt)
+    const archived = rows.filter(({ bot }) => bot.stage?.archivedAt)
+    const originals = rows.filter(({ bot }) => bot.kind !== 'group')
+    const groups = rows.filter(({ bot }) => bot.kind === 'group' && !bot.stage)
+    const open = archives.includes(name)
+    return <>
+      {stages.map((item) => row(item, children(item)))}
+      {groups.map((item) => row(item))}
+      {!!originals.length && !!(stages.length || archived.length) && !compact && <div className="stage-project-label">{tr('Project bots')}</div>}
+      {originals.map((item) => row(item))}
+      {!!archived.length && <RosterSection name={tr('Archived stages')} count={archived.length} unread={0} compact={compact}
+        folded={!open} toggle={() => setArchives((list) => open ? list.filter((key) => key !== name) : [...list, name])}>
+        {open ? archived.map((item) => row(item, children(item))) : null}
+      </RosterSection>}
+    </>
+  }
   const byName = new Map(groups.map((group) => [group.name, group]))
   const custom = groups.some((group) => group.name !== '')
   const names = groups.map((group) => group.name)
@@ -62,15 +87,15 @@ export function SectionRoster({ computerId, items, compact, folded, order, save,
       unread={group.unread} compact={compact}
       folded={drag !== null || folded.includes(name)} toggle={() => toggle(name)}
       onContext={(x, y) => onContext(name, x, y)} {...props}>
-      {preview ? null : group.items.map(row)}
+      {preview ? null : projectRows(name, group.items)}
     </RosterSection>
   }
   return <div ref={container} data-section-computer={computerId}>
-    {items.filter((item) => item.bot.pinned).map(row)}
+    {groupedItems.filter((item) => item.bot.pinned).map((item) => row(item, item.bot.stage ? children(item) : undefined))}
     {shown.map((name) => <SectionBlock key={name} name={name} lifted={drag?.name === name}>
       {name === '' && !custom ? null : label(name)}
       {name === '' ? <div className={`computer-roster-content ${drag ? 'collapsed' : ''}`} inert={drag !== null} aria-hidden={drag !== null}>
-        <div>{byName.get('')?.items.map(row)}</div>
+        <div>{projectRows('', byName.get('')?.items ?? [])}</div>
       </div> : null}
     </SectionBlock>)}
     {drag ? createPortal(<div ref={ghost} className="roster-ghost" style={{ width: drag.width,

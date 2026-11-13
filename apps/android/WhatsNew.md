@@ -7,6 +7,14 @@ released version's section; a version without one gets the PRs' "What's New: And
 else a generic "Bug fixes and improvements" line. Delete old sections.
 -->
 
+## 2.45.2
+
+### zh-Hant
+- 展開階段群組即可查看該階段的機器人。原機器人保留在專案清單，舊階段可以封存及恢復。
+
+### en-US
+- Expand stage groups to see their bots. Original bots stay in the project list, and you can archive or restore stages.
+
 ## 2.45.0
 
 ### zh-Hant

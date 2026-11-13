@@ -115,7 +115,7 @@ pub(super) fn stage_group_view(buf: &mut Buffer, area: Rect, app: &App, stage: &
 }
 
 /// 阶段交接使用聊天编辑器的多行换行规则，已确认内容可以用上下键查看。
-pub(super) fn stage_details_view(buf: &mut Buffer, area: Rect, form: &StageDetailsForm) {
+pub(super) fn stage_details_view(buf: &mut Buffer, area: Rect, form: &StageDetailsForm, stage_roster: bool) {
     use ratatui::layout::Position;
     let t = theme();
     let title = tr("Stage details");
@@ -125,7 +125,13 @@ pub(super) fn stage_details_view(buf: &mut Buffer, area: Rect, form: &StageDetai
     }
     if let Some(state) = &form.state {
         let stage = &state["bot"]["stage"];
-        let stage_state = tr(if form.closed() { "Stage closed" } else { "Stage open" });
+        let stage_state = tr(if form.archived() {
+            "Stage archived"
+        } else if form.closed() {
+            "Stage closed"
+        } else {
+            "Stage open"
+        });
         let accepted =
             tr(if stage["handoff"]["acceptedAt"].is_number() { "Stage accepted" } else { "Stage awaiting acceptance" });
         let top = format!("{} · {stage_state} · {accepted}", state["bot"]["name"].as_str().unwrap_or_default());
@@ -227,7 +233,17 @@ pub(super) fn stage_details_view(buf: &mut Buffer, area: Rect, form: &StageDetai
         );
     }
     let close = tr(if form.closed() { "Reopen stage" } else { "Close stage" });
-    let keys = format!("F2 {} · F3 {} · F4 {} · F5 {close}", tr("Incoming handoff"), tr("Refresh"), tr("Accept stage"));
+    let keys = if form.archived() {
+        format!("F2 {} · F3 {} · F9 {}", tr("Incoming handoff"), tr("Refresh"), tr("Restore stage"))
+    } else {
+        let archive = if stage_roster { format!(" · F9 {}", tr("Archive stage")) } else { String::new() };
+        format!(
+            "F2 {} · F3 {} · F4 {} · F5 {close}{archive}",
+            tr("Incoming handoff"),
+            tr("Refresh"),
+            tr("Accept stage")
+        )
+    };
     put(buf, inner.x, inner.bottom() - 2, inner.width, &keys, t.dim.patch(t.panel));
     let restore =
         if form.first_draft().is_some() { format!(" · F6 {}", tr("Restore first draft")) } else { String::new() };

@@ -61,6 +61,8 @@ export function ChatWindow() {
   const tr = useTr()
   const app = useApp()
   const welcome = useWelcomeGate()
+  const localPreview = new URLSearchParams(location.search).get('localPreview') === '1'
+  const showWelcome = !localPreview && welcome.shown
   const [accessSetup, setAccessSetup] = usePref(prefs.computerAccessSetup)
   const [showAccess, setShowAccess] = useState(false)
   const [confirmReset, setConfirmReset] = useState(false)
@@ -128,8 +130,8 @@ export function ChatWindow() {
     <div className="chat-window">
       <Summaries />
       <RefreshIndicator />
-      {!welcome.shown ? (
-        accessSetup === null ? (
+      {!showWelcome ? (
+        !localPreview && accessSetup === null ? (
           <AccessOnboarding onContinue={(ready) => finishAccess(ready, true)} onBack={welcome.back} />
         ) : showsChat ? (
           <ChatSplitView />
@@ -139,8 +141,8 @@ export function ChatWindow() {
       ) : (
         <AccountWelcomeView onContinue={welcome.finish} />
       )}
-      {!welcome.shown && accessSetup !== null && showsChat ? null : <div className="window-drag drag" />}
-      {!welcome.shown && accessSetup !== null ? <><StarPrompt /><MoveComputerPrompt /><JoinAccountPrompt /><DeleteAccountPrompt /></> : null}
+      {!showWelcome && (localPreview || accessSetup !== null) && showsChat ? null : <div className="window-drag drag" />}
+      {!localPreview && !showWelcome && accessSetup !== null ? <><StarPrompt /><MoveComputerPrompt /><JoinAccountPrompt /><DeleteAccountPrompt /></> : null}
       <Sheet open={showAccess} onClose={() => setShowAccess(false)} width={660} height={Math.min(820, window.innerHeight - 80)}>
         <ModalHeader icon="hand.raised" title={tr(`Computer access`)} />
         <ComputerAccessView onContinue={(ready) => { finishAccess(ready, false); setShowAccess(false) }} />
@@ -297,6 +299,16 @@ function ChatSplitView() {
 
   // One plain list. The lead stays in sight: no hide.
   // 群操作使用该群所属的 Host，创建成功后的选中状态由 store 发布。
+  const [archiveUndo, setArchiveUndo] = useState<{ bot: Bot; store: BotStore } | null>(null)
+  /** 通过 Host 持久化阶段归档，成功后提供撤销。 */
+  const changeArchive = async (bot: Bot, store: BotStore, archive: boolean) => {
+    try {
+      await store.stageDetails(bot.id, { action: archive ? 'archive' : 'restore' })
+      setArchiveUndo(archive ? { bot, store } : null)
+    } catch (error) {
+      app.setError(error instanceof Error ? error.message : String(error))
+    }
+  }
   const botActions = (bot: Bot, store: BotStore): ActionItem[] => [
     { title: bot.pinned ? 'Unpin' : 'Pin', icon: 'pin', action: () => store.setPinned(bot, !bot.pinned) },
     ...moveToSectionItems(bot, store, setNaming),
@@ -319,6 +331,10 @@ function ChatSplitView() {
       action: () => setEditing({ id: crypto.randomUUID(), stage: bot, store }) }] : []),
     ...(bot.stage && store.hasStageGroups ? [{ title: 'Stage details', icon: 'doc.text',
       action: () => setEditing({ id: crypto.randomUUID(), stageDetails: bot, store }) }] : []),
+    ...(bot.stage && store.hello?.stageRoster ? [{
+      title: bot.stage.archivedAt ? 'Restore stage' : 'Archive stage', icon: 'archivebox',
+      action: () => void changeArchive(bot, store, !bot.stage?.archivedAt),
+    }] : []),
     { title: 'Copy conversation ID', icon: 'square.on.square', action: () => window.codync.app.copy(bot.id) },
     ...makeLeadItems(bot, store),
     ...(bot.lead ? [] : [{ title: 'Hide from sidebar', icon: 'eye.slash', action: () => store.setHidden(bot, true) }]),
@@ -334,7 +350,12 @@ function ChatSplitView() {
       if (app.selection) roster.moveBot(app.selection, e.key === 'ArrowUp' ? -1 : 1)
       return
     }
-    const refs = roster.navigable.map((i) => i.ref)
+    // DOM 顺序包括展开的阶段成员，跳过折叠区以及动画期间不可操作的行。
+    const refs = Array.from(listRef.current?.querySelectorAll<HTMLElement>('[data-roster-row]') ?? [])
+      .flatMap((row) => {
+        const ref = parseRef(row.dataset.rosterRow ?? '')
+        return ref && !row.closest('[inert]') ? [ref] : []
+      })
     if (!refs.length) return
     e.preventDefault()
     const current = refs.findIndex((r) => sameRef(r, app.selection))
@@ -512,6 +533,11 @@ function ChatSplitView() {
         onClose={() => setConfirmDelete(null)}
       />
       <SectionNameDialog naming={naming} onClose={() => setNaming(null)} />
+      {archiveUndo && <div className="stage-archive-notice" role="status">
+        <span>{tr('Stage archived')} · {archiveUndo.bot.name}</span>
+        <button onClick={() => void changeArchive(archiveUndo.bot, archiveUndo.store, false)}>{tr('Undo')}</button>
+        <button aria-label={tr('Close')} onClick={() => setArchiveUndo(null)}>×</button>
+      </div>}
       <Dialog open={errorMessage !== null} title={tr('Something went wrong')} message={errorMessage} actions={[]} cancel="OK" onClose={() => app.clearErrors()} />
       <SignInCodeDialog />
     </div>

@@ -248,6 +248,7 @@
     "hello.rev": "number",
     "hello.signKey": "string",
     "hello.stageGroups": "bool",
+    "hello.stageRoster": "bool",
     "hello.version": "string"
   }
 }

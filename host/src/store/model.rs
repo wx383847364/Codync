@@ -68,6 +68,19 @@ pub(crate) struct StageGroup {
     pub incoming_files: Vec<crate::chat::files::SharedFile>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub closed_at: Option<i64>,
+    /// 归档保留原有关闭状态。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub archived_at: Option<i64>,
+    /// 只记录本阶段新建的机器人，避免收起原项目机器人。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub owned_members: Vec<String>,
+}
+
+impl StageGroup {
+    /// 关闭或归档的阶段可查看历史，暂停接收新工作。
+    pub(crate) fn read_only(&self) -> bool {
+        self.closed_at.is_some() || self.archived_at.is_some()
+    }
 }
 
 /// 验收记录绑定这一个快照版本；保存新版本需要再次验收。
@@ -316,6 +329,15 @@ pub struct BotRow {
     pub deleted: bool,
     pub session_id: Option<String>,
     pub read_rev: i64,
+    /// 配置内容最后一次变更时的同步版本。
+    pub config_rev: i64,
+}
+
+impl BotRow {
+    /// 判断指定同步版本的角色配置是否仍有效，允许其后发生已读和运行态更新。
+    pub(crate) fn matches_config_at(&self, source_rev: i64) -> bool {
+        (self.config_rev..=self.rev).contains(&source_rev)
+    }
 }
 
 #[cfg(test)]

@@ -155,11 +155,12 @@ import kotlinx.coroutines.launch
             val current = details
             val stage = current?.bot?.stage
             if (current != null && stage != null) {
-                val closed = stage.closedAt != null
+                val archived = stage.archivedAt != null
+                val closed = archived || stage.closedAt != null
                 val handoff = stage.handoff
                 val pending = current.work.pending.isNotEmpty()
                 val changed = markdown.trim() != current.markdown.orEmpty() || evidence.trim() != handoff?.evidence.orEmpty()
-                Text(current.bot.name + " · " + tr(if (closed) "Stage closed" else "Stage open"), style = Type.headline)
+                Text(current.bot.name + " · " + tr(if (archived) "Stage archived" else if (closed) "Stage closed" else "Stage open"), style = Type.headline)
                 Text(tr(if (handoff?.acceptedAt == null) "Stage awaiting acceptance" else "Stage accepted"), style = Type.footnote)
                 for ((status, count) in current.work.counts) Text(tr(status) + " · " + count, style = Type.footnote)
                 for (item in current.work.pending) Text(item.name + " · " + tr(item.status), style = Type.footnote)
@@ -188,12 +189,12 @@ import kotlinx.coroutines.launch
                         scope.launch { load(StageChange(botId, "saveHandoff", markdown, evidence, baseVersion)) }
                     }
                 }
-                if (handoff != null) SecondaryButton("Accept stage", enabled = !busy && !changed && handoff.evidence.isNotBlank() &&
+                if (handoff != null) SecondaryButton("Accept stage", enabled = !busy && !archived && !changed && handoff.evidence.isNotBlank() &&
                     baseVersion == handoff.file.id && handoff.acceptedAt == null && !pending && !current.handoffUnavailable) {
                     scope.launch { load(StageChange(botId, "accept", version = handoff.file.id)) }
                 }
-                SecondaryButton(if (closed) "Reopen stage" else "Close stage", enabled = !busy && (closed || !pending)) {
-                    scope.launch { load(StageChange(botId, if (closed) "reopen" else "close")) }
+                SecondaryButton(if (archived) "Restore stage" else if (closed) "Reopen stage" else "Close stage", enabled = !busy && (closed || !pending)) {
+                    scope.launch { load(StageChange(botId, if (archived) "restore" else if (closed) "reopen" else "close")) }
                 }
                 if (current.initialDraft.isNotEmpty() && !closed && current.bot.lastMessage == null && state.drafts[botId]?.text.isNullOrEmpty()) {
                     SecondaryButton("Restore first draft") {

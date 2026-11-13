@@ -12,6 +12,8 @@ import { sameRef, refKey, type RosterItem } from '../store/app-model'
 import type { BotStore } from '../store/bot-store'
 import type { useComputerRoster } from '../store/computer-roster'
 import { StoreContext, useApp } from '../store/context'
+import { Icon } from '../components/Icon'
+import { useTr } from '../lib/use-language'
 import { BotRow } from './BotRow'
 import { ComputerHeadingLabel, ComputerRosterSection } from './ComputerRosterSection'
 import { SectionRoster } from './SectionRoster'
@@ -47,6 +49,8 @@ export function BotRoster({ roster, compact, onContext, onSectionContext, openEx
   openExtensions: (computerId: string) => void
 }) {
   const app = useApp()
+  const tr = useTr()
+  const [expanded, setExpanded] = useState<string[]>([])
   const selected = app.selection
   const [agentLogos] = usePref(prefs.agentLogos)
   const [hovered, setHovered] = useState<string | null>(null)
@@ -149,7 +153,8 @@ export function BotRoster({ roster, compact, onContext, onSectionContext, openEx
     const current = drag.current
     const row = under?.closest<HTMLElement>('[data-roster-row]')
     const item = row && itemsByKey.current.get(row.dataset.rosterRow!)
-    if (!current || !row || !item || current.item.ref.computerId !== item.ref.computerId) return
+    if (!current || !row || !item || row.closest('.stage-member') || item.bot.stage?.archivedAt
+      || !!item.bot.stage !== !!current.item.bot.stage || current.item.ref.computerId !== item.ref.computerId) return
     // A row still sliding out of the way would be hit again where it was.
     if (item.bot.id === current.item.bot.id || !sameRosterGroup(item.bot, current.item.bot) || row.getAnimations().length) return
     setBotDrag({ ...current, ids: moveInOrder(current.ids, current.item.bot.id, item.bot.id) })
@@ -186,7 +191,8 @@ export function BotRoster({ roster, compact, onContext, onSectionContext, openEx
     settle.current = setTimeout(endDrag, SETTLE_MS)
   }
 
-  const row = (item: RosterItem, siblings: RosterItem[]) => {
+  /** 阶段成员沿用聊天入口，排序跟随所属群。 */
+  const row = (item: RosterItem, siblings: RosterItem[], nested = false) => {
     const key = refKey(item.ref)
     const isSelected = sameRef(item.ref, selected)
     // The held row shows as hovered, or as an empty slot while its lifted copy follows the pointer.
@@ -207,7 +213,7 @@ export function BotRoster({ roster, compact, onContext, onSectionContext, openEx
         onClick={() => app.select(item.ref)}
         onContext={(x, y) => onContext(item.bot, item.store, x, y)}
         lifted={held && lift !== null}
-        drag={pointerDrag({ start: (from) => liftRow(item, siblings, from), over: dragOver, drop, cancel: endDrag })}
+        drag={nested || item.bot.stage?.archivedAt ? undefined : pointerDrag({ start: (from) => liftRow(item, siblings, from), over: dragOver, drop, cancel: endDrag })}
       >
         <RosterBotRow item={item} compact={compact} agent={agent} />
       </RosterRow>
@@ -221,7 +227,34 @@ export function BotRoster({ roster, compact, onContext, onSectionContext, openEx
     const rows = <SectionRoster computerId={computer.id} items={ordered(computer.id, items)} compact={compact}
       folded={roster.folded} order={roster.sectionOrders[computer.id] ?? []}
       save={(names) => roster.orderSections(computer.id, names)} toggle={roster.toggleFold}
-      onContext={(name, x, y) => onSectionContext(name, store, x, y)} row={(item) => row(item, items)} />
+      onContext={(name, x, y) => onSectionContext(name, store, x, y)} row={(item, members) => {
+        // 群聊天与展开使用各自的按钮，阶段成员默认折叠。
+        if (!members) return row(item, items)
+        const key = refKey(item.ref)
+        const open = expanded.includes(key)
+        return <div key={key}>
+          <div className="stage-roster-heading">
+            <button className="stage-roster-control" aria-label={tr(open ? 'Collapse stage members' : 'Expand stage members')}
+              aria-expanded={open} onClick={() => setExpanded((keys) => open ? keys.filter((id) => id !== key) : [...keys, key])}>
+              <span className={`computer-roster-chevron ${open ? '' : 'collapsed'}`}><Icon name="chevron.down" size={9} /></span>
+            </button>
+            {row(item, items)}
+            {!compact && <button className="stage-roster-control" aria-label={tr('Stage actions')} aria-haspopup="menu" onClick={(event) => {
+              // 鼠标和键盘都把菜单打开在同一个位置。
+              const bounds = event.currentTarget.getBoundingClientRect()
+              onContext(item.bot, item.store, bounds.left, bounds.bottom)
+            }}><Icon name="ellipsis" size={15} /></button>}
+          </div>
+          <div className={`computer-roster-content ${open ? '' : 'collapsed'}`} inert={!open} aria-hidden={!open}>
+            <div className={compact ? '' : 'stage-roster-members'}>
+              {open && members.map((member) => <div className="stage-member" key={member.bot.id}>
+                {row(member, items, true)}
+                {!compact && member.bot.id === item.bot.stage?.leaderId && <span className="stage-lead-label">{tr('Lead')}</span>}
+              </div>)}
+            </div>
+          </div>
+        </div>
+      }} />
     if (!roster.grouped) return <div key={computer.id}>{notice}{rows}</div>
     return (
       <ComputerRosterSection key={computer.id} store={store} compact={compact}

@@ -22,7 +22,7 @@ impl App {
             ed.insert(&s);
         } else if !matches!(self.overlays.last(), Some(Overlay::StageGroup(_) | Overlay::StageDetails(_)))
             && let Some(key) = self.selected.clone()
-            && self.bots.get(&key).is_none_or(|bot| bot.stage.as_ref().is_none_or(|stage| stage.closed_at.is_none()))
+            && self.bots.get(&key).is_none_or(|bot| bot.stage.as_ref().is_none_or(|stage| !stage.read_only()))
         {
             self.typing = true;
             self.focus = Focus::Chat;
@@ -101,7 +101,7 @@ impl App {
             self.typing = false;
             return;
         };
-        if self.bots.get(&key).and_then(|bot| bot.stage.as_ref()).is_some_and(|stage| stage.closed_at.is_some()) {
+        if self.bots.get(&key).and_then(|bot| bot.stage.as_ref()).is_some_and(|stage| stage.read_only()) {
             self.typing = false;
             self.flash("Stage closed");
             return;
