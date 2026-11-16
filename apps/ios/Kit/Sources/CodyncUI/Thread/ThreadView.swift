@@ -36,11 +36,6 @@ public struct ThreadView: View {
     private var chat: some View {
         transcript
         .background(Palette.background)
-        .safeAreaInset(edge: .top, spacing: 0) {
-            if let bot, bot.isGroup, model.hello?.groupSessionContexts == true {
-                GroupContexts(room: bot, snapshot: $groupContexts, inspecting: $inspectingContext)
-            }
-        }
         .safeAreaInset(edge: .bottom) {
             VStack(spacing: 6) {
                 if let mismatch = model.mismatch {
@@ -74,6 +69,8 @@ public struct ThreadView: View {
     var conversation: some View {
         chrome(chat)
             .readingConversation(botId)
+            .groupContextUpdates(room: bot, model: model, snapshot: $groupContexts, failure: .constant(nil))
+            .groupContextInspection(snapshot: groupContexts, inspecting: $inspectingContext, model: model)
             .onChange(of: model.voiceCallRequest, initial: true) { _, _ in
                 if model.takeVoiceCallRequest(for: botId) { startShortcutCall() }
             }
@@ -107,7 +104,12 @@ public struct ThreadView: View {
                 }
             }
             .codyncSheet(isPresented: $editingGroup) {
-                if let bot { GroupEditorView(group: bot) }
+                if let bot {
+                    GroupEditorView(group: bot) {
+                        // 群设置开始关闭时即可忽略迟到的私聊导航。
+                        editingGroup
+                    }
+                }
             }
     }
 

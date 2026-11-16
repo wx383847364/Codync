@@ -15,6 +15,7 @@ import { MemoryCard } from '../bots/MemoryView'
 import { RoutinesView } from '../routines/RoutinesView'
 import { LibraryView } from '../library/LibraryView'
 import { DevServersSection } from './DevServersSection'
+import { GroupContextAction, GroupContextHeading, GroupContextReading, GroupContextReview, useGroupContexts } from './GroupContexts'
 import { MacChatButton } from './MacChatButton'
 import '../bots/bots.css'
 import './details-panel.css'
@@ -44,6 +45,8 @@ export function DetailsPanel({ botId, routineId, tab, setTab, editGroup, openArt
   const store = useStore()
   const bot = store.bots.get(botId) ?? null
   const group = !!bot && isGroup(bot)
+  const contexts = useGroupContexts()
+  const reviewing = group && !!contexts?.review
   useScreenViewed('bot_details')
   return (
     <div className="details-panel">
@@ -53,9 +56,9 @@ export function DetailsPanel({ botId, routineId, tab, setTab, editGroup, openArt
         <MacChatButton className="ringed" title="Close details" icon="xmark" onClick={close} />
       </div>
       <div className="details-scroll">
-        {bot ? <Identity bot={bot} /> : null}
+        {bot && !reviewing ? <Identity bot={bot} /> : null}
         {bot && group ? (
-          <GroupMembersList group={bot} editGroup={editGroup} />
+          reviewing ? <GroupContextReview /> : <GroupMembersList group={bot} editGroup={editGroup} />
         ) : (
           <>
             <TabChoice label="Conversation details" selection={tab} options={hasLibrary(store.hostVersion?.version) ? TABS : TABS.filter((t) => t.id !== 'library')} onChange={setTab} />
@@ -194,30 +197,41 @@ function ComputerUse({ bot }: { bot: Bot }) {
   )
 }
 
-/** A group's bots (Grok Bot's member list); clicking one opens its own chat. */
+/** 成员详情沿用原头像、私聊和移除入口，同一行显示用量和新开会话。 */
 function GroupMembersList({ group, editGroup }: { group: Bot; editGroup: () => void }) {
   const tr = useTr()
   const store = useStore()
+  const contexts = useGroupContexts()
   return (
-    <div className="details-members">
+    <section className="details-members" aria-label={tr(contexts ? 'Member context' : 'Members')}>
+      <GroupContextHeading />
+      {/* 旧 Host 继续提供成员管理，支持用量的 Host 为每个成员加一行读数。 */}
       {store.members(group).map((bot) => (
-        <div key={bot.id} className="member-row removable">
-          <button className="member-open press" title={tr("Open {name}'s own chat").replaceAll('{name}', () => bot.name)} onClick={() => store.setSelection(bot.id)}>
-            <BotAvatar bot={bot} size={32} />
-            <VStack as="span" gap={1} grow>
-              <span className="member-name">{bot.name}</span>
-              {isWorking(bot) ? <Text size="compactSecondary" tone="secondary" className="member-name">{tr(bot.activity || 'Working…')}</Text> : null}
-            </VStack>
-          </button>
-          {group.members.length > 1 ? <IconButton title={tr('Remove {name} from the group').replaceAll('{name}', () => bot.name)} icon="xmark" onClick={() => store.removeMember(group, bot.id)} /> : null}
+        <div key={bot.id} className={contexts ? 'group-context-card' : undefined}>
+          <div className="member-row removable">
+            <button className="member-open press" title={tr("Open {name}'s own chat").replaceAll('{name}', () => bot.name)}
+              onClick={() => { /* 点击头像或名字仍打开私聊。 */ store.setSelection(bot.id) }}>
+              <BotAvatar bot={bot} size={32} />
+              <VStack as="span" gap={1} grow>
+                <span className="member-name">{bot.name}</span>
+                {isWorking(bot) ? <Text size="compactSecondary" tone="secondary" className="member-name">{tr(bot.activity || 'Working…')}</Text> : null}
+              </VStack>
+            </button>
+            <GroupContextAction botId={bot.id} />
+            {group.members.length > 1 ? <IconButton className="member-remove"
+              title={tr('Remove {name} from the group').replaceAll('{name}', () => bot.name)} icon="xmark"
+              onClick={() => { /* 移除入口与会话操作各自独立。 */ store.removeMember(group, bot.id) }} /> : null}
+          </div>
+          <GroupContextReading bot={bot} />
         </div>
       ))}
+      {contexts?.error ? <Text size="caption" tone="secondary" role="status">{contexts.error}</Text> : null}
       <button className="member-row press" onClick={editGroup}>
         <span className="member-add-icon">
           <Icon name="plus" size={16} color="var(--secondary)" />
         </span>
-        <Text tone="secondary" className="member-name">{tr(`Add Member`)}</Text>
+        <Text tone="secondary" className="member-name">{tr('Add Member')}</Text>
       </button>
-    </div>
+    </section>
   )
 }

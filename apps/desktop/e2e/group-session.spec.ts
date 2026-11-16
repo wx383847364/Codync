@@ -403,6 +403,7 @@ test('capacity handoffs continue the original group dispatch in a new session', 
       const cwd = join(workspace, shared ? 'main' : 'isolated')
       mkdirSync(cwd)
       writeFileSync(join(cwd, 'group-script.json'), JSON.stringify({ steps: [
+        { reply: 'Below threshold', usage: { used: 14999, size: 30000 } },
         { reply: 'Pressure seeded', usage: { used: 29000, size: 30000 } },
         { reply: 'Original dispatch resumed' },
       ] }))
@@ -419,12 +420,21 @@ test('capacity handoffs continue the original group dispatch in a new session', 
       if (!shared) ids.unshift(group.id)
       const groupRow = page.locator('.roster-row').getByText(group.name, { exact: true })
       await groupRow.click()
-      await typeMessage(page, 'Seed context')
+      await expect(page.locator('.conversation').getByRole('region', { name: 'Member context' })).toHaveCount(0)
+      await page.getByRole('button', { name: `${group.name}, view details`, exact: true }).click()
+      const sidebar = page.locator('.side-panel')
+      const overview = sidebar.getByRole('region', { name: 'Member context' })
+      const card = overview.locator('.group-context-card').filter({ hasText: name })
+      await typeMessage(page, 'Seed context just below half')
+      await expect(page.getByText('Below threshold', { exact: true })).toBeVisible()
+      await expect(card.getByText('15K', { exact: true })).toBeVisible()
+      // 取整后的 15K 不能触发推荐，右侧只使用 Host 的实际窗口判断。
+      await expect(card.getByRole('button', { name: 'Open new session' })).toHaveCount(0)
+      await typeMessage(page, 'Seed context pressure')
       await expect(page.getByText('Pressure seeded', { exact: true })).toBeVisible()
+      await expect(card.getByRole('button', { name: 'Open new session' })).toBeVisible()
       await typeMessage(page, 'Continue the original group assignment')
       await expect(page.getByText('Waiting for a new session', { exact: false })).toBeVisible()
-      const overview = page.getByRole('region', { name: 'Member context' })
-      const card = overview.locator('.group-context-card').filter({ hasText: name })
       await expect(card.getByText('29K', { exact: true })).toBeVisible()
       await expect(page.locator('.group-context-chip')).toContainText('29K · 5.7%')
       await overview.getByRole('button', { name: '1M', exact: true }).click()
@@ -439,8 +449,11 @@ test('capacity handoffs continue the original group dispatch in a new session', 
         await groupRow.click()
       } else {
         await card.getByRole('button', { name: 'Open new session' }).click()
-        await page.getByRole('dialog').getByRole('textbox').fill('Edited handoff from the original dispatch')
-        await page.getByRole('button', { name: 'Confirm new session' }).click()
+        const review = sidebar.getByRole('region', { name: 'Open new session' })
+        await expect(review).toBeVisible()
+        await expect(page.locator('.conversation').getByText('Pressure seeded', { exact: true })).toBeVisible()
+        await review.getByRole('textbox').fill('Edited handoff from the original dispatch')
+        await review.getByRole('button', { name: 'Confirm new session' }).click()
       }
       await expect(page.getByText('Original dispatch resumed', { exact: true })).toHaveCount(1)
       await expect(page.getByText(/New session started. Original dispatch resumed./)).toBeVisible()

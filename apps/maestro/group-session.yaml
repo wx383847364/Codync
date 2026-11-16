@@ -42,15 +42,16 @@ onFlowComplete:
 - tapOn: "Create"
 - assertVisible: "${output.group} 1"
 - assertVisible: "Ask everyone.*"
-# 新的独立群没有执行器读数，档位由 Host 在这个群中保存。
+# 近况移到成员设置，新的独立群尚无读数。
+- assertNotVisible: "Member context"
+- tapOn: "${output.group} 1, view details"
 - assertVisible: "Member context"
 - assertVisible: "No session yet"
 - tapOn: "1M"
 - tapOn: "256K"
 - assertVisible: "512K"
 - takeScreenshot: group-session
-# 用新群的设置确认成员，并删除本流程创建的新群。
-- tapOn: "${output.group} 1, view details"
+# 在同一成员页确认名单，并删除本流程创建的新群。
 - assertVisible: ${output.alpha}
 - assertVisible: ${output.beta}
 - scrollUntilVisible:

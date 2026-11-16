@@ -186,7 +186,12 @@ private data class Editing<T>(val computerId: String, val draft: T)
         CodyncSheet(groupEditor.takeIf { !app.loading }, { groupEditor = null }) { target ->
             AnalyticsOnAppear(AnalyticsEvent.ScreenViewed(AnalyticsScreen.BotDetails))
             OnComputer(target.computerId, computers, accounts) { state, store ->
-                key(app.contextId, app.generation, target.computerId, target.draft.id) { GroupEditor(state, target.draft, store) }
+                key(app.contextId, app.generation, target.computerId, target.draft.id) {
+                    GroupEditor(state, target.draft, store) {
+                        // 关闭动画还在运行时，该设置页也已失去私聊跳转资格。
+                        groupEditor === target
+                    }
+                }
             }
         }
         CodyncSheet(editor.takeIf { !app.loading }, { editor = null }) { target ->

@@ -390,7 +390,6 @@ pub enum Click {
     /// The port in the chat's header: opens the bot's dev servers.
     DevServers,
     GroupContexts,
-    MemberSession(String),
     /// A section's label (its name): folds or unfolds it, like `z`.
     Section(String),
 }

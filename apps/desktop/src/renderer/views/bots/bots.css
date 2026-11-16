@@ -422,12 +422,12 @@ button.member-row:hover {
   min-height: 40px;
   text-align: left;
 }
-.member-row.removable > :last-child:not(.member-open) {
+.member-row.removable > .member-remove {
   opacity: 0;
   transition: opacity var(--hover);
 }
-.member-row.removable:hover > :last-child,
-.member-row.removable:focus-within > :last-child {
+.member-row.removable:hover > .member-remove,
+.member-row.removable:focus-within > .member-remove {
   opacity: 1;
 }
 .workspace-pill {

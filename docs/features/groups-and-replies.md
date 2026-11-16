@@ -107,9 +107,13 @@ share the session. The approved private summary goes into the next private user 
 the resumed dispatch carries group context. Confirmation archives the old context
 reference and resumes the original dispatch. There is no silent session reset.
 
-The group context strip reads the current execution slot's reported token count on the Host.
-A room saves its display basis independently of the agent's actual window. At 50% of the
-actual window, or when a dispatch has a capacity handoff, the member card opens the review.
+The member list reads the current execution slot's reported token count on the Host.
+The desktop shows it in the conversation's details sidebar, phones show it in group
+settings, and the terminal shows it in the members panel. A room saves its display
+basis independently of the agent's actual window. At 50% of the actual window, or when
+a dispatch has a capacity handoff, the member action opens the review. An isolated
+group can edit and confirm it in the desktop sidebar or the mobile member page.
+A shared session opens its review in the member's private chat.
 Confirmation of a proactive handoff is persisted before the actor returns to its queue.
 It applies only to the same member session after the current turn and result save, and the
 next eligible task carries the reviewed summary.

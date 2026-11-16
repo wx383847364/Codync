@@ -1,19 +1,29 @@
-.group-contexts { flex: none; padding: 0 16px 9px; margin-top: 58px; z-index: 1; background: var(--background); }
-.group-context-inner { max-width: var(--column); margin: 0 auto; }
-.group-context-heading, .group-context-title, .group-context-card-head, .group-context-bases { display: flex; align-items: center; gap: 6px; }
-.group-context-heading { justify-content: space-between; margin-bottom: 6px; }
+.group-context-heading, .group-context-bases { display: flex; align-items: center; gap: 6px; }
+.group-context-heading { justify-content: space-between; margin-bottom: 8px; }
+.group-context-title { display: flex; flex-direction: column; gap: 2px; }
+.group-context-bases { flex: none; gap: 1px; padding: 3px; border-radius: 8px; background: var(--bubble-agent); }
 .group-context-bases button, .group-context-reading, .group-context-chip { border: 0; font: inherit; color: var(--text); background: none; cursor: pointer; }
-.group-context-bases button { padding: 3px 6px; border-radius: 6px; font-size: 11px; }
-.group-context-bases button[aria-pressed="true"] { background: var(--bubble-agent); font-weight: 650; }
-.group-context-members { display: grid; grid-auto-columns: minmax(155px, 1fr); grid-auto-flow: column; overflow-x: auto; gap: 7px; }
-.group-context-card { padding: 6px 8px; background: var(--bubble-agent); border-radius: 10px; min-width: 0; }
-.group-context-card-head { min-height: 24px; white-space: nowrap; }
-.group-context-card-head .styled-button { padding: 2px 5px; min-height: 21px; font-size: 11px; flex: none; }
-.group-context-reading { display: block; text-align: left; width: 100%; padding: 3px 0 0; font-variant-numeric: tabular-nums; }
+.group-context-bases button { padding: 3px 6px; border-radius: 6px; font-size: var(--text-caption); }
+.group-context-bases button[aria-pressed="true"] { background: var(--background); color: var(--accent); font-weight: 650; }
+
+.group-context-card { box-shadow: inset 0 -1px var(--border); padding: 4px 8px 11px; margin: 0 -8px; }
+.group-context-card .member-row { gap: 6px; min-height: 40px; }
+.group-context-card .member-open { gap: 8px; }
+.group-context-card .member-row:hover { background: transparent; }
+.group-context-card:has(.group-context-action) { border-radius: 10px; background: var(--bubble-agent); box-shadow: none; }
+.group-context-card .group-context-action { flex: none; padding: 3px 7px; min-height: 25px; font-size: var(--text-caption); background: color-mix(in srgb, var(--warning) 14%, var(--background)); color: color-mix(in srgb, var(--warning) 52%, var(--text)); }
+.group-context-reading { display: block; text-align: left; width: calc(100% - 40px); margin-left: 40px; padding: 0; font-variant-numeric: tabular-nums; }
+.group-context-reading:disabled { cursor: default; }
 .group-context-reading > span:first-child { display: flex; align-items: baseline; justify-content: space-between; }
-.group-context-reading small { color: var(--secondary); font-size: 11px; }
-.group-context-meter { display: block; margin-top: 4px; height: 4px; border-radius: 8px; background: color-mix(in srgb, var(--secondary) 23%, transparent); overflow: hidden; }
-.group-context-meter > span { display: block; height: 100%; border-radius: inherit; background: var(--accent); }
+.group-context-reading small { color: var(--secondary); font-size: var(--text-caption); }
+.group-context-meter { display: block; margin-top: 5px; height: 3px; border-radius: 8px; background: color-mix(in srgb, var(--secondary) 22%, transparent); overflow: hidden; }
+.group-context-meter > span { display: block; height: 100%; border-radius: inherit; }
 .group-context-chip { font-size: 11px; padding: 2px 6px; border-radius: 6px; background: var(--bubble-agent); color: var(--secondary); font-variant-numeric: tabular-nums; }
-.conversation:has(.group-contexts) .transcript { padding-top: 5px; }
-.conversation:has(.group-contexts) .top-fade { bottom: 0; }
+
+.group-context-review { display: flex; flex-direction: column; gap: 9px; padding: 58px 20px 8px; }
+.group-context-review .group-context-back { align-self: flex-start; margin: 0 0 5px; }
+.group-context-review textarea.market-field { width: 100%; padding: 10px; border: 0; border-radius: var(--radius-m); background: var(--bubble-agent); }
+.group-context-review textarea.market-field:focus-visible { outline: 2px solid var(--outline); }
+.group-context-review-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+.group-context-review-title { margin: 0; }
+.group-context-review-member { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
