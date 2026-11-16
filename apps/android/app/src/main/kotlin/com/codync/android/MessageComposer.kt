@@ -87,7 +87,7 @@ private enum class Trailing { Interrupt, Stop, Call, Send }
  * artifact's draft, apart from the chat's. `queued`: the user's messages waiting behind the bot's work, shown on top ([QueuedMessages]).
  */
 @OptIn(ExperimentalFoundationApi::class)
-/** 维护原生输入法、光标候选与结构化身份，选人不发送。 */
+/** 维护原生输入法与光标候选，仅在空输入框内提示群接收范围。 */
 @Composable fun MessageComposer(bot: Bot, state: AppState, store: AppStore, onCall: (() -> Unit)?,
     onInterrupt: (() -> Unit)? = null, replyTo: ReplyQuote? = null, cancelReply: () -> Unit = {}, about: String? = null,
     draftKey: String = bot.id, queued: List<Entry> = emptyList()) {
@@ -215,10 +215,6 @@ private enum class Trailing { Interrupt, Stop, Call, Send }
         if (command != null) run(command) else store.sendDraft(draftKey, bot.id, typed, replyTo) { clear(); cancelReply() }
     }
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-    if ((!bot.stage?.leaderId.isNullOrEmpty() || stageLead != null) && typed.isNotEmpty() && replyTo == null && about == null) {
-        Text(stageLead?.let { tr("Default recipient · {name}").replace("{name}", it.name) } ?: tr("Choose a recipient with @"),
-            modifier = Modifier.padding(horizontal = 16.dp), style = Type.footnote, color = Palette.secondary)
-    }
     // 来源群直接展示成员保存故障，按持有内存结果的成员身份重试。
     (if (bot.kind == "group") members.filter { it.workingChat == bot.id } else listOf(bot)).filter { it.storageError != null }.forEach { member ->
         Text("${member.name}: ${member.storageError}", style = Type.footnote, color = Palette.danger)

@@ -280,8 +280,19 @@ test('stage opens with fresh roles, saves a versioned handoff and closes indepen
       expect(JSON.parse(get.get(original.id)!.config as string).members).toEqual([reviewer.id, lead.id])
       expect(JSON.parse(get.get(group.members[1])!.config as string).sharedMemory).toBe(false)
     } finally { db.close() }
-    await expect(page.getByText(`Default recipient · ${lead.name}`)).toBeVisible()
-    await expect(page.locator('.composer textarea')).toHaveValue(/Build the next phase[\s\S]*A verified result is visible/)
+    // 预填、清空、重新输入时，接收范围只作为空输入框里的占位提示。
+    const composer = page.locator('.composer textarea')
+    await expect(composer).toHaveValue(/Build the next phase[\s\S]*A verified result is visible/)
+    const initialDraft = await composer.inputValue()
+    await expect(page.locator('.composer textarea:placeholder-shown')).toHaveCount(0)
+    await expect(page.getByText(`Default recipient · ${lead.name}`, { exact: true })).toHaveCount(0)
+    await composer.clear()
+    await expect(page.locator('.composer textarea:placeholder-shown')).toHaveAttribute(
+      'placeholder', `Ask ${lead.name} · @ to choose another recipient`,
+    )
+    await composer.fill(initialDraft)
+    await expect(page.locator('.composer textarea:placeholder-shown')).toHaveCount(0)
+    await expect(page.getByText(`Default recipient · ${lead.name}`, { exact: true })).toHaveCount(0)
     expect((await api<{ entries: unknown[] }>(page, 'history', { botId: id })).entries).toEqual([])
 
     // 真正修改角色指令后，Host 仍拒绝用旧配置版本创建另一群。

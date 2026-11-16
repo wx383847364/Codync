@@ -12,10 +12,12 @@ else a generic "Bug fixes and improvements" line. Delete old sections.
 ### zh-Hant
 - 在機器人詳情查看主會話的上下文與近期 token 用量。私聊任務預計放不下時，可以帶著摘要開啟新會話，保留同一個機器人及聊天記錄。
 - 點按群組標題，在成員清單查看上下文用量，或審閱摘要以開啟新會話。等待中的原派工會自動接續。
+- 群組的預設收件者提示只在輸入框空白時顯示。
 
 ### en-US
 - See the main session's context and recent token usage in bot details. When a private task may exceed the available context, start a fresh session with a summary and keep the same bot and chat history.
 - Tap the group title to see context usage in the member list or review a handoff. Waiting assignments continue in the new session.
+- The group recipient hint appears only when the message box is empty.
 
 ## 2.45.2
 

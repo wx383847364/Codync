@@ -17,7 +17,11 @@ if (typeof CLEANUP !== 'undefined') {
     api('createBot', { name, description, backend: 'custom', command: 'unused', connectors: [], permission: 'auto' }).bot
   const alpha = member(`Mention Alpha ${run}`, 'Reviews the code')
   const beta = member(`Mention Beta ${run}`, 'Writes the docs')
-  const group = api('createBot', { name: `Mention Group ${run}`, kind: 'group', members: [alpha.id, beta.id] }).bot
+  // 群会话流程仍使用无默认接收人的群，选人流程验证指定默认接收人时的占位提示。
+  const group = api('createBot', {
+    name: `Mention Group ${run}`, kind: 'group', members: [alpha.id, beta.id],
+    ...(typeof WITH_LEAD !== 'undefined' && WITH_LEAD === 'true' ? { groupLeaderId: alpha.id } : {}),
+  }).bot
   output.made = [group.id, alpha.id, beta.id]
   output.group = group.name
   output.alpha = alpha.name
