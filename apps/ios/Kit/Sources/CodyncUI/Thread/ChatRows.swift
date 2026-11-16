@@ -7,6 +7,9 @@ import SwiftUI
 struct ChatRow: View {
     let entry: Entry
     let groupStart: Bool
+    var handoffPending = false
+    var groupContextLabel: String?
+    var inspectContext: (() -> Void)?
     /// The bot or group the chat belongs to.
     let chat: Bot?
     let openTrace: () -> Void
@@ -34,7 +37,7 @@ struct ChatRow: View {
             .padding(.top, groupStart ? 12 : 4)
         case "agent":
             VStack(alignment: .leading, spacing: 4) {
-                if chat?.isGroup == true, groupStart { AuthorLabel(botId: entry.data.author) }
+                if chat?.isGroup == true, groupStart { AuthorLabel(botId: entry.data.author, handoffPending: handoffPending, groupContextLabel: groupContextLabel, inspectContext: inspectContext) }
                 AgentBubble(entry: entry, openTrace: openTrace, reply: reply, openArtifact: openArtifact)
                 ReactionsRow(entry: entry)
                     .padding(.leading, chat?.isGroup == true ? 34 : 0)
@@ -86,6 +89,9 @@ struct AuthorLabel: View {
     let botId: String?
     /// The name for an author that isn't one of this computer's bots (a bot on another computer).
     var name: String?
+    var handoffPending = false
+    var groupContextLabel: String?
+    var inspectContext: (() -> Void)?
     @Environment(BotStore.self) private var model
 
     var body: some View {
@@ -95,8 +101,21 @@ struct AuthorLabel: View {
             Text(model.authorName(botId, fallback: name))
                 .font(.subheadline.weight(.medium))
                 .foregroundStyle(bot.map { AvatarPalette.color($0.avatarColor) } ?? Palette.secondary)
+            if let groupContextLabel, let inspectContext {
+                Button(groupContextLabel, action: inspectContext)
+                    .font(.caption.monospacedDigit()).foregroundStyle(Palette.secondary)
+                    .padding(.horizontal, 6).padding(.vertical, 2)
+                    .background(Palette.bubbleAgent, in: Capsule()).buttonStyle(.plain)
+            }
+            if handoffPending && model.hello?.groupSessionContexts != true {
+                Text(L10n.tr("Session switch needs confirmation")).font(.caption).foregroundStyle(Palette.warning)
+                    .padding(.horizontal, 7).padding(.vertical, 2)
+                    .background(Palette.warning.opacity(0.14), in: Capsule())
+            }
         }
     }
+
+
 }
 
 /// The message a reply quotes, as its first line without Markdown markers.
@@ -451,7 +470,7 @@ struct ReactionsRow: View {
 /// elsewhere in the chat skips it.
 extension ChatRow: @MainActor Equatable {
     static func == (a: Self, b: Self) -> Bool {
-        a.entry == b.entry && a.groupStart == b.groupStart && a.chat?.isGroup == b.chat?.isGroup
+        a.entry == b.entry && a.groupStart == b.groupStart && a.handoffPending == b.handoffPending && a.groupContextLabel == b.groupContextLabel && a.chat?.isGroup == b.chat?.isGroup
             && a.chat?.isWorking == b.chat?.isWorking && (a.reply == nil) == (b.reply == nil)
     }
 }

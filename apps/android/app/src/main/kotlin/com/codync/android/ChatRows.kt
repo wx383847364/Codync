@@ -9,6 +9,7 @@ import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.rememberScrollState
@@ -68,7 +69,7 @@ import kotlinx.serialization.json.jsonPrimitive
 internal sealed interface ChatItem {
     val id: String
     data class Separator(override val id: String, val at: Long) : ChatItem
-    data class Message(override val id: String, val entry: Entry, val groupStart: Boolean) : ChatItem
+    data class Message(override val id: String, val entry: Entry, val groupStart: Boolean, val handoffPending: Boolean = false, val latestAuthor: Boolean = false) : ChatItem
     data class Pending(override val id: String, val send: PendingSend, val groupStart: Boolean) : ChatItem
     /** Consecutive bot-to-bot exchanges with one peer, as one line. */
     data class Exchanges(override val id: String, val group: BotExchangeGroup) : ChatItem
@@ -108,6 +109,24 @@ internal fun chatItems(entries: List<Entry>, pending: List<PendingSend>, busy: B
             is BotExchangeGroup -> { out += ChatItem.Exchanges(id, slot); author = null }
         }
     }
+    // 从与气泡相同的可见分组找最新作者标题。
+    val headers = mutableMapOf<String, Int>()
+    val pending = mutableSetOf<String>()
+    for ((index, item) in out.withIndex()) {
+        if (item !is ChatItem.Message) continue
+        val entry = item.entry
+        if (entry.kind == "agent" && item.groupStart) entry.data.text("author")?.let { headers[it] = index }
+        for (row in (entry.data["deliveryRows"] as? JsonArray).orEmpty()) {
+            val delivery = row as? JsonObject ?: continue
+            if ((delivery["groupHandoff"] as? JsonObject)?.text("phase") == "draft") {
+                delivery.text("targetBotId")?.let(pending::add)
+            }
+        }
+    }
+    for ((authorId, index) in headers) {
+        val header = out[index] as ChatItem.Message
+        out[index] = header.copy(handoffPending = authorId in pending, latestAuthor = true)
+    }
     return out
 }
 
@@ -120,7 +139,7 @@ internal fun chatItems(entries: List<Entry>, pending: List<PendingSend>, busy: B
 /** One chat-visible entry, with what can be done to it. `reply` quotes it in the composer; `addFallback` opens a bot's fallbacks;
  *  `openArtifact` opens an artifact card's artifact. */
 /** 呈现群投递聚合卡和原有聊天消息，重试使用投递身份。 */
-@Composable internal fun ChatRow(entry: Entry, groupStart: Boolean, chat: Bot?, state: AppState, store: AppStore,
+@Composable internal fun ChatRow(entry: Entry, groupStart: Boolean, handoffPending: Boolean, groupContextLabel: String?, inspectContext: () -> Unit, chat: Bot?, state: AppState, store: AppStore,
     openTrace: () -> Unit, reply: (() -> Unit)?, connect: ConnectionRequestActions, addFallback: (Bot) -> Unit, openArtifact: (OpenArtifact) -> Unit, saveSharedFile: (Entry, SharedFile) -> Unit) {
     val group = chat?.kind == "group"
     when (entry.kind) {
@@ -131,7 +150,7 @@ internal fun chatItems(entries: List<Entry>, pending: List<PendingSend>, busy: B
         }
         "agent" -> Column(Modifier.fillMaxWidth().padding(top = if (groupStart) 12.dp else 4.dp).animateContentSize(Motion.layoutSize),
             verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            if (group && groupStart) AuthorLabel(entry.data.text("author"), state)
+            if (group && groupStart) AuthorLabel(entry.data.text("author"), state, handoffPending = handoffPending, contextLabel = groupContextLabel, inspectContext = inspectContext)
             AgentBubble(entry, state, store, openTrace, reply, openArtifact, saveSharedFile)
             Box(Modifier.padding(start = if (group) 34.dp else 0.dp)) { ReactionsRow(entry, state, store) }
         }
@@ -159,11 +178,19 @@ internal fun chatItems(entries: List<Entry>, pending: List<PendingSend>, busy: B
 internal class ConnectionRequestActions(val openApp: (String, ComposioApp) -> Unit, val install: (String, MarketConnector) -> Unit)
 
 /** Who wrote a message: their avatar and name in their color, or [name] for a bot on another computer. */
-@Composable internal fun AuthorLabel(botId: String?, state: AppState, name: String? = null) {
+@Composable internal fun AuthorLabel(botId: String?, state: AppState, name: String? = null, handoffPending: Boolean = false, contextLabel: String? = null, inspectContext: (() -> Unit)? = null) {
     val bot = state.bots.firstOrNull { it.id == botId }
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         if (bot != null) CharacterAvatar(bot.avatarShape, bot.avatarColor, 26.dp, customImage = bot.customIcon?.dataUrl, customTinted = bot.customIcon?.tinted == true)
         Text(state.authorName(botId, name), style = Type.subheadline.medium, color = bot?.let { AvatarPalette.tint(it.avatarColor) } ?: Palette.secondary)
+        if (contextLabel != null && inspectContext != null) {
+            Text(contextLabel, Modifier.clip(CircleShape).background(Palette.bubbleAgent).clickable(onClick = inspectContext)
+                .padding(horizontal = 6.dp, vertical = 2.dp), style = Type.caption, color = Palette.secondary)
+        }
+        if (handoffPending && state.hello?.get("groupSessionContexts")?.jsonPrimitive?.booleanOrNull != true) {
+            Text(tr("Session switch needs confirmation"), Modifier.background(Palette.warning.copy(alpha = 0.14f), CircleShape).padding(horizontal = 7.dp, vertical = 2.dp),
+                style = Type.caption, color = Palette.warning)
+        }
     }
 }
 

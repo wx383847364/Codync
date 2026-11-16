@@ -7,7 +7,7 @@ use crate::chat::context::{self, Snapshot};
 use crate::chat::memory;
 use crate::hub::BotStatus;
 use crate::remote::push::{self, AlertKind};
-use crate::store::{EntryKind, Lane, now_ms};
+use crate::store::{Lane, now_ms};
 use anyhow::{Result, anyhow};
 use serde_json::json;
 use std::time::{Duration, Instant};
@@ -97,12 +97,10 @@ impl Actor {
             },
             |e| e.turn,
         );
-        for id in entry_ids {
-            // Bot-message notices belong to `chat::team`; writing them here would race its final status.
-            if let Some(mut e) = self.hub.store.entry(id).filter(|e| e.kind == EntryKind::User.as_str()) {
-                e.data["status"] = json!(crate::chat::team::RequestStatus::Sent);
-                self.hub.set_entry(id, &e.data);
-            }
+        // 等会话准备完成再标记交接任务已派发，Host 重启仍可恢复待发送内容。
+        let carries_handoff = !hidden && self.handoff.is_some();
+        if !carries_handoff {
+            self.mark_user_messages(entry_ids);
         }
         self.lane = lane.clone();
         self.turn = Some(turn);
@@ -167,7 +165,8 @@ impl Actor {
         // persisted notices are marked interrupted instead of silently repeating work. Nor is a call's opening (the
         // call is over). A reply turn is resumed.
         self.set_inflight(
-            self.group_compaction.is_none()
+            !carries_handoff
+                && self.group_compaction.is_none()
                 && self.active_request.is_none()
                 && self.active_delivery.is_none()
                 && self.active_routine.is_none()
@@ -246,9 +245,20 @@ impl Actor {
             }
         }
         let sid = self.turn_session.clone().ok_or_else(|| anyhow!("no session"))?;
+        // 普通群共用会话，但群派工不会收到用户刚刚编辑的私聊摘要。
+        let private_handoff_key = (from_user && lane == Lane::main(&self.cfg.id))
+            .then(|| crate::store::deliveries::handoff::private_key(&self.cfg.id));
+        let private_handoff = private_handoff_key.as_deref().and_then(|key| self.hub.store.kv_get(key));
+        let private_prompt = private_handoff.as_ref().map(|summary| format!(
+            "<session-handoff>\nThe user's private handoff from the previous session.\n{summary}\n</session-handoff>\n\n{text}"
+        ));
+        self.private_group_summary_key = private_handoff.as_ref().and(private_handoff_key);
+        let text = private_prompt.as_deref().unwrap_or(text);
         let prompt =
             if std::mem::take(&mut self.raw_prompt) { text.to_owned() } else { self.compose(&sid, text).await? };
         self.hub.set_runtime(&self.id(), |r| r.activity = "Thinking…".into());
+        self.retire_delivery_session(&sid).await;
+        // 归档可能等待执行器。发送原任务前再检查是否被用户停止或撤销。
         self.commit_delivery_start()?;
         let acp = self.conn.as_ref().ok_or_else(|| anyhow!("agent not running"))?.acp.clone();
         let params = json!({
@@ -264,9 +274,23 @@ impl Actor {
             // 维护没有用户或业务来源，也不能成为文件记忆变更的归属回合。
             memory::turns::begin_turn(&self.cfg.id, &sid, self.hub.runtime(&self.cfg.id).message);
         }
+        if carries_handoff {
+            // 写入 ACP 前为防止未知执行被自动重放，按普通 in-flight 回合处理。
+            self.mark_user_messages(entry_ids);
+            self.set_inflight(true);
+        }
         // Written before this returns, so a Stop right after is sent after the prompt.
         let answer = acp.send("session/prompt", params).await?;
         self.usage_event(crate::store::turn_usage::UsageEvent::Prompt);
+        if let Some(active) = &self.active_delivery {
+            if let Some(revision) = &active.member_summary_revision
+                && let Err(error) =
+                    self.hub.store.consume_member_group_summary(&self.cfg.id, &active.delivery.room_id, revision)
+            {
+                tracing::warn!(%error, "couldn't acknowledge the member handoff summary");
+            }
+            self.delivery_handoff_sent(&active.delivery.id);
+        }
         if !self.turn_memory_revision.is_empty()
             && let Err(error) = memory::mark_announced(&self.hub.store, &self.cfg.id, &sid, &self.turn_memory_revision)
         {

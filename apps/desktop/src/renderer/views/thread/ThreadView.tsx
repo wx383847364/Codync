@@ -1,16 +1,16 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { draftOf, isGroup, isWorking, isWorkingIn, type Bot, type BotDraft, type Entry } from '@shared/models'
 import { BotAvatar, GroupAvatar } from '../../components/Avatar'
-import { Spinner } from '../../components/Controls'
+import { CardForm, Spinner } from '../../components/Controls'
 import { Icon } from '../../components/Icon'
-import { Sheet, usePresence } from '../../components/Overlay'
+import { ModalHeader, Sheet, SheetPage, usePresence } from '../../components/Overlay'
 import { HStack, IconSlot, Spacer } from '../../components/Stack'
 import { Text } from '../../components/Text'
 import { prefs, usePref } from '../../lib/prefs'
 import { connectedThrough } from '../../lib/relay-copy'
 import { useTr } from '../../lib/use-language'
 import { useScreenViewed } from '../../store/analytics'
-import { useStore } from '../../store/context'
+import { useApp, useStore } from '../../store/context'
 import { UpdateNeededCard } from '../UpdateNeededCard'
 import { buildChat, rowIn, useArrivals, type ChatItem } from './chat-items'
 import { BotConversationView, BotMessageRow } from './BotConversation'
@@ -18,6 +18,8 @@ import { CallConversationView, CallLineRow } from '../call/CallRows'
 import { hidingCalls } from '@shared/calls'
 import { devServerSummary } from '@shared/dev-servers'
 import { ChatRow, TimeSeparator } from './ChatRows'
+import { GroupContexts } from './GroupContexts'
+import { HandoffNotice } from './HandoffNotice'
 import { DevServerTitle } from './DevServersSection'
 import { WorkingTransition } from './WorkingTransition'
 import { RoutineNotice } from './RoutineNotice'
@@ -193,7 +195,9 @@ export const ThreadView = memo(function ThreadView({ botId }: { botId: string })
           </button>
         </div>
         {/* An update card takes the composer's place, so there's nothing to reply with. */}
+        <GroupContexts room={bot}>
         <Transcript botId={botId} openTrace={openTrace} onReply={store.mismatch ? undefined : setReplyTo} openRoutine={presentRoutine} openAgent={presentAgent} openBotChat={setBotChat} openArtifact={openArtifact} openCall={setCallLine} />
+        </GroupContexts>
         <div className="composer-dock" ref={dock}>
           <div className="composer-fade" />
           {store.mismatch ? (
@@ -296,6 +300,8 @@ const PAGE = 40
 // 呈现当前会话的消息、工作状态和滚动位置。
 const Transcript = memo(function Transcript({ botId, openTrace, onReply, openRoutine, openAgent, openBotChat, openArtifact, openCall }: { botId: string; openTrace: () => void; onReply?: (e: Entry) => void; openRoutine: (id: string | null) => void; openAgent: (botId: string) => void; openBotChat: (peerId: string) => void; openArtifact: (artifactId: string) => void; openCall: (lineId: string) => void }) {
   const store = useStore()
+  const app = useApp()
+  const selectedEntry = app.selection?.botId === botId && app.selectedEntry
   const tr = useTr()
   const bot = store.bots.get(botId) ?? null
   // 成员事件和群汇总分别到达，实时标签直接跟随本群成员的工作状态。
@@ -320,6 +326,8 @@ const Transcript = memo(function Transcript({ botId, openTrace, onReply, openRou
   const found = firstShown ? all.findIndex((i) => i.id === firstShown) : -1
   const start = found >= 0 ? found : Math.max(0, all.length - PAGE)
   const items = all.slice(start)
+  const focused = useRef<string | null>(null)
+  const [privateReview, setPrivateReview] = useState<Entry | null>(null)
   const more = start > 0 || store.canLoadOlder(botId)
   // Following the newest message, or reading history: scrolling up releases the bottom,
   // arriving back at the end (or Jump to latest) restores it. Content growth alone never changes it.
@@ -369,6 +377,40 @@ const Transcript = memo(function Transcript({ botId, openTrace, onReply, openRou
     } else if (followingRef.current) toBottom()
   })
 
+  // 普通群导航后直接定位对应摘要，旧私聊卡也可从已加载历史中展开。
+  useLayoutEffect(() => {
+    if (!selectedEntry || focused.current === selectedEntry) return
+    const index = all.findIndex(item => item.id === selectedEntry)
+    if (index < 0) return
+    if (index < start) {
+      setFirstShown(all[index]!.id)
+      return
+    }
+    const card = document.getElementById(selectedEntry)
+    if (card) {
+      focused.current = selectedEntry
+      card.scrollIntoView({ block: 'center' })
+      card.focus({ preventScroll: true })
+    }
+  }, [selectedEntry, all, start])
+
+  // 私聊历史尚未加载时只读这张指定的卡，避免用单条旧记录移动历史分页起点。
+  useEffect(() => {
+    if (!selectedEntry || focused.current === selectedEntry || all.some(item => item.id === selectedEntry)) return
+    let valid = true
+    void store.ready().then(client => client.call<{ entry: Entry }>('privateGroupHandoff', {
+      botId, entryId: selectedEntry,
+    })).then(({ entry }) => {
+      if (valid && focused.current !== selectedEntry) {
+        focused.current = selectedEntry
+        setPrivateReview(entry)
+      }
+    }).catch((error: unknown) => {
+      if (valid) store.setError(String(error instanceof Error ? error.message : error))
+    })
+    return () => { valid = false }
+  }, [selectedEntry, all, botId, store])
+
   // A message the user sends brings the chat back to the newest.
   const lastIsUser = last?.kind === 'entry' && last.entry.kind === 'user'
   useEffect(() => {
@@ -386,6 +428,9 @@ const Transcript = memo(function Transcript({ botId, openTrace, onReply, openRou
     observer.observe(el)
     return () => observer.disconnect()
   }, [])
+
+  const handoff = privateReview
+    ? store.allEntries(botId).find(entry => entry.id === privateReview.id) ?? privateReview : null
 
   return (
     <div className="transcript-frame">
@@ -411,7 +456,7 @@ const Transcript = memo(function Transcript({ botId, openTrace, onReply, openRou
           ) : null}
           {items.length === 0 && bot ? <div className="transcript-intro">{isGroup(bot) ? <GroupIntroCard group={bot} /> : <IntroCard bot={bot} />}</div> : null}
           {items.map((item) => (
-            <div key={item.id} className={arrivals.has(item.id) ? rowIn(item) : undefined}>
+            <div key={item.id} id={item.kind === 'entry' && item.entry.data.handoff ? item.id : undefined} tabIndex={item.kind === 'entry' && item.entry.data.handoff ? -1 : undefined} className={arrivals.has(item.id) ? rowIn(item) : undefined}>
               <Row item={item} chat={bot} openTrace={openTrace} onReply={onReply} openRoutine={openRoutine} openAgent={openAgent} openBotChat={openBotChat} openArtifact={openArtifact} openCall={openCall} />
             </div>
           ))}
@@ -419,6 +464,12 @@ const Transcript = memo(function Transcript({ botId, openTrace, onReply, openRou
           <div className="chat-end" />
         </div>
       </div>
+      <Sheet open={handoff != null} onClose={() => setPrivateReview(null)}>
+        {handoff?.data.handoff ? <SheetPage>
+          <ModalHeader title={tr('Open new session')} />
+          <CardForm><HandoffNotice entry={handoff} card={handoff.data.handoff} /></CardForm>
+        </SheetPage> : null}
+      </Sheet>
       {jump.mounted ? (
         <div className={`jump-to-latest ${jump.shown ? 'shown' : ''}`} inert={!jump.shown}>
           <MacChatButton
@@ -445,7 +496,7 @@ function Row({ item, chat, openTrace, onReply, openRoutine, openAgent, openBotCh
   if (e.kind === 'notice' && e.data.routineId) return <RoutineNotice entry={e} open={() => openRoutine(e.data.routineId!)} />
   if (e.kind === 'notice' && e.data.call) return <div className="chat-row notice"><CallLineRow entry={e} open={() => openCall(e.id)} /></div>
 
-  return <ChatRow entry={e} groupStart={item.groupStart} chat={chat} openTrace={openTrace} onReply={onReply} openAgent={openAgent} openArtifact={openArtifact} />
+  return <ChatRow entry={e} groupStart={item.groupStart} groupHandoffCard={item.groupHandoffCard} latestAuthor={item.latestAuthor} chat={chat} openTrace={openTrace} onReply={onReply} openAgent={openAgent} openArtifact={openArtifact} />
 }
 
 /** The start of an empty group chat: who's in it and how the room works. */

@@ -42,6 +42,7 @@ pub(super) fn schema(c: &Connection) -> Result<()> {
             outcome TEXT NOT NULL DEFAULT 'running', prompts INTEGER NOT NULL DEFAULT 0,
             sessions INTEGER NOT NULL DEFAULT 0, processes INTEGER NOT NULL DEFAULT 0, reported TEXT
         );
+        CREATE INDEX IF NOT EXISTS turn_usage_bot ON turn_usage_attempts(bot_id, started_at DESC);
         CREATE INDEX IF NOT EXISTS turn_usage_room ON turn_usage_attempts(room_id, backend, model, source);
         CREATE INDEX IF NOT EXISTS turn_usage_delivery ON turn_usage_attempts(delivery_id) WHERE delivery_id IS NOT NULL;",
     )?;
@@ -98,6 +99,26 @@ impl Store {
             [now_ms()],
         )?;
         Ok(())
+    }
+
+    /// 按机器人读取最近五次真正发过 prompt 的工作尝试，重试和回退分别记录。
+    pub(crate) fn recent_bot_usage(&self, bot: &str) -> Result<Vec<Value>> {
+        let db = self.db.locked();
+        let mut query = db.prepare(
+            "SELECT backend, model, id, started_at, reported FROM turn_usage_attempts
+             WHERE bot_id = ? AND prompts > 0 AND finished_at IS NOT NULL AND source != 'maintenance'
+             ORDER BY started_at DESC, rowid DESC LIMIT 5",
+        )?;
+        let attempts = query.query_map([bot], |row| {
+            let reported = row.get::<_, Option<String>>(4)?.and_then(|value| serde_json::from_str::<Value>(&value).ok());
+            let rows = TOKEN_FIELDS
+                .iter()
+                .map(|(field, label)| json!({"label": label, "value": reported.as_ref().and_then(|v| v[*field].as_u64())}))
+                .collect::<Vec<_>>();
+            Ok(json!({"backend": row.get::<_, String>(0)?, "model": row.get::<_, Option<String>>(1)?,
+                "id": row.get::<_, String>(2)?, "at": row.get::<_, i64>(3)?, "rows": rows}))
+        })?;
+        Ok(attempts.collect::<rusqlite::Result<_>>()?)
     }
 
     /// 每个阶段只汇总自己的尝试，缺报、历史缺口及无法归属的尝试分别给出。

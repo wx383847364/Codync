@@ -48,6 +48,14 @@ export interface StageUsage {
     rows: { label: string; value: number | null; reports?: number; attempts?: number }[] }[]
 }
 
+/** 主会话占用和同一机器人的近期执行尝试，null 表示执行器缺报。 */
+export interface BotSessionUsage {
+  hasSession: boolean
+  used: number | null
+  size: number | null
+  attempts: { id: string; backend: string; model: string | null; at: number; rows: { label: string; value: number | null }[] }[]
+}
+
 export interface Bot {
   customIcon?: import('./custom-icons').CustomIcon
   id: string
@@ -126,6 +134,7 @@ export interface Bot {
   activity: string
   storageError?: string | null
   pendingNewSession?: boolean
+  mainSessionRevision?: number
   startedAt?: number | null
   workingChat?: string | null
   unread: number
@@ -133,7 +142,7 @@ export interface Bot {
   lastAt: number
 }
 
-/** Lenient: a host that is a little newer or older than the app still yields a usable bot. */
+/** 兼容不同版本的 Host，并保留主会话版本供详情刷新。 */
 export function normalizeBot(raw: Partial<Bot> & { id: string }): Bot {
   const createdAt = raw.createdAt ?? 0
   return {
@@ -185,6 +194,7 @@ export function normalizeBot(raw: Partial<Bot> & { id: string }): Bot {
     rev: raw.rev ?? 0,
     status: raw.status ?? 'idle',
     activity: raw.activity ?? '',
+    mainSessionRevision: raw.mainSessionRevision,
     startedAt: raw.startedAt ?? null,
     workingChat: raw.workingChat ?? null,
     unread: raw.unread ?? 0,
@@ -316,9 +326,9 @@ export interface Compaction {
 
 /** What a new conversation carries when the bot's own chat starts over; editable until the next message sends it. */
 export interface HandoffCard {
-  /** draft · sent · kept */
+  /** draft · approved · sent · kept */
   status: string
-  /** cold · away · full */
+  /** cold · away · full · capacity · requested */
   reason?: string
   text?: string
 }
@@ -334,7 +344,10 @@ export interface AgentSwitch {
   carried: string | null
 }
 
-export interface DeliveryRow { deliveryId: string; targetBotId: string; status: string; detail: string }
+export interface DeliveryRow {
+  deliveryId: string; targetBotId: string; status: string; detail: string
+  groupHandoff?: { phase: string; shared: boolean } | null
+}
 
 export interface EntryData {
   deliveryAttempt?: number
@@ -566,6 +579,8 @@ export interface Hello {
   groupMemberPicker?: boolean
   optionalStageSetup?: boolean
   stageRoster?: boolean
+  botSessionUsage?: boolean
+  groupSessionContexts?: boolean
   /** 主机能按附件身份校验原图尺寸，不包含正文路径读取能力。 */
   fileImageInfo?: boolean
   iconsRevision?: number

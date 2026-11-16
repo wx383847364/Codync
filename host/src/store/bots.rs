@@ -152,6 +152,12 @@ impl Store {
             "DELETE FROM kv WHERE k GLOB ?1 OR k GLOB ?2",
             [format!("fallback.*.{id}"), format!("fallback.*.{id}.*")],
         )?;
+        // 会话占用与原会话一起保留，删除机器人时移除其快照。
+        c.execute(
+            "DELETE FROM kv WHERE k GLOB ?1 OR k GLOB ?2",
+            [format!("session.scoped-usage.{id}.*"), format!("group.member-session.{id}.*")],
+        )?;
+        c.execute("DELETE FROM kv WHERE k=?1", [format!("group.context-basis.{id}")])?;
         // ponytail: snapshots of replaced sessions stay until the bot goes; prune by session if kv grows.
         c.execute(
             "DELETE FROM kv WHERE k GLOB ?1 OR k GLOB ?2",

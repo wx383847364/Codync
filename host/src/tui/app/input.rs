@@ -223,6 +223,11 @@ impl App {
             KeyCode::Char('u') if ctrl => self.scroll_focused(half),
             KeyCode::Char('q') => self.quit = true,
             KeyCode::Char('C') => self.open_connection(),
+            KeyCode::Char('W')
+                if self.group_session_contexts && !roster_page && self.bot().is_some_and(|b| b.group) =>
+            {
+                self.open_group_contexts();
+            }
             KeyCode::Char('V') => {
                 // 来源群恢复持有内存结果的成员，私聊保留当前成员入口。
                 if let Some(bot) = self.bot() {
@@ -460,6 +465,12 @@ impl App {
                     Some(Click::Steps) => self.toggle_steps(),
                     Some(Click::BotChat(entry)) => self.open_bot_chat(&entry),
                     Some(Click::DevServers) => self.open_dev_servers(),
+                    Some(Click::GroupContexts) => self.open_group_contexts(),
+                    Some(Click::MemberSession(bot)) => {
+                        if let Some(room) = self.selected.clone() {
+                            self.open_member_session(room, bot);
+                        }
+                    }
                     Some(Click::Section(name)) => {
                         self.click_section(&name);
                         self.focus = Focus::Roster;

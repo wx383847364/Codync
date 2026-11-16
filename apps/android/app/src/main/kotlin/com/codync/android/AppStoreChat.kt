@@ -10,14 +10,18 @@ import kotlinx.serialization.json.*
 // Conversations: opening a bot, history, sending and its retries.
 
 /** Opens a chat on this computer (the account closes any other computer's) or, with null, closes it. */
-fun AppStore.openBot(id: String?) {
+fun AppStore.openBot(id: String?, groupHandoffEntry: String? = null) {
     if (id == null && state.value.selectedBot == null) return
     // Leaving a chat drops the call "Talk to Codync" asked for there, waiting or not (iOS `cancelVoiceCallRequest`).
     val leaving = id != state.value.selectedBot
     if (leaving) callWait?.cancel()
-    mutableState.update { it.copy(selectedBot = id, trace = false, callRequest = it.callRequest.takeUnless { leaving }) }
+    mutableState.update { it.copy(selectedBot = id, trace = false, callRequest = it.callRequest.takeUnless { leaving },
+        privateGroupHandoff = if (id != null && groupHandoffEntry != null) PrivateGroupHandoffTarget(id, groupHandoffEntry) else null) }
     if (id != null) { opened(this); acknowledgeVisible() }
 }
+/** 精确私聊卡打开后消费导航请求。 */
+internal fun AppStore.dismissPrivateGroupHandoff() { mutableState.update { it.copy(privateGroupHandoff = null) } }
+
 fun AppStore.showTrace(show: Boolean) { mutableState.update { it.copy(trace = show) } }
 
 /**
@@ -212,6 +216,9 @@ internal fun AppStore.unqueue(entry: Entry) {
  *  (removed, or sent because the agent had taken it first). */
 internal fun withRemovals(entries: List<Entry>, pending: Map<String, Long>): List<Entry> =
     entries.filterNot { it.isRemoved || pending[it.id] == it.rev }
+
+/** 确认后用交接摘要执行已经排队的任务。 */
+internal fun AppStore.startHandoff(entry: Entry) = command("startHandoff", body("entryId" to entry.id), "handoff:" + entry.id)
 
 /** Carries on with the bot's current conversation instead of the handoff. */
 internal fun AppStore.keepConversation(entry: Entry) = command("keepConversation", body("entryId" to entry.id), "handoff:" + entry.id)

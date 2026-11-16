@@ -45,6 +45,7 @@ impl Hub {
         v["workingChat"] = rt.lane.as_ref().map(|l| l.chat.clone()).into();
         v["fastModeSupport"] = rt.fast_mode.as_str().into();
         if !cfg.is_group() {
+            v["mainSessionRevision"] = rt.main_session_revision.into();
             v["agentStep"] = json!(rt.agent_step);
             v["resting"] = json!(crate::agent::fallback::resting(&self.store, cfg, crate::store::now_ms()));
         }

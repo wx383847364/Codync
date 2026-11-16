@@ -66,9 +66,12 @@ impl Actor {
     /// 按当前会话槽保存 ACP 身份，主会话与独立会话各写自己的位置。
     pub(super) fn set_session(&mut self, slot: Option<&str>, sid: Option<&str>) {
         let Some(slot) = slot else {
+            let changed = self.session_id.as_deref() != sid;
             self.session_id = sid.map(str::to_owned);
-            if let Err(error) = self.hub.store.set_session(&self.cfg.id, sid) {
-                tracing::warn!(bot = %self.cfg.id, error = format!("{error:#}"), "couldn't store the session");
+            match self.hub.store.set_session(&self.cfg.id, sid) {
+                Ok(()) if changed => self.main_session_changed(),
+                Ok(()) => {}
+                Err(error) => tracing::warn!(bot = %self.cfg.id, %error, "couldn't store the session"),
             }
             return;
         };
@@ -82,7 +85,14 @@ impl Actor {
         };
         if let Err(error) = stored {
             tracing::warn!(bot = %self.cfg.id, error = format!("{error:#}"), "couldn't store the separate session");
+        } else if crate::store::slotted_group(slot).is_some() {
+            self.hub.emit_bot(&self.cfg.id);
         }
+    }
+
+    /// 变更成功落库后通知详情刷新，不向客户端公开 ACP 会话 ID。
+    pub(super) fn main_session_changed(&self) {
+        self.hub.set_runtime(&self.cfg.id, |runtime| runtime.main_session_revision += 1);
     }
 
     /// 列出已保存或加载的独立会话槽，用于配置更改或切换 agent。
@@ -179,7 +189,7 @@ impl Actor {
         self.hub.set_runtime(&self.id(), |r| r.activity = "Starting agent…".into());
         let mut env = env.to_vec();
         own_memory::apply(&self.cfg, &mut env, &mut command).await;
-        let conn = start_agent(&command[0], &self.cfg.cwd, &env, budget, || {
+        let mut conn = start_agent(&command[0], &self.cfg.cwd, &env, budget, || {
             // 已启动的进程即使随后握手失败也属于这次尝试。
             self.usage_event(crate::store::turn_usage::UsageEvent::Process);
         })
@@ -187,6 +197,7 @@ impl Actor {
         .inspect_err(|e| {
             tracing::info!(command = command[0].as_str(), error = format!("{e:#}"), "agent failed to start");
         })?;
+        conn.backend.clone_from(&self.cfg.backend);
         self.hub.dev_servers.agent_started(&self.cfg.id, &conn.acp, &self.cfg.backend, &command[0]);
         Ok(conn)
     }
@@ -379,6 +390,12 @@ impl Actor {
         conn.renamed.insert(sid.clone(), renamed);
         let options = select_model(&conn.acp, &res, &sid, &self.cfg).await?;
         self.note_options(&sid, &options, Listing::Session);
+        // 新进程可能复用已出现过的 session ID，只有会话重载可以沿用旧用量。
+        self.context_usage_at.remove(&sid);
+        self.hub.store.reset_scoped_context(&self.cfg.id, &self.cfg.backend, slot, &sid)?;
+        if let Some(active) = &self.active_delivery {
+            self.hub.store.register_group_replacement(&active.delivery.id, &self.cfg.backend, slot, &sid)?;
+        }
         self.set_session(slot, Some(&sid));
         self.session_fresh = true;
         self.turn_session = Some(sid.clone());

@@ -91,6 +91,10 @@ pub struct App {
     pub(in crate::tui) optional_stage_setup: bool,
     pub(in crate::tui) stage_roster: bool,
     stage_groups: bool,
+    pub(in crate::tui) bot_session_usage: bool,
+    pub(in crate::tui) group_session_contexts: bool,
+    pub(in crate::tui) group_contexts: Option<(String, Value)>,
+    context_checked: Option<(String, Instant)>,
     pub selected: Option<String>,
     pub focus: Focus,
     pub typing: bool,
@@ -199,6 +203,10 @@ impl App {
             optional_stage_setup: false,
             stage_roster: false,
             stage_groups: false,
+            bot_session_usage: false,
+            group_session_contexts: false,
+            group_contexts: None,
+            context_checked: None,
             selected: None,
             focus: Focus::Roster,
             typing: false,
@@ -415,6 +423,19 @@ impl App {
             if self.reading.insert(id.clone()) {
                 self.call("markRead", json!({"botId": id}), After::Nothing);
             }
+        }
+        // 终端仅刷新当前可见群，读取结果不会进入聊天历史。
+        if self.online
+            && self.group_session_contexts
+            && self.chat_visible()
+            && let Some(id) = self.bot().filter(|b| b.group).map(|b| b.id.clone())
+            && self
+                .context_checked
+                .as_ref()
+                .is_none_or(|(room, at)| room != &id || now.duration_since(*at) >= Duration::from_secs(2))
+        {
+            self.context_checked = Some((id.clone(), now));
+            self.call("groupSessionContexts", json!({"roomId":id}), After::GroupContexts(id));
         }
         if self.chat_top && self.chat_visible() {
             self.load_history();

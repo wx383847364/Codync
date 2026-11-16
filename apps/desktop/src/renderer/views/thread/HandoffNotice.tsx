@@ -41,11 +41,13 @@ export function HandoffNotice({ entry, card }: { entry: Entry; card: HandoffCard
   const [expanded, setExpanded] = useState(false)
   const [draft, setDraft] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
+  const groupCapacity = card.reason === 'groupCapacity'
+  const needsConfirmation = card.reason === 'capacity' || groupCapacity
   const carried = <pre className="handoff-text handoff-carried">{card.text}</pre>
   if (card.status !== 'draft') {
     return (
       <div className="handoff-folded">
-        <Disclosure expanded={expanded} onToggle={() => setExpanded(!expanded)} label={<Line icon="arrow.triangle.branch" text={entry.data.text} />}>
+        <Disclosure expanded={expanded} onToggle={() => setExpanded(!expanded)} label={<Line icon="arrow.triangle.branch" text={entry.data.text ? tr(entry.data.text) : undefined} />}>
           {carried}
         </Disclosure>
       </div>
@@ -59,13 +61,14 @@ export function HandoffNotice({ entry, card }: { entry: Entry; card: HandoffCard
   }
   return (
     <div className="handoff-card">
-      <Line icon="arrow.triangle.branch" text={entry.data.text} />
+      <Line icon="arrow.triangle.branch" text={entry.data.text ? tr(entry.data.text) : undefined} />
       <Disclosure expanded={expanded} onToggle={() => setExpanded(!expanded)} label={<Text size="footnote" weight="medium">{tr(`What it carries`)}</Text>}>
         {carried}
       </Disclosure>
       <div className="handoff-actions">
         {store.answering.has(entry.id) ? <Spinner /> : <>
-          <Button kind="secondary" onClick={() => store.keepConversation(entry)}>Keep this conversation</Button>
+          {needsConfirmation ? <Button onClick={() => store.startHandoff(entry)}>Start new session with summary</Button> : null}
+          {!groupCapacity ? <Button kind="secondary" onClick={() => store.keepConversation(entry)}>{needsConfirmation ? 'Try current session' : 'Keep this conversation'}</Button> : null}
           <IconButton title="Edit what it carries" icon="pencil" onClick={() => setDraft(card.text ?? '')} />
         </>}
       </div>
@@ -76,7 +79,7 @@ export function HandoffNotice({ entry, card }: { entry: Entry; card: HandoffCard
             trailing={saving ? <Spinner /> : <IconButton title="Save" icon="checkmark" disabled={!draft.trim()} onClick={() => { void save() }} />}
           />
           <CardForm>
-            <CardSection footer="Your next message starts a fresh conversation that begins with this.">
+            <CardSection footer={groupCapacity ? "Your next private message will start with this summary." : needsConfirmation ? "The queued task will start with this summary." : "Your next message starts a fresh conversation that begins with this."}>
               <Field value={draft} onChange={setDraft} label={tr('Handoff')} lines={[10, 24]} mono />
             </CardSection>
           </CardForm>

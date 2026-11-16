@@ -184,6 +184,31 @@ impl Actor {
     }
 
     /// `unqueue`: the message never goes out, the chat no longer shows it, and its files leave the bot's folder.
+    /// 老客户端的纯 /new 只在私聊容量提醒期间视为命令，重启恢复也沿用此识别。
+    pub(super) fn consume_handoff_command(&self, lane: &Lane, text: &str, entry_id: &str) -> bool {
+        if *lane != Lane::main(&self.cfg.id)
+            || text != "/new"
+            || !crate::chat::handoff::approve_from_session_switch(&self.hub, &self.cfg.id)
+        {
+            return false;
+        }
+        self.mark_user_messages(&[entry_id.to_owned()]);
+        true
+    }
+
+    /// 仅更新用户消息，机器人间通知的终态由协作模块写入。
+    pub(super) fn mark_user_messages(&self, ids: &[String]) {
+        for id in ids {
+            if let Some(mut entry) =
+                self.hub.store.entry(id).filter(|entry| entry.kind == crate::store::EntryKind::User.as_str())
+            {
+                entry.data["status"] = json!(RequestStatus::Sent);
+                self.hub.set_entry(id, &entry.data);
+            }
+        }
+    }
+
+    /// 取消未执行的消息，同时释放失去待执行任务的容量提醒。
     pub(super) fn unqueue(&mut self, entry_id: &str) {
         // Already with the agent, which may take it: `steered` decides.
         if let Some(steer) = self.steers_in_flight.get_mut(entry_id) {
@@ -192,6 +217,7 @@ impl Actor {
         }
         let Some(at) = self.queued_at(entry_id) else { return };
         self.queue.remove(at);
+        self.clear_empty_capacity_handoff();
         if let Some(mut e) = self.hub.store.entry(entry_id) {
             e.data["status"] = json!(RequestStatus::Cancelled);
             e.data["removed"] = true.into();

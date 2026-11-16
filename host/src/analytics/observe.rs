@@ -8,9 +8,17 @@ use crate::store::BotConfig;
 use serde_json::{Map, Value};
 
 /// Methods that stand for one event with one fixed property.
-const FIXED: [(&str, Event, &str, &str); 14] = [
+const FIXED: [(&str, Event, &str, &str); 22] = [
     ("editHandoff", Event::HandoffAnswered, "action", "edit"),
     ("keepConversation", Event::HandoffAnswered, "action", "keep"),
+    ("startHandoff", Event::HandoffAnswered, "action", "start"),
+    ("prepareGroupMemberSession", Event::BotSessionUsage, "action", "review_group_member"),
+    ("confirmGroupMemberSession", Event::HandoffAnswered, "action", "start_group_member"),
+    ("setGroupContextBasis", Event::BotSessionUsage, "action", "set_display_basis"),
+    ("confirmGroupHandoff", Event::HandoffAnswered, "action", "start_group"),
+    ("groupHandoff", Event::BotSessionUsage, "action", "review_group"),
+    ("prepareHandoff", Event::BotSessionUsage, "action", "prepare"),
+    ("botSessionUsage", Event::BotSessionUsage, "action", "view"),
     ("credentialSaveLogin", Event::CredentialSaved, "kind", "login"),
     ("credentialSetOnePassword", Event::CredentialSaved, "kind", "onepassword"),
     ("credentialUpdateConnector", Event::CredentialSaved, "kind", "connector"),
@@ -253,6 +261,7 @@ pub fn observe_call(hub: &Hub, caller: &Caller, method: &str, b: &Value) -> Opti
 /// connected yet (its sign-in is polled until the connection is active), whether a published
 /// artifact's card went into its bot's chat, and whether a connector edit needed a check. `None`: not an event.
 /// 从创建结果统计成员数，群名和成员身份不进入事件。
+/// 只为会话用量功能记录固定成功状态，统计数值留在本机。
 pub fn answered(event: Event, mut p: Map<String, Value>, answer: &Value) -> Option<Map<String, Value>> {
     match event {
         Event::BotCreated
@@ -264,6 +273,9 @@ pub fn answered(event: Event, mut p: Map<String, Value>, answer: &Value) -> Opti
         }
         Event::BotUpdated if p.contains_key("stage_action") => {
             p.insert("outcome".into(), "saved".into());
+        }
+        Event::BotSessionUsage => {
+            p.insert("outcome".into(), "ok".into());
         }
         Event::ConnectorsImported => {
             p.insert("count".into(), answer["items"].as_array().map_or(0, Vec::len).into());
@@ -296,7 +308,7 @@ pub fn answered(event: Event, mut p: Map<String, Value>, answer: &Value) -> Opti
 /// What a failed call reports: a `network*` call's failure keeps what it was (`via` or
 /// `action`) as `network_failed` with `stage` `action`, and a connector edit reports its category,
 /// never the message; other failures report nothing.
-/// 创建会话群或阶段群失败时只上报预定义类别。
+/// 创建会话群、阶段群或读取会话用量失败时只上报预定义类别。
 pub fn failed(event: Event, mut p: Map<String, Value>, error: &anyhow::Error) -> Option<(Event, Map<String, Value>)> {
     match event {
         Event::BotCreated
@@ -306,7 +318,9 @@ pub fn failed(event: Event, mut p: Map<String, Value>, error: &anyhow::Error) ->
             p.insert("error".into(), (if error.is::<rusqlite::Error>() { "storage" } else { "other" }).into());
             Some((event, p))
         }
-        Event::BotUpdated if p.contains_key("stage_action") => {
+        Event::BotSessionUsage | Event::BotUpdated
+            if event == Event::BotSessionUsage || p.contains_key("stage_action") =>
+        {
             p.insert("outcome".into(), "failed".into());
             p.insert("error".into(), (if error.is::<rusqlite::Error>() { "storage" } else { "other" }).into());
             Some((event, p))

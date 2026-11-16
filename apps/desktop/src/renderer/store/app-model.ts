@@ -54,6 +54,7 @@ export class AppModel extends Observable {
   computers: Computer[] = []
   stores = new Map<string, BotStore>()
   selection: BotRef | null = null
+  selectedEntry: string | null = null
   refreshing = false
   lastError: string | null = null
   /** Codync Screen waits for the user to allow it in System Settings → Login Items. */
@@ -194,8 +195,10 @@ export class AppModel extends Observable {
     return items
   }
 
-  select(ref: BotRef | null) {
+  /** 进入聊天时可以直接定位已有交接卡。 */
+  select(ref: BotRef | null, entryId: string | null = null) {
     this.selection = ref
+    this.selectedEntry = entryId
     this.changed()
   }
 

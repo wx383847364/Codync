@@ -94,3 +94,74 @@ async fn compacting_too_often_turns_into_a_rollover_the_user_can_edit_or_turn_do
     assert_eq!(host.requests(&bot, "session/new").len(), 2, "same conversation");
     assert!(!host.prompts(&bot).last().unwrap().contains("<handoff>"));
 }
+
+/// 真实 Host 应保存实报用量并跨重启保留待确认消息，用编辑后的摘要在同一机器人继续任务。
+#[tokio::test]
+async fn capacity_handoff_survives_restart_and_runs_the_queued_task_once() {
+    let mut host = Host::start().await;
+    let bot = host.fixture_bot("Long-running", "instructions_agent.py", "first-resume").await;
+    assert_eq!(host.call("botSessionUsage", json!({"botId": bot})).await["hasSession"], false);
+    host.reply(&bot, "USAGE 12000 SIZE 18000 REPORT_TOKENS PAUSE_NEXT_SESSION").await;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let usage = loop {
+        let usage = host.call("botSessionUsage", json!({"botId": bot})).await;
+        if !usage["attempts"].as_array().unwrap().is_empty() {
+            break usage;
+        }
+        assert!(Instant::now() < deadline, "missing recorded attempt: {usage}");
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    };
+    assert_eq!(usage["used"], 12000);
+    assert_eq!(usage["size"], 18000);
+    assert_eq!(usage["attempts"][0]["rows"][0]["value"], 1234);
+    assert_eq!(usage["attempts"][0]["rows"][1]["value"], 0);
+    assert!(usage["attempts"][0]["rows"][2]["value"].is_null());
+
+    let task =
+        format!("next work item {}", "provide a clear response, include references, and review changes. ".repeat(550));
+    let entry = host.call("send", json!({"botId": bot, "text":task})).await["entry"]["id"].clone();
+    let card = notice(&host, &bot, "handoff").await;
+    assert_eq!(card["data"]["handoff"]["reason"], "capacity");
+    assert!(!card["data"]["handoff"]["text"].as_str().unwrap().contains("next work item"));
+    assert_eq!(host.prompts(&bot).len(), 1, "pressure waits for the user");
+    host.restart(|_| {}).await;
+    let history = host.call("history", json!({"botId": bot})).await;
+    assert!(history["entries"].as_array().unwrap().iter().any(|e| e["id"] == entry && e["data"]["status"] == "queued"));
+    host.call(
+        "editHandoff",
+        json!({"entryId": card["id"], "text": "<handoff>Preserve the acceptance criteria.</handoff>"}),
+    )
+    .await;
+    // 最旧客户端把 /new 当消息发送，同样能确认卡片。
+    host.call("send", json!({"botId": bot, "text": "/new"})).await;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while host.requests(&bot, "session/new").len() < 2 {
+        assert!(Instant::now() < deadline, "the accepted handoff did not try to open a session");
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    assert_eq!(host.prompts(&bot).len(), 1, "the new session has not sent the task yet");
+    host.crash();
+    host.restart(|_| {}).await;
+    host.call("startHandoff", json!({"entryId": card["id"]})).await;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let history = host.call("history", json!({"botId": bot})).await;
+        let entries = history["entries"].as_array().unwrap();
+        if entries.iter().filter(|e| e["kind"] == "agent" && e["data"]["final"] == true).count() == 2 {
+            assert!(entries.iter().any(|e| e["id"] == entry && e["data"]["status"] == "sent"));
+            assert!(entries.iter().any(|e| e["id"] == card["id"] && e["data"]["handoff"]["status"] == "sent"));
+            break;
+        }
+        assert!(Instant::now() < deadline, "the confirmed work did not run: {history}");
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    assert_eq!(host.requests(&bot, "session/new").len(), 3);
+    let usage = host.call("botSessionUsage", json!({"botId": bot})).await;
+    assert_eq!(usage["hasSession"], true);
+    assert!(usage["used"].is_null(), "a new process can reuse a session id");
+    assert!(usage["size"].is_null());
+    let prompts = host.prompts(&bot);
+    assert_eq!(prompts.len(), 2);
+    assert!(prompts[1].contains("Preserve the acceptance criteria."));
+    assert!(prompts[1].contains(task.trim_end()));
+}

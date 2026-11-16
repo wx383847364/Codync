@@ -20,6 +20,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -30,11 +31,19 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.codync.android.core.Bot
 import com.codync.android.core.BotDraft
+import com.codync.android.core.BotSessionUsage
 import com.codync.android.core.LinkState
 import com.codync.android.core.ScreenState
 import com.codync.android.core.hasLibrary
 import com.codync.android.design.*
 import java.io.IOException
+import java.text.DateFormat
+import java.text.NumberFormat
+import java.util.Date
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.launch
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.coroutines.delay
 
 /** The details sheet's pages, as on the desktop inspector (iOS `BotDetailsView.Tab`). */
@@ -85,6 +94,9 @@ internal data class DetailsRequest(val tab: DetailsTab = DetailsTab.Details, val
                             if (bot.devServers.isNotEmpty()) DevServersSection(bot, store)
                             BotSettingsForm(state, store, draft, { draft = it }, FormPart.Often, error = saveError)
                             state.screen?.let { ComputerCard(it, draft.computer, online) { on -> draft = draft.copy(computer = on) } }
+                            if (state.hello?.get("botSessionUsage")?.jsonPrimitive?.booleanOrNull == true) {
+                                SessionUsage(bot, store, online, request.botId == null, dismiss)
+                            }
                             RoutinesView(bot, state, store, routineId)
                             LaunchedEffect(Unit) { routineId = null }
                         }
@@ -135,5 +147,87 @@ internal data class DetailsRequest(val tab: DetailsTab = DetailsTab.Details, val
     Box(Modifier.size(36.dp).shadow(1.dp, CircleShape).background(Palette.background, CircleShape).plainButton(action = action)
         .semantics { contentDescription = label }, contentAlignment = Alignment.Center) {
         Symbol(symbol, size = 17.dp, tint = Palette.text)
+    }
+}
+
+
+/** 展示主会话实报占用，展开尝试查看独立的输入、输出和缓存字段。 */
+@Composable private fun SessionUsage(bot: Bot, store: AppStore, online: Boolean, offersSessionHandoff: Boolean, dismiss: () -> Unit) {
+    val scope = rememberCoroutineScope()
+    var usage by remember(bot.id) { mutableStateOf<BotSessionUsage?>(null) }
+    var error by remember(bot.id) { mutableStateOf<String?>(null) }
+    var refresh by remember(bot.id) { mutableStateOf(0) }
+    var preparing by remember(bot.id) { mutableStateOf(false) }
+    var expanded by remember(bot.id) { mutableStateOf<String?>(null) }
+    val formatter = NumberFormat.getIntegerInstance()
+    val translate = translator()
+
+    /** 已知零与缺报的值分别显示。 */
+    fun number(value: Long?) = value?.let(formatter::format) ?: translate("Unavailable")
+
+    // 详情打开、任务状态改变或手动刷新后读取最新快照。
+    LaunchedEffect(bot.id, bot.status, bot.mainSessionRevision, online, refresh) {
+        if (!online) return@LaunchedEffect
+        try {
+            usage = store.botSessionUsage(bot.id)
+            error = null
+        } catch (failure: CancellationException) {
+            throw failure
+        } catch (failure: Exception) {
+            error = failure.localizedMessage
+        }
+    }
+    val current = usage
+    val context = when {
+        current == null -> tr(if (online) "Loading…" else "Unavailable")
+        !current.hasSession -> tr("No active main session.")
+        else -> "${number(current.used)} / ${number(current.size)}"
+    }
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        CardSection("Main session context", accessory = {
+            IconButton("Refresh usage", "arrow.clockwise", enabled = online) { refresh += 1 }
+        }) {
+            row { Text(context) }
+        }
+        error?.let { Text(tr(it), style = Type.footnote, color = Palette.danger) }
+        if (offersSessionHandoff && current?.hasSession == true) {
+            SecondaryButton("Prepare new session with summary", enabled = online && !bot.isWorking && !preparing) {
+                // 成功后返回聊天，方便检查即将带入新会话的摘要。
+                scope.launch {
+                    preparing = true
+                    error = null
+                    try {
+                        store.prepareHandoff(bot.id)
+                        dismiss()
+                    } catch (failure: CancellationException) {
+                        throw failure
+                    } catch (failure: Exception) {
+                        error = failure.localizedMessage
+                    } finally {
+                        preparing = false
+                    }
+                }
+            }
+        }
+        if (current != null) {
+            CardSection("Recent task attempts") {
+                if (current.attempts.isEmpty()) row { Text(tr("No recent task attempts")) }
+                current.attempts.forEach { attempt ->
+                    row {
+                        val date = DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(attempt.at))
+                        val subject = "$date · ${attempt.backend} · ${attempt.model ?: tr("Unknown model")}"
+                        Disclosure(expanded == attempt.id, { expanded = if (expanded == attempt.id) null else attempt.id }, Modifier.fillMaxWidth(), {
+                            Text(subject, style = Type.footnote)
+                        }) {
+                            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                for (metric in attempt.rows) {
+                                    Text("${tr(metric.label)} · ${number(metric.value)}", style = Type.footnote)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }

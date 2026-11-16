@@ -100,8 +100,21 @@ ordinary final reply or derived dispatch. Its potentially private summary stays 
 private checkpoint; the group sees only a content-free status. Failed, unconfirmed or
 ineffective attempts do not retry endlessly on unchanged context. Unsupported adapters
 continue with bounded background. Known insufficient space leaves the exact delivery
-queued with a visible notice to change model or deliberately start a new session. There
-is no silent session reset. Unknown/stale usage is not zero, and estimates are not provider
+queued with a visible notice. If the task and handoff can fit in a fresh session, the
+original dispatch gets a review action. An isolated group reviews its group-only summary
+there. Ordinary groups link to the member's private chat and explain that both chats
+share the session. The approved private summary goes into the next private user turn;
+the resumed dispatch carries group context. Confirmation archives the old context
+reference and resumes the original dispatch. There is no silent session reset.
+
+The group context strip reads the current execution slot's reported token count on the Host.
+A room saves its display basis independently of the agent's actual window. At 50% of the
+actual window, or when a dispatch has a capacity handoff, the member card opens the review.
+Confirmation of a proactive handoff is persisted before the actor returns to its queue.
+It applies only to the same member session after the current turn and result save, and the
+next eligible task carries the reviewed summary.
+
+Unknown/stale usage is not zero, and estimates are not provider
 billing: full originals, tools, model output and private/shared session history can still
 consume substantial tokens. A maintenance timeout cancels maintenance only, not work.
 

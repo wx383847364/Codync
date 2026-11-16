@@ -32,11 +32,13 @@ struct BotDetailsView: View {
     @State private var presence = PagePresence()
     @State private var saving: Task<Void, Never>?
     @State private var template: EditorRequest?
+    private let offersSessionHandoff: Bool
 
     init(botId: String, request: DetailsRequest, openArtifact: @escaping (ArtifactTarget) -> Void) {
         self.botId = botId
         self.openArtifact = openArtifact
         routineId = request.routineId
+        offersSessionHandoff = request.botId == nil
         _tab = State(initialValue: request.tab)
     }
 
@@ -139,6 +141,9 @@ struct BotDetailsView: View {
                             .outlinedCard()
                     }
                 }
+                if let bot, model.hello?.botSessionUsage == true {
+                    SessionUsageView(bot: bot, offersSessionHandoff: offersSessionHandoff).id(bot.id)
+                }
                 RoutinesView(botId: botId, initialId: routineId)
             }
         case .library:
@@ -172,4 +177,104 @@ struct BotDetailsView: View {
 /// Whether a page is on screen, for work that outlives it.
 @MainActor private final class PagePresence {
     var shown = true
+}
+
+
+/// 显示主会话占用和最近尝试，展开一次尝试可查看供应方实报字段。
+private struct SessionUsageView: View {
+    let bot: Bot
+    let offersSessionHandoff: Bool
+    @Environment(BotStore.self) private var model
+    @Environment(\.dismissModal) private var dismiss
+    @State private var usage: BotSessionUsage?
+    @State private var error: String?
+    @State private var refresh = 0
+    @State private var preparing = false
+    @State private var expanded: String?
+
+    /// 将网络动作绑定到详情页生命周期，未知占用保留为不可用。
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            CardSection("Main session context") {
+                Text(contextLine)
+            } accessory: {
+                IconButton("Refresh usage", systemImage: "arrow.clockwise") { refresh += 1 }
+                    .disabled(model.isOffline)
+            }
+            if let error { Text(L10n.tr(error)).font(.footnote).foregroundStyle(Palette.danger) }
+            if offersSessionHandoff, usage?.hasSession == true {
+                Button(L10n.tr("Prepare new session with summary")) {
+                    // 成功后返回聊天，查看和编辑将带入新会话的摘要。
+                    Task { await prepare() }
+                }
+                .buttonStyle(.secondary)
+                .disabled(model.isOffline || bot.isWorking || preparing)
+            }
+            if let usage {
+                CardSection("Recent task attempts") {
+                    VStack(alignment: .leading, spacing: 8) {
+                        if usage.attempts.isEmpty { Text(L10n.tr("No recent task attempts")) }
+                        ForEach(usage.attempts) { attempt in
+                            attemptRow(attempt)
+                        }
+                    }
+                }
+            }
+        }
+        .task(id: refreshKey) { await load() }
+    }
+
+    /// 只在主会话提交、任务状态和手动刷新的值变化时重新读取统计。
+    private var refreshKey: String {
+        "\(bot.mainSessionRevision ?? 0)-\(bot.status)-\(model.isOffline)-\(refresh)"
+    }
+
+    /// 已知为零与未报告分别显示；未执行过时显示主会话尚未开启。
+    private var contextLine: String {
+        guard let usage else { return L10n.tr(model.isOffline ? "Unavailable" : "Loading…") }
+        return usage.hasSession ? "\(number(usage.used)) / \(number(usage.size))" : L10n.tr("No active main session.")
+    }
+
+    /// 数值按当前区域格式显示。
+    private func number(_ value: Int64?) -> String { value?.formatted() ?? L10n.tr("Unavailable") }
+
+    /// 最近尝试时间与模型作为标题，每个用量字段保持独立。
+    private func attemptRow(_ attempt: BotSessionUsage.Attempt) -> some View {
+        let time = Date(timeIntervalSince1970: Double(attempt.at) / 1000).formatted(date: .numeric, time: .shortened)
+        return Disclosure(isExpanded: Binding(get: { expanded == attempt.id }, set: { expanded = $0 ? attempt.id : nil })) {
+            VStack(alignment: .leading, spacing: 4) {
+                ForEach(attempt.rows.indices, id: \.self) { row in
+                    let metric = attempt.rows[row]
+                    Text("\(L10n.tr(metric.label)) · \(number(metric.value))").font(.footnote)
+                }
+            }
+        } label: {
+            Text("\(time) · \(attempt.backend) · \(attempt.model ?? L10n.tr("Unknown model"))").font(.footnote)
+        }
+    }
+
+    /// 任务状态变化或点击刷新后读取最新快照，网络异常保留上次显示值。
+    private func load() async {
+        guard !model.isOffline else { return }
+        do {
+            let snapshot = try await model.botSessionUsage(bot.id)
+            guard !Task.isCancelled else { return }
+            usage = snapshot
+            error = nil
+        } catch {
+            if !Task.isCancelled { self.error = error.localizedDescription }
+        }
+    }
+
+    /// 交接已保存才关闭详情，失败允许用户再次尝试。
+    private func prepare() async {
+        preparing = true
+        defer { preparing = false }
+        do {
+            try await model.prepareHandoff(bot.id)
+            dismiss()
+        } catch {
+            self.error = error.localizedDescription
+        }
+    }
 }
