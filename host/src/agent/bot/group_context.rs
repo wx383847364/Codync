@@ -38,6 +38,8 @@ pub(super) struct Blocked {
 
 #[derive(Clone, Serialize, Deserialize)]
 pub(super) struct Attempt {
+    #[serde(default)]
+    delivery: Option<String>,
     epoch: u32,
     used: u64,
     blocked: bool,
@@ -51,8 +53,13 @@ fn pressure(used: u64, size: u64, incoming: u64) -> (bool, bool) {
         return (false, false);
     }
     let target = (size / 4 * 3).min(CONTEXT_TARGET);
+    (used >= target, !fits_context(used, size, incoming))
+}
+
+/// 私聊与群预检共用回复余量，保留空间给模型输出。
+pub(super) fn fits_context(used: u64, size: u64, incoming: u64) -> bool {
     let reserve = (size / 16).clamp(2_048, 8_192);
-    (used >= target, used.saturating_add(incoming).saturating_add(reserve) > size)
+    used.saturating_add(incoming).saturating_add(reserve) <= size
 }
 
 /// 使用量与窗口分别标记未知；整理后的旧占用不应被展示为当前统计。
@@ -97,7 +104,7 @@ impl Actor {
     }
 
     /// 预检包含真正会补发的 profile、记忆和交接前缀；只读预览不消费提醒或会话水位。
-    pub(super) async fn group_prompt_estimate(&self, text: &str, sid: Option<&str>, shared: bool) -> Result<usize> {
+    pub(super) async fn prompt_estimate(&self, text: &str, sid: Option<&str>, shared: bool) -> Result<usize> {
         let mut estimate = codync_mem::tokens::estimate(text);
         let Some(sid) = sid else { return Ok(estimate) };
         let snapshot = self.snapshot(sid).await?;
@@ -126,6 +133,21 @@ impl Actor {
         }
         // profile 标签、重发说明和段落分隔一并预留，仍是估算而非实际 tokenizer。
         Ok(estimate.saturating_add(256))
+    }
+
+    /// 新会话要重新加载完整的机器人资料和记忆，也要为提示标签和分隔预留空间。
+    pub(super) async fn fresh_group_estimate(&self, text: &str) -> Result<usize> {
+        let (hub, cfg) = (self.hub.clone(), self.cfg.clone());
+        let opening = tokio::task::spawn_blocking(move || context::render(&hub.store, &cfg)).await?;
+        Ok(codync_mem::tokens::estimate(text)
+            .saturating_add(codync_mem::tokens::estimate(&opening))
+            .saturating_add(256))
+    }
+
+    /// 只有真实旧占用与本次任务已接近极限时才额外渲染新会话资料。
+    pub(super) fn group_needs_fresh_estimate(&self, sid: Option<&str>, incoming: usize) -> bool {
+        sid.and_then(|sid| self.context_usage(sid))
+            .is_some_and(|(used, window)| !fits_context(used, window, incoming as u64))
     }
 
     /// 遥测不把缺失窗口报成零，也不把已整理但尚未重报的占用当作当前值。
@@ -169,11 +191,13 @@ impl Actor {
         d: &Delivery,
         slot: Option<&str>,
         sid: Option<&str>,
-        incoming: Option<usize>,
+        incoming: Option<(usize, usize)>,
     ) -> Result<bool> {
         let Some((sid, (used, size))) = sid.and_then(|sid| Some((sid, self.context_usage(sid)?))) else {
             return Ok(false);
         };
+        let fresh = incoming.map_or(0, |(_, fresh)| fresh);
+        let incoming = incoming.map(|(current, _)| current);
         let (high, mut full) = pressure(used, size, u64::try_from(incoming.unwrap_or(0)).unwrap_or(u64::MAX));
         let c = self.conversation(sid);
         // 结果元数据暂时写不进去时仍保留本进程的尝试，避免每次补查重新付费整理。
@@ -189,14 +213,16 @@ impl Actor {
         if stale {
             // 当前占用未知，但任务包本身超过已知窗口仍可判定不可容纳；不能把未知当零发送。
             let minimum = u64::try_from(incoming.unwrap_or(0)).unwrap_or(u64::MAX);
-            let reserve = (size / 16).clamp(2_048, 8_192);
-            if incoming.is_none() || size == 0 || minimum.saturating_add(reserve) <= size {
+            if incoming.is_none() || size == 0 || fits_context(0, size, minimum) {
                 return Ok(false);
             }
             full = true;
         }
         let suppressed = attempt.as_ref().is_some_and(|a| {
-            a.epoch == c.compactions && a.blocked && a.used == used && used >= ((size / 4 * 3).min(CONTEXT_TARGET)) / 2
+            a.epoch == c.compactions
+                && a.used == used
+                && (a.delivery.as_deref() == Some(d.id.as_str())
+                    || (a.blocked && used >= ((size / 4 * 3).min(CONTEXT_TARGET)) / 2))
         });
         if (high || full) && !stale && self.compact_command().is_some() && !suppressed {
             if !self.queue.iter().any(|q| matches!(q, Queued::Compact { .. })) {
@@ -221,6 +247,9 @@ impl Actor {
         // 只在已准备完整任务包后判断空间；后台预算不足永不取消投递。
         full &= incoming.is_some();
         if full {
+            if !stale && fresh > 0 && self.draft_delivery_handoff(d, sid, slot, size, fresh as u64)? {
+                return Ok(true);
+            }
             let reported = if stale {
                 format!("整理后占用尚未知，窗口 {size}")
             } else {
@@ -269,7 +298,7 @@ impl Actor {
         let current_slot = group.slot.as_ref().map(|_| group_session_slot(&group.room, &self.cfg.backend));
         if !valid
             || current_slot != group.slot
-            || (group.slot.is_some() && !self.next_group_turn_uses_current_backend())
+            || (group.slot.is_some() && !self.next_turn_uses_current_backend())
             || self.session_for(group.slot.as_deref()).as_deref() != Some(group.session.as_str())
             || self.pending_completion.is_some()
             || self.pending_new_session.is_some()
@@ -281,8 +310,14 @@ impl Actor {
         }
         group.started = now_ms();
         group.deadline = Instant::now() + MAINTENANCE_TIMEOUT;
-        let attempt =
-            Attempt { epoch: group.epoch, used: group.used, blocked: true, confirmed: false, started: group.started };
+        let attempt = Attempt {
+            delivery: Some(group.delivery.clone()),
+            epoch: group.epoch,
+            used: group.used,
+            blocked: true,
+            confirmed: false,
+            started: group.started,
+        };
         let saved = serde_json::to_string(&attempt)
             .map_err(anyhow::Error::from)
             .and_then(|v| self.hub.store.kv_set(&self.attempt_key(&group.session), &v));
@@ -321,6 +356,7 @@ impl Actor {
         let epoch = self.conversation(&group.session).compactions;
         let gained = current.is_some_and(|(used, size)| used < group.used && used < (size / 4 * 3).min(CONTEXT_TARGET));
         let attempt = Attempt {
+            delivery: Some(group.delivery.clone()),
             epoch,
             used: current.map_or(group.used, |v| v.0),
             blocked: !success || !gained,

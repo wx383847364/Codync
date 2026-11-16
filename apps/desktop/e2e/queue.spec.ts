@@ -1,4 +1,5 @@
 import { test, expect, type Page } from '@playwright/test'
+import { resolve } from 'node:path'
 import { canSteer } from '../src/renderer/views/thread/queued-messages.ts'
 import { api, attach, steerBot, typeMessage } from './sandbox.ts'
 
@@ -90,6 +91,55 @@ test('a message sent while the bot works waits above the composer, then goes out
       await api(page, 'stop', { botId }).catch(() => {})
       await api(page, 'deleteBot', { botId }).catch(() => {})
     }
+    await browser.close()
+  }
+})
+
+/** 在真实桌面应用验证机器人详情的实报指标和容量交接操作。 */
+test('bot details show reported usage and the handoff continues the queued task', async () => {
+  const { browser, page } = await attach()
+  const agent = resolve(__dirname, '../../../host/tests/fixtures/instructions_agent.py')
+  const name = `Session usage e2e ${Date.now()}`
+  let botId: string | undefined
+  try {
+    const { bot } = await api<{ bot: { id: string } }>(page, 'createBot', {
+      name, backend: 'custom', command: `python3 -X utf8 -u "${agent}" first-resume`, connectors: [], skills: [], notify: false,
+    })
+    botId = bot.id
+    await page.locator('.roster-row', { hasText: name }).click()
+    await typeMessage(page, 'USAGE 12000 SIZE 18000 REPORT_TOKENS')
+    await expect(page.locator('.transcript').getByText('ok', { exact: true })).toBeVisible()
+    await page.getByRole('button', { name: `${name}, view details`, exact: true }).click()
+    const details = page.locator('.details-panel')
+    await expect(details.getByText('Main session context')).toBeVisible()
+    await expect(details.getByText('12,000 / 18,000')).toBeVisible()
+    await details.getByRole('button', { name: /custom · Unknown model/ }).click()
+    await expect(details.getByText('Input tokens · 1,234')).toBeVisible()
+    await expect(details.getByText('Cache read tokens · 0')).toBeVisible()
+    await expect(details.getByText('Cache write tokens · Unavailable')).toBeVisible()
+    await details.getByRole('button', { name: 'Close details' }).click()
+
+    const task = 'Continue the original work. ' + 'provide a clear response, include references, and review changes. '.repeat(550).trim()
+    await api(page, 'send', { botId, text: task })
+    const start = page.getByRole('button', { name: 'Start new session with summary' })
+    await expect(start).toBeVisible()
+    expect(await started(page, botId, task)).toBe(false)
+    await start.click()
+    await expect.poll(() => started(page, bot.id, task)).toBe(true)
+    await expect(page.locator('.transcript').getByText('ok', { exact: true })).toHaveCount(2)
+    await expect(page.locator('.roster-row', { hasText: name })).toHaveCount(1)
+    await page.getByRole('button', { name: `${name}, view details`, exact: true }).click()
+    await details.getByRole('button', { name: 'Prepare new session with summary' }).click()
+    await expect(details).toBeHidden()
+    await expect(page.getByText('Your next message starts a fresh session carrying this summary.')).toBeVisible()
+    await typeMessage(page, 'a new private task')
+    await expect(page.locator('.transcript').getByText('ok', { exact: true })).toHaveCount(3)
+    await page.getByRole('button', { name: `${name}, view details`, exact: true }).click()
+    await expect(details.getByRole('button', { name: 'Prepare new session with summary' })).toBeVisible()
+    await api(page, 'updateBot', { id: botId, command: `python3 -X utf8 -u "${agent}" system-resume` })
+    await expect(details.getByText('No active main session.')).toBeVisible()
+  } finally {
+    if (botId) await api(page, 'deleteBot', { botId }).catch(() => {})
     await browser.close()
   }
 })

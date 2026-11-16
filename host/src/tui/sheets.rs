@@ -78,6 +78,7 @@ pub fn page_tabs(buf: &mut Buffer, inner: Rect, current: Page) -> Rect {
     Rect::new(inner.x, inner.y + 2, inner.width, inner.height.saturating_sub(2))
 }
 
+/// 在详情页展示会话用量，同时给常规任务列表保留布局空间。
 pub fn routines(buf: &mut Buffer, area: Rect, app: &App, l: &RoutineList) {
     let t = theme();
     let r = centered(area, 90, 28);
@@ -119,6 +120,9 @@ pub fn routines(buf: &mut Buffer, area: Rect, app: &App, l: &RoutineList) {
         let x = rput(buf, inner.right(), inner.y, "  u switches", t.dim.patch(t.panel));
         rput(buf, x, inner.y, if on { "◉ On" } else { "○ Off" }, if on { t.text } else { t.secondary }.patch(t.panel));
         inner = Rect::new(inner.x, inner.y + 2, inner.width, inner.height.saturating_sub(2));
+    }
+    if app.bot_session_usage && inner.height >= 6 {
+        inner = session_usage(buf, inner, &l.session_usage);
     }
     put(buf, inner.x, inner.y, inner.width, &tr("Routines"), t.bold.patch(t.panel));
     let list_h = usize::from(inner.height.saturating_sub(3)) / 2;
@@ -172,6 +176,54 @@ pub fn routines(buf: &mut Buffer, area: Rect, app: &App, l: &RoutineList) {
         }
     }
     footer(buf, inner, None, "n new · ↵ edit · space on/off · r run now · w copy webhook · W new key · x delete · esc");
+}
+
+/// 绘制主会话和近期实报指标，终端高度不足时保留常规任务可操作空间。
+fn session_usage(buf: &mut Buffer, area: Rect, usage: &Value) -> Rect {
+    let t = theme();
+    let value = |value: &Value| value.as_u64().map_or_else(|| tr("Unavailable").into_owned(), |n| n.to_string());
+    let heading = tr("Main session context");
+    let context = match usage["hasSession"].as_bool() {
+        Some(true) => format!("{} / {}", value(&usage["used"]), value(&usage["size"])),
+        Some(false) => tr("No active main session.").into_owned(),
+        None => tr("Unavailable").into_owned(),
+    };
+    let hint = if usage["hasSession"] == true { "F7 refresh · S prepare new session" } else { "F7 refresh" };
+    let right = rput(buf, area.right(), area.y, hint, t.dim.patch(t.panel));
+    put(buf, area.x, area.y, right.saturating_sub(area.x), &format!("{heading} · {context}"), t.text.patch(t.panel));
+
+    let attempts = usage["attempts"].as_array().map_or(&[][..], Vec::as_slice);
+    let mut y = area.y + 1;
+    if !attempts.is_empty() && area.height >= 9 {
+        let title = format!(
+            "{} · {}",
+            tr("Recent task attempts"),
+            tr("Input tokens / cache read / cache write / output / reasoning")
+        );
+        put(buf, area.x, y, area.width, &title, t.bold.patch(t.panel));
+        y += 1;
+        for attempt in attempts.iter().take(usize::from(area.height.saturating_sub(8))) {
+            let tokens = attempt["rows"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|row| row["value"].as_u64().map_or_else(|| "—".into(), |n| n.to_string()))
+                .collect::<Vec<_>>()
+                .join(" / ");
+            let model = attempt["model"].as_str().unwrap_or_else(|| s(attempt, "backend"));
+            let date = attempt["at"]
+                .as_i64()
+                .and_then(chrono::DateTime::from_timestamp_millis)
+                .map_or_else(String::new, |time| time.with_timezone(&chrono::Local).format("%m-%d %H:%M").to_string());
+            put(buf, area.x, y, area.width, &format!("{date} · {model} · {tokens}"), t.secondary.patch(t.panel));
+            y += 1;
+        }
+    } else if attempts.is_empty() && usage["attempts"].is_array() {
+        put(buf, area.x, y, area.width, &tr("No recent task attempts"), t.secondary.patch(t.panel));
+        y += 1;
+    }
+    y += 1;
+    Rect::new(area.x, y, area.width, area.bottom().saturating_sub(y))
 }
 
 pub fn routine(buf: &mut Buffer, area: Rect, f: &RoutineForm) {

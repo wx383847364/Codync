@@ -95,7 +95,8 @@ host answers and sends it once the host is up.
 | `session_reset` | host | `newSession` | — |
 | `permission_answered` | host | `respondPermission` | `choice` (`allow_once`/`allow_always`/`reject_once`/`reject_always`/`other`) |
 | `reaction_added` | host | `react` | — |
-| `handoff_answered` | host | `editHandoff`, `keepConversation` | `action` (`edit`/`keep`) |
+| `handoff_answered` | host | `editHandoff`, `keepConversation`, `startHandoff`, `confirmGroupHandoff`, `confirmGroupMemberSession` | `action` (`edit`/`keep`/`start`/`start_group`/`start_group_member`) |
+| `bot_session_usage` | host | View usage, prepare a handoff, or show a capacity reminder | `action` (`view`/`prepare`/`capacity`/`review_group`/`review_group_member`/`set_display_basis`), `outcome` (`ok`/`failed`/`review_required`), failure category (`storage`/`other`) |
 | `routine_saved` | host | `saveRoutine` | — |
 | `routine_toggled` | host | `setRoutineEnabled` | `enabled` |
 | `routine_deleted` | host | `deleteRoutine` | — |

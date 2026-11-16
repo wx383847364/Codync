@@ -87,6 +87,7 @@ public final class BotStore {
     public var lastError: String?
     /// The open conversation (navigation path).
     public var selection: String?
+    var privateGroupHandoff: PrivateGroupHandoffTarget?
     /// The remote screen viewer (iPhone); `codync://screen` opens it.
     public var screenRequest: ScreenRequest?
 

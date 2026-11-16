@@ -4,6 +4,7 @@ import {
   normalizeBot,
   type Bot,
   type BotDraft,
+  type BotSessionUsage,
   type DirListing,
   type Entry,
   type GroupDraft,
@@ -182,6 +183,11 @@ export class BotStore extends BotSending {
     this.answer(entry, 'handoff', (c) => c.call('keepConversation', { entryId: entry.id }))
   }
 
+  /** 确认容量提醒，将已经排队的任务交给带摘要的新会话。 */
+  startHandoff(entry: Entry) {
+    this.answer(entry, 'handoff', (client) => client.call('startHandoff', { entryId: entry.id }))
+  }
+
   /** Runs a failed routine run's work again, from its notice; the notice's update drops the button. */
   retryRoutineRun(entry: Entry) {
     const runId = entry.data.runId
@@ -308,6 +314,28 @@ export class BotStore extends BotSending {
   /** 阶段用量独立读取，界面故障不会影响交接或关闭。 */
   async stageUsage(botId: string): Promise<StageUsage> {
     return (await this.ready()).call<StageUsage>('stageUsage', { botId })
+  }
+
+  /** 读取 Host 实报的会话窗口与近期执行用量。 */
+  async botSessionUsage(botId: string) {
+    return (await this.ready()).call<BotSessionUsage>('botSessionUsage', { botId })
+  }
+
+  /** 只读取独立群的交接，普通群由私聊摘要卡提供。 */
+  async groupHandoff(deliveryId: string) {
+    return (await this.ready()).call<{ text: string; revision: string }>('groupHandoff', { deliveryId })
+  }
+
+  /** 将编辑后的摘要及原派工身份一次交给 Host 确认。 */
+  async confirmGroupHandoff(deliveryId: string, revision: string, text: string) {
+    await (await this.ready()).call('confirmGroupHandoff', { deliveryId, revision, text })
+  }
+
+  /** 准备交接卡，后续由用户在聊天中审阅。 */
+  async prepareHandoff(botId: string) {
+    const { entry } = await (await this.ready()).call<{ entry: Entry }>('prepareHandoff', { botId })
+    this.upsert(entry)
+    this.changed()
   }
 
   async updateGroup(draft: GroupDraft) {

@@ -47,7 +47,7 @@ pub(super) fn card(c: &Connection, d: &Delivery) -> Result<Entry> {
             wire(&delivery.status),
             detail
         ));
-        items.push(json!({"deliveryId":delivery.id,"targetBotId":delivery.target_bot_id,"status":delivery.status,"detail":detail}));
+        items.push(json!({"deliveryId":delivery.id,"targetBotId":delivery.target_bot_id,"status":delivery.status,"detail":detail,"groupHandoff":super::handoff::projection(c,delivery)?}));
     }
     let body = if let Some(source) = &d.source_entry_id {
         c.query_row("SELECT json_extract(data,'$.text') FROM entries WHERE id=?", [source], |r| {
@@ -104,6 +104,9 @@ impl Store {
         }
         let result_id = format!("delivery-result-{id}");
         let mut entries = Vec::new();
+        if changed == 1 {
+            entries.extend(super::handoff::discard(&tx, &d)?);
+        }
         if let Some(text) = text {
             let mut data = json!({"text":text,"author":d.target_bot_id,
                 "deliveryId":id,"final":changed==1 && status==Status::Completed,"late":changed==0});

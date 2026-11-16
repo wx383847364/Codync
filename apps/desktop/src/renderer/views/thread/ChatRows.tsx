@@ -18,7 +18,8 @@ import { callLength, relativeTime } from './chat-items'
 import { MarkdownText } from './Markdown'
 import { PermissionCard } from './PermissionCard'
 import { ConnectionRequestCard } from '../marketplace/ConnectionRequestCard'
-import { DeliveryNotice } from './DeliveryNotice'
+import { DeliveryNotice, GroupHandoffBadge } from './DeliveryNotice'
+import { GroupContextChip } from './GroupContexts'
 import { AgentSwitchNotice, HandoffNotice } from './HandoffNotice'
 
 export function reactionPick(store: BotStore, entry: Entry): ReactionPick {
@@ -27,9 +28,11 @@ export function reactionPick(store: BotStore, entry: Entry): ReactionPick {
 
 /** One chat-visible entry, with what can be done to it. */
 /** 渲染普通消息与投递聚合卡，主动重试保留旧 attempt。 */
-export const ChatRow = memo(function ChatRow({ entry, groupStart, chat, openTrace, onReply, openAgent, openArtifact }: {
+export const ChatRow = memo(function ChatRow({ entry, groupStart, groupHandoffCard, latestAuthor, chat, openTrace, onReply, openAgent, openArtifact }: {
   entry: Entry
   groupStart: boolean
+  groupHandoffCard?: string
+  latestAuthor?: boolean
   chat: Bot | null
   openTrace: () => void
   /** Quotes this message in the composer; absent where the computer can't take replies. */
@@ -51,7 +54,7 @@ export const ChatRow = memo(function ChatRow({ entry, groupStart, chat, openTrac
     case 'agent':
       return (
         <VStack align="flex-start" gap={4} className={groupStart ? 'chat-row group-start' : 'chat-row'}>
-          {chat && isGroup(chat) && groupStart ? <AuthorLabel botId={entry.data.author} /> : null}
+          {chat && isGroup(chat) && groupStart ? <AuthorLabel botId={entry.data.author} groupHandoffCard={groupHandoffCard} latestAuthor={latestAuthor} /> : null}
           <AgentBubble entry={entry} openTrace={openTrace} reply={reply} openArtifact={openArtifact} />
           <VStack gap={4} className={chat && isGroup(chat) ? 'chat-row-indent' : undefined}>
             <ReactionsRow entry={entry} />
@@ -81,13 +84,16 @@ function LivePermission({ entry }: { entry: Entry }) {
 }
 
 /** Who wrote a message: their avatar and name in their color, or `name` for a bot on another computer. */
-export function AuthorLabel({ botId, name }: { botId?: string | null; name?: string }) {
+/** 最新群回复旁显示待确认的派工入口。 */
+export function AuthorLabel({ botId, name, groupHandoffCard, latestAuthor }: { botId?: string | null; name?: string; groupHandoffCard?: string; latestAuthor?: boolean }) {
   const store = useStore()
   const bot = botId ? store.bots.get(botId) : undefined
   return (
     <HStack gap={8}>
       {bot ? <BotAvatar bot={bot} size={26} animated={false} /> : null}
       <Text size="subheadline" weight="medium" tone="secondary" style={bot ? { color: avatarColor(bot.avatarColor) } : undefined}>{store.authorName(botId, name)}</Text>
+      {latestAuthor ? <GroupContextChip botId={botId} /> : null}
+      {groupHandoffCard && !store.hello?.groupSessionContexts ? <GroupHandoffBadge cardId={groupHandoffCard} /> : null}
     </HStack>
   )
 }

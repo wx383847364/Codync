@@ -6,3 +6,17 @@
 .handoff-text { margin: 0; font-size: var(--text-callout); color: var(--secondary); white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; line-height: 1.45; }
 .handoff-carried { font-family: var(--mono, ui-monospace, monospace); max-height: 320px; overflow: auto; }
 .agent-switch-carried { font-size: var(--text-caption); padding: 10px 12px; border-radius: var(--radius-m); background: var(--bubble-agent); max-height: 320px; overflow: auto; }
+
+.handoff-status {
+  display: inline-block;
+  border: 0;
+  border-radius: 999px;
+  padding: 2px 8px;
+  font: inherit;
+  font-size: 11px;
+  color: light-dark(#754808, #ffd590);
+  background: light-dark(#fff0d3, #48351d);
+  white-space: nowrap;
+}
+button.handoff-status { cursor: pointer; }
+.delivery-handoff { margin-top: 8px; }

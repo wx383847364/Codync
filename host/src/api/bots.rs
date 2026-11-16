@@ -368,6 +368,73 @@ pub(super) async fn call(hub: &Arc<Hub>, caller: &Caller, method: &str, b: Value
             crate::chat::group::ensure_runner(hub, &delivery.room_id);
             json!({"delivery":delivery})
         }
+        "privateGroupHandoff" => {
+            let bot = str_arg(&b, "botId")?;
+            let entry = hub
+                .store
+                .entry(str_arg(&b, "entryId")?)
+                .filter(|e| e.bot_id == bot && e.data["handoff"]["reason"] == "groupCapacity")
+                .ok_or_else(|| anyhow!("This private handoff is no longer available"))?;
+            json!({"entry":entry})
+        }
+        "groupSessionContexts" => hub.store.group_session_contexts(str_arg(&b, "roomId")?)?,
+        "setGroupContextBasis" => {
+            let room = str_arg(&b, "roomId")?;
+            let basis = b["basis"].as_u64().context("basis is required")?;
+            hub.store.set_group_context_basis(room, basis)?;
+            hub.emit_bot(room);
+            hub.store.group_session_contexts(room)?
+        }
+        "prepareGroupMemberSession" | "confirmGroupMemberSession" => {
+            let room = str_arg(&b, "roomId")?.to_owned();
+            let bot = str_arg(&b, "botId")?;
+            let confirmed = method == "confirmGroupMemberSession";
+            let revision = confirmed.then(|| str_arg(&b, "revision").map(str::to_owned)).transpose()?;
+            let text = confirmed.then(|| str_arg(&b, "text").map(str::to_owned)).transpose()?;
+            let (reply, recv) = tokio::sync::oneshot::channel();
+            hub.send_cmd(bot, Cmd::MemberSession { room, revision, text, reply })?;
+            recv.await??
+        }
+        "groupHandoff" | "confirmGroupHandoff" => {
+            let id = str_arg(&b, "deliveryId")?;
+            let d = hub.store.delivery(id)?.ok_or_else(|| anyhow!("unknown delivery"))?;
+            let handoff = hub
+                .store
+                .group_handoff(id)?
+                .filter(|handoff| handoff.slot.is_some())
+                .ok_or_else(|| anyhow!("请到机器人私聊审阅共享会话的摘要"))?;
+            if method == "confirmGroupHandoff" {
+                let text = str_arg(&b, "text")?;
+                let revision = str_arg(&b, "revision")?;
+                hub.group_handoff_update(|| {
+                    Ok(((), hub.store.decide_group_handoff(id, false, true, revision, Some(text))?))
+                })?;
+                hub.emit_bot(&d.target_bot_id);
+                crate::chat::group::wake(hub, Some(&d.target_bot_id));
+                json!({})
+            } else {
+                anyhow::ensure!(d.status == crate::store::deliveries::Status::Queued, "原派工已结束");
+                json!({"text":handoff.text, "phase":handoff.phase, "revision":handoff.revision})
+            }
+        }
+        "botSessionUsage" => {
+            let id = str_arg(&b, "botId")?;
+            let row = hub
+                .store
+                .bot(id)?
+                .filter(|row| !row.deleted && !row.config.is_group())
+                .ok_or_else(|| anyhow!("unknown bot"))?;
+            let usage =
+                row.session_id.as_deref().map(|sid| hub.store.main_context_usage(&row.config, sid)).transpose()?;
+            let (used, size) = usage.unwrap_or_default();
+            json!({"hasSession": row.session_id.is_some(), "used": used, "size": size,
+                "attempts": hub.store.recent_bot_usage(id)?})
+        }
+        "prepareHandoff" => {
+            let (reply, receive) = tokio::sync::oneshot::channel();
+            hub.send_cmd(str_arg(&b, "botId")?, Cmd::PrepareHandoff(reply))?;
+            json!({"entry": receive.await??})
+        }
         "newSession" => {
             let mode = b["mode"].as_str().unwrap_or("after");
             anyhow::ensure!(["after", "immediate", "cancel"].contains(&mode), "invalid session switch mode");
@@ -377,7 +444,22 @@ pub(super) async fn call(hub: &Arc<Hub>, caller: &Caller, method: &str, b: Value
         "memory" | "memoryFile" => crate::chat::memory::call(hub, method, &b).await?,
         "library" => crate::chat::library::list(hub, str_arg(&b, "botId")?)?,
         "readArtifact" | "renameArtifact" => crate::chat::artifacts::api(hub, method, &b).await?,
-        "editHandoff" | "keepConversation" => crate::chat::handoff::call(hub, method, &b)?,
+        "editHandoff" | "keepConversation" | "startHandoff" => {
+            let id = str_arg(&b, "entryId")?;
+            let entry = hub
+                .store
+                .entry(id)
+                .filter(|entry| entry.data["handoff"].is_object())
+                .ok_or_else(|| anyhow!("no such card"))?;
+            let (reply, receive) = tokio::sync::oneshot::channel();
+            hub.send_cmd(&entry.bot_id, Cmd::UpdateHandoff { method: method.into(), body: b, reply })?;
+            let result = receive.await??;
+            if method == "startHandoff" && entry.data["groupDeliveryId"].is_string() {
+                hub.emit_bot(&entry.bot_id);
+                crate::chat::group::wake(hub, Some(&entry.bot_id));
+            }
+            result
+        }
         "react" => {
             let e = hub.react(str_arg(&b, "entryId")?, str_arg(&b, "emoji")?)?;
             json!({"entry": e})

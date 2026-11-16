@@ -38,6 +38,15 @@ onFlowComplete:
 - tapOn: "Send now"
 - assertNotVisible: "Send now"
 - assertVisible: "Got: .*"
+# 两端使用同一个真实 Host 的详情用量入口；旧执行器没有上报窗口时显示不可用。
+- tapOn: "${output.bot.name}, view details"
+- scrollUntilVisible:
+    element:
+      text: "Main session context"
+    direction: DOWN
+- assertVisible: "Unavailable / Unavailable"
+- assertVisible: "Prepare new session with summary"
+- tapOn: "Close details"
 - runScript:
     file: queue.js
     env:

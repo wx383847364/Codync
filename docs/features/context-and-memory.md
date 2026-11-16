@@ -9,11 +9,15 @@ conversation and compaction. The design, including what is still to come, is in
 | | Where | Owner | Lifetime |
 |---|---|---|---|
 | Transcript | SQLite `entries` | Codync | One persistent chat per bot; replies quote the message they answer |
-| Model context | ACP session (`bots.session_id`) | The harness | Until a rollover (Fresh conversations), a host-side `newSession`, a failed resume, or an agent/command/folder change (the apps offer no New session); each [fallback agent](agent-fallback.md) keeps its own, parked while another answers |
+| Model context | ACP session (`bots.session_id`) | The harness | Until a rollover (Fresh conversations), a host-side `newSession`, a failed resume, or an agent/command/folder change (Details can prepare a handoff for a fresh main session); each [fallback agent](agent-fallback.md) keeps its own, parked while another answers |
 | Long-term memory | Markdown files per layer (`MEMORY.md` and notes); versions and who wrote what in SQLite `memory_*` tables | Codync: the bots, through their tools or their own file tools, and dreaming | Forever, across sessions |
 
 Codync never replays the transcript into a session. Each turn sends only the new message(s); the harness keeps
 its own context and compacts it itself.
+
+Bot Details reads `botSessionUsage` for the primary session shared with ordinary groups. The Host keeps the last reported occupancy per session and clears its used count on confirmed compaction until the agent reports again. It lists five recent prompt attempts for that bot across sessions, excluding maintenance. Retries and fallbacks remain individual attempts. Missing provider values stay unknown.
+
+`prepareHandoff` adds a private handoff card for the next private message. For a queued private task, the Host compares the current occupancy, estimated input and a reply reserve with the reported window. When the existing context makes the estimated task too large, the original message waits for the user to review the handoff, then choose `startHandoff` or keep the session. A confirmed restart opens a fresh main session using the edited summary and the original queued message. Group delivery retains its own admission rules and group-session boundaries.
 
 ## Instruction snapshot (`host/src/chat/context.rs`)
 
@@ -185,8 +189,8 @@ Claude Code's own memory; the rules live in the `codync-mem` crate, and `chat/me
   The iPhone and desktop show the draft card with *Keep this conversation* and a pencil that opens the editor
   sheet; once sent it folds to "Started a fresh conversation with this summary.", which unfolds to what it
   carried, and once kept it leaves no line. In the terminal, pick the line (`v`, `j`/`k`), then `o` unfolds it,
-  `e` edits and `K` keeps the chat. The user starts a new session from the bot's menu (terminal: `S`), not with a
-  `/` command.
+  `e` edits and `K` keeps the chat. In the bot's Details, `S` prepares a fresh main session with a handoff. On a
+  capacity card, Enter or `/new` approves the handoff and starts the queued message when the bot is ready.
 
 ## Turns
 

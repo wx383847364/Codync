@@ -134,6 +134,15 @@ internal suspend fun AppStore.stageDetails(botId: String, change: StageChange? =
 internal suspend fun AppStore.stageUsage(botId: String): StageUsage =
     WireJson.decodeFromJsonElement(ready().call("stageUsage", body("botId" to botId)))
 
+/** 读取 Host 实报的会话窗口与近期执行用量。 */
+internal suspend fun AppStore.botSessionUsage(botId: String): BotSessionUsage =
+    WireJson.decodeFromJsonElement(ready().call("botSessionUsage", body("botId" to botId)))
+
+/** 成功保存交接后同步到聊天，用户可立即查看摘要。 */
+internal suspend fun AppStore.prepareHandoff(botId: String) {
+    receiveReply(ready().call("prepareHandoff", body("botId" to botId)))
+}
+
 /** `/fast`: a bot's own Fast mode, or a group's members' together (each member's own setting, so it holds in their chats too). */
 fun AppStore.toggleFastMode(bot: Bot) {
     if (bot.kind != "group") return setFastMode(bot, !bot.fastMode)

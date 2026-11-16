@@ -37,9 +37,10 @@ impl App {
                 }
             }
         }
-        Some(Overlay::Fields(f))
+        if f.saving && matches!(f.submit, Submit::GroupContextOptions { .. }) { None } else { Some(Overlay::Fields(f)) }
     }
 
+    /// 保存当前编辑内容，独立群交接一次提交编辑与确认。
     fn save_fields(&mut self, f: &mut Fields) {
         if f.saving {
             return;
@@ -88,6 +89,35 @@ impl App {
             Submit::Handoff(entry) => {
                 self.sheet("editHandoff", json!({"entryId": entry, "text": values["text"]}), Reply::FieldsSaved);
             }
+            Submit::GroupHandoff { delivery, revision } => {
+                self.sheet(
+                    "confirmGroupHandoff",
+                    json!({"deliveryId":delivery,"revision":revision,"text":values["text"]}),
+                    Reply::FieldsSaved,
+                );
+            }
+            Submit::MemberSession { room, bot, revision } => {
+                self.sheet(
+                    "confirmGroupMemberSession",
+                    json!({"roomId":room,"botId":bot,"revision":revision,"text":values["text"]}),
+                    Reply::FieldsSaved,
+                );
+            }
+            Submit::GroupContextOptions { room, members } => {
+                if let Some(basis) = [256_000, 512_000, 1_000_000].get(f.choice) {
+                    self.call(
+                        "setGroupContextBasis",
+                        json!({"roomId":room,"basis":basis}),
+                        super::After::GroupContexts(room.clone()),
+                    );
+                } else if let Some((bot, action)) = members.get(f.choice - 3) {
+                    if *action {
+                        self.open_member_session(room.clone(), bot.clone());
+                    } else {
+                        self.inspect_member_context(room, bot);
+                    }
+                }
+            }
             Submit::Section(bot) => {
                 self.sheet("updateBot", json!({"id": bot, "section": values.get("name")}), Reply::FieldsSaved);
             }
@@ -107,9 +137,45 @@ impl App {
 
 /// Edits what a handoff card carries into the next conversation.
 pub fn handoff_fields(entry: &Entry) -> Fields {
+    let group = entry.data["handoff"]["reason"] == "groupCapacity";
+    handoff_input(
+        entry.data["handoff"]["text"].as_str().unwrap_or_default(),
+        Submit::Handoff(entry.id.clone()),
+        if group {
+            "编辑交接后回到私聊卡确认。⇧↵ 换行，↵ 保存。"
+        } else {
+            "Your next message starts a fresh conversation that begins with this. ⇧↵ new line, ↵ saves."
+        },
+    )
+}
+
+/// 独立群在编辑面板内确认，原派工收到完整摘要。
+pub(super) fn group_handoff_fields(delivery: String, revision: String, text: &str) -> Fields {
+    let mut fields = handoff_input(
+        text,
+        Submit::GroupHandoff { delivery, revision },
+        "切换此机器人在当前群的会话。群历史和待办保留。⇧↵ 换行，↵ 确认。",
+    );
+    fields.title = "Open new session".into();
+    fields
+}
+
+/// 成员没有阻塞派工时，摘要随下一条属于这个群的任务使用。
+pub(super) fn member_session_fields(room: String, bot: String, revision: String, text: &str) -> Fields {
+    let mut fields = handoff_input(
+        text,
+        Submit::MemberSession { room, bot, revision },
+        "The new session starts after the current turn. ⇧↵ new line, ↵ confirms.",
+    );
+    fields.title = "Open new session".into();
+    fields
+}
+
+/// 交接输入复用同一个多行编辑器。
+fn handoff_input(text: &str, submit: Submit, note: &str) -> Fields {
     Fields {
         title: "Edit the handoff".into(),
-        note: "Your next message starts a fresh conversation that begins with this. ⇧↵ new line, ↵ saves.".into(),
+        note: note.into(),
         choices: vec![],
         choice: 0,
         inputs: vec![Input {
@@ -119,12 +185,12 @@ pub fn handoff_fields(entry: &Entry) -> Fields {
             required: true,
             multiline: true,
             placeholder: String::new(),
-            ed: Editor::with(entry.data["handoff"]["text"].as_str().unwrap_or_default()),
+            ed: Editor::with(text),
         }],
         cursor: 0,
         error: None,
         saving: false,
-        submit: Submit::Handoff(entry.id.clone()),
+        submit,
     }
 }
 

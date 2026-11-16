@@ -157,7 +157,8 @@ pub(crate) async fn start_agent(
                     "fs": {"readTextFile": false, "writeTextFile": false},
                     "terminal": false,
                     "session": {"compaction": {}},
-                    "_meta": {"parameterizedModelPicker": true},
+                    "_meta": {"parameterizedModelPicker": true,
+                        "jetbrains":{"air":{"version":1,"capabilities":["sessionIndex"]}}},
                 },
                 "clientInfo": {"name": "codync", "title": "Codync", "version": env!("CARGO_PKG_VERSION")},
             }),
@@ -181,9 +182,19 @@ pub(crate) async fn start_agent(
     } else {
         init["agentCapabilities"]["sessionCapabilities"]["resume"].is_object().then_some("session/resume")
     };
+    let session_index = init["_meta"]["jetbrains"]["air"]["capabilities"]
+        .as_array()
+        .is_some_and(|capabilities| capabilities.iter().any(|item| item == "sessionArchive"));
     let sessions = SessionCaps {
         reopen,
         close: init["agentCapabilities"]["sessionCapabilities"]["close"].is_object(),
+        archive: if init["agentCapabilities"]["sessionCapabilities"]["archive"].is_object() {
+            Some("session/archive")
+        } else {
+            session_index.then_some("_session/archive")
+        },
+        delete: init["agentCapabilities"]["sessionCapabilities"]["delete"].is_object()
+            || (session_index && adapter(&init) == Adapter::Codex),
         system_prompt: init["agentCapabilities"]["sessionCapabilities"]["systemPrompt"].is_object(),
         additional_directories: init["agentCapabilities"]["sessionCapabilities"]["additionalDirectories"].is_object(),
         // Claude's, Codex's and omp's adapters say so in the top-level `_meta`.
@@ -195,6 +206,7 @@ pub(crate) async fn start_agent(
         rx,
         sessions,
         adapter: adapter(&init),
+        backend: String::new(),
         tool_group: None,
         loaded: HashMap::new(),
         session_slots: HashMap::new(),

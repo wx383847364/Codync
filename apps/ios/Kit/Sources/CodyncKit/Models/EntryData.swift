@@ -221,6 +221,13 @@ public struct DeliveryRow: Codable, Hashable, Sendable {
     public var targetBotId: String
     public var status: String
     public var detail: String
+    public var groupHandoff: GroupHandoff?
+
+    /// 仅展示原派工的状态和作用域，摘要通过专用入口读取。
+    public struct GroupHandoff: Codable, Hashable, Sendable {
+        public var phase: String
+        public var shared: Bool
+    }
 
     /// 内部状态统一显示为中文；未知状态不暴露协议字段。
     public var statusText: String {

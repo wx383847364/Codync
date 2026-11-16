@@ -88,9 +88,32 @@ impl Actor {
         let Some(sid) = self.turn_session.clone() else { return };
         self.context_usage_at.insert(sid.clone(), now_ms());
         let Some(conn) = self.conn.as_mut() else { return };
-        let before = conn.usage.insert(sid, (used, size)).map(|(used, _)| used);
+        let reported = conn.usage.insert(sid.clone(), (used, size));
+        let before = reported.map(|(used, _)| used);
         if !conn.reports_compaction && compacted_by_usage(before, used) {
             self.compacted(&format!("usage-{}", now_ms()), None);
+        }
+        // 若此报告本身确认了压缩，它也是整理后的新占用。
+        self.save_session_usage(&sid, Some(used), (size > 0).then_some(size));
+        if reported != Some((used, size)) {
+            self.hub.emit_bot(&self.cfg.id);
+        }
+    }
+
+    /// 记录上报或压缩导致的失效，写入失败不会中断业务执行。
+    fn save_session_usage(&self, sid: &str, used: Option<u64>, size: Option<u64>) {
+        let result = (|| {
+            // 执行器省略容量时继续使用该会话最近一次明确的容量。
+            let Some(conn) = &self.conn else { return Ok(()) };
+            let Some(slot) = conn.session_slots.get(sid) else { return Ok(()) };
+            let size = match size {
+                Some(size) => Some(size),
+                None => self.hub.store.scoped_context(&self.cfg.id, &conn.backend, slot.as_deref(), sid)?.1,
+            };
+            self.hub.store.save_scoped_context(&self.cfg.id, &conn.backend, slot.as_deref(), sid, used, size)
+        })();
+        if let Err(error) = result {
+            tracing::warn!(bot = %self.cfg.id, %error, "couldn't record session usage");
         }
     }
 
@@ -112,6 +135,10 @@ impl Actor {
                 return;
             }
         }
+        let size =
+            self.conn.as_ref().and_then(|conn| conn.usage.get(&sid)).map(|(_, size)| *size).filter(|size| *size > 0);
+        self.save_session_usage(&sid, None, size);
+        self.hub.emit_bot(&self.cfg.id);
         if let Err(error) = memory::compacted(&self.hub.store, &self.cfg.id, &sid) {
             tracing::warn!(bot = %self.cfg.id, error = format!("{error:#}"), "couldn't record the compaction");
         }
@@ -230,9 +257,166 @@ impl Actor {
         if handoff::pending(&self.hub.store, &self.cfg.id).is_some() {
             return;
         }
-        if let Err(error) = handoff::draft(&self.hub, &self.cfg, session, reason) {
+        if let Err(error) = handoff::draft(&self.hub, &self.cfg, session, reason, None) {
             tracing::warn!(bot = %self.cfg.id, error = format!("{error:#}"), "couldn't prepare the handoff");
         }
+    }
+
+    /// 用户主动准备交接时复用正在等待的卡，只在私聊主会话空闲时生成新卡。
+    pub(super) fn prepare_handoff(&mut self) -> anyhow::Result<crate::store::Entry> {
+        let sid = self.session_id.as_deref().ok_or_else(|| anyhow::anyhow!("No active main session."))?;
+        if handoff::pending(&self.hub.store, &self.cfg.id).is_some()
+            && let Some(entry) = handoff::current(&self.hub.store, &self.cfg.id)
+        {
+            return Ok(entry);
+        }
+        anyhow::ensure!(
+            self.turn.is_none() && self.pending_completion.is_none() && self.pending_new_session.is_none(),
+            "Wait for the current task to finish before preparing a new session."
+        );
+        handoff::draft(&self.hub, &self.cfg, sid, handoff::Reason::Requested, None)
+    }
+
+    /// 等待容量决策时不拼接队列正文；已通过的批次才会被消费。
+    pub(super) fn awaits_capacity_handoff(&self) -> bool {
+        handoff::current(&self.hub.store, &self.cfg.id).as_ref().is_some_and(handoff::awaits_confirmation)
+    }
+
+    /// 用实际会执行的同一批次检查空间，并在切换成功前保留原消息。
+    pub(super) async fn prepare_private_turn(&mut self, text: &str) -> Result<Option<String>, ()> {
+        match self.wait_for_private_handoff(text).await {
+            Ok(true) => return Err(()),
+            Ok(false) => {}
+            Err(error) => tracing::warn!(bot = %self.cfg.id, %error, "couldn't check private session capacity"),
+        }
+        match self.take_handoff() {
+            Ok(Some((id, text))) => {
+                self.handoff = Some(text);
+                Ok(Some(id))
+            }
+            Ok(None) => Ok(None),
+            Err(error) => {
+                tracing::error!(bot = %self.cfg.id, %error, "couldn't start a new session");
+                Err(())
+            }
+        }
+    }
+
+    /// 停止或移除最后一条私聊消息时，撤下只针对它们的容量提醒。
+    pub(super) fn clear_empty_capacity_handoff(&self) {
+        if self
+            .queue
+            .iter()
+            .any(|queued| matches!(queued, Queued::User { lane, .. } if *lane == Lane::main(&self.cfg.id)))
+        {
+            return;
+        }
+        if let Some(entry) = handoff::current(&self.hub.store, &self.cfg.id)
+            && entry.data["handoff"]["reason"] == json!(handoff::Reason::Capacity)
+        {
+            handoff::clear(&self.hub, &self.cfg.id);
+        }
+    }
+
+    /// Host 重启后接回仍待确认或未开始的私聊，复用正常 prompt 装配和队列。
+    pub(super) fn restore_handoff_queue(&mut self) {
+        let Some(card) = handoff::current(&self.hub.store, &self.cfg.id) else { return };
+        let Some(first) = card.data["handoff"]["firstQueuedSeq"].as_i64() else { return };
+        match self.hub.store.queued_private_from(&self.cfg.id, first) {
+            Ok(entries) => {
+                for entry in entries {
+                    let text = crate::chat::prompt::of_entry(&self.hub, &self.cfg, &entry.data);
+                    let lane = Lane::main(&self.cfg.id);
+                    if !self.consume_handoff_command(&lane, &text, &entry.id) {
+                        self.queue.push_back(Queued::User { lane, entry_id: entry.id, text });
+                    }
+                }
+                self.clear_empty_capacity_handoff();
+            }
+            Err(error) => tracing::warn!(bot = %self.cfg.id, %error, "couldn't restore the handoff queue"),
+        }
+    }
+
+    /// 批次只拼接一次，容量检查通过后才出队并执行同一份正文。
+    pub(super) async fn run_user_batch(
+        &mut self,
+        lane: Lane,
+        main: &Lane,
+        done_tx: &tokio::sync::mpsc::UnboundedSender<Done>,
+    ) -> bool {
+        let batch = self
+            .queue
+            .iter()
+            .map_while(|item| match item {
+                Queued::User { lane: source, entry_id, text } if source == &lane => {
+                    Some((entry_id.clone(), text.as_str()))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let text = batch.iter().map(|(_, text)| *text).collect::<Vec<_>>().join("\n\n");
+        let ids = batch.into_iter().map(|(id, _)| id).collect::<Vec<_>>();
+        let handoff = if &lane == main {
+            let Ok(handoff) = self.prepare_private_turn(&text).await else { return false };
+            handoff
+        } else {
+            None
+        };
+        self.queue.drain(..ids.len());
+        if let Err(error) = self.start_turn(lane, &ids, &text, false, done_tx).await {
+            self.start_error(error, done_tx).await;
+        }
+        if let Some(id) = handoff {
+            let submitted = self.turn.is_some();
+            if !submitted {
+                self.mark_user_messages(&ids);
+            }
+            handoff::finish(&self.hub, &self.cfg.id, &id, submitted);
+        }
+        true
+    }
+
+    /// 已知下次任务文本时复用真实窗口和回复余量，只在现有会话挤占空间时提出交接。
+    async fn wait_for_private_handoff(&self, text: &str) -> anyhow::Result<bool> {
+        let Some(sid) = self.session_id.as_deref() else { return Ok(false) };
+        if let Some(entry) = handoff::current(&self.hub.store, &self.cfg.id) {
+            // 自动或手动的普通交接已经会在下一轮接续；保留旧会话的选择也应生效一次。
+            if matches!(entry.data["handoff"]["status"].as_str(), Some("draft" | "approved" | "kept")) {
+                return Ok(handoff::awaits_confirmation(&entry));
+            }
+        }
+        if !self.next_turn_uses_current_backend() || self.handoff.is_some() {
+            return Ok(false);
+        }
+        let (Some(used), Some(size)) = self.hub.store.scoped_context(&self.cfg.id, &self.cfg.backend, None, sid)?
+        else {
+            return Ok(false);
+        };
+        let incoming = self.prompt_estimate(text, Some(sid), true).await? as u64;
+        if !super::group_context::fits_context(0, size, incoming)
+            || super::group_context::fits_context(used, size, incoming)
+        {
+            return Ok(false);
+        }
+        // 插队会改变 turn 顺序。恢复锚点须涵盖所有已排队的私聊。
+        let first_seq = self
+            .queue
+            .iter()
+            .filter_map(|queued| match queued {
+                Queued::User { lane, entry_id, .. } if *lane == Lane::main(&self.cfg.id) => {
+                    self.hub.store.entry(entry_id).map(|entry| entry.seq)
+                }
+                _ => None,
+            })
+            .min()
+            .ok_or_else(|| anyhow::anyhow!("Queued message unavailable."))?;
+        handoff::draft(&self.hub, &self.cfg, sid, handoff::Reason::Capacity, Some(first_seq))?;
+        crate::analytics::capture(
+            &self.hub,
+            crate::analytics::Event::BotSessionUsage,
+            json!({"action": "capacity", "outcome": "review_required"}).as_object().cloned().unwrap_or_default(),
+        );
+        Ok(true)
     }
 
     /// Runs a compaction the host decided on, as a hidden turn in the main chat. Dreaming goes first, and Claude's
@@ -261,7 +445,8 @@ impl Actor {
 
     /// Before the user's message in the main chat: a handoff waiting for it starts a new conversation. Returns the
     /// handoff to put before the message.
-    pub(super) fn take_handoff(&mut self) -> Option<String> {
+    /// 手动确认的新会话同时清除回退执行器的旧主会话，失败时保持待执行消息。
+    fn take_handoff(&mut self) -> anyhow::Result<Option<(String, String)>> {
         // A rollover that came due since the last tick gets its card now, without the chance to edit it.
         if let Some(sid) = self.session_id.clone()
             && handoff::pending(&self.hub.store, &self.cfg.id).is_none()
@@ -274,10 +459,23 @@ impl Actor {
                 self.draft_handoff(&sid, reason);
             }
         }
-        let (id, text) = handoff::pending(&self.hub.store, &self.cfg.id)?;
-        handoff::sent(&self.hub, &self.cfg.id, &id);
-        self.forget_session();
-        Some(text)
+        if handoff::current(&self.hub.store, &self.cfg.id).as_ref().is_some_and(handoff::awaits_confirmation) {
+            return Ok(None);
+        }
+        let Some((id, text)) = handoff::pending(&self.hub.store, &self.cfg.id) else { return Ok(None) };
+        let user_started =
+            self.hub.store.entry(&id).is_some_and(|entry| {
+                matches!(entry.data["handoff"]["reason"].as_str(), Some("requested" | "capacity"))
+            });
+        if user_started {
+            self.hub.store.reset_main_session(&self.cfg.id)?;
+            self.session_id = None;
+            self.main_session_changed();
+            self.relay.recap = None;
+        } else {
+            self.forget_session();
+        }
+        Ok(Some((id, text)))
     }
 }
 

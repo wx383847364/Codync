@@ -497,3 +497,199 @@ async fn group_session_reopens_and_compacts_without_using_the_shared_session() {
     assert_eq!(room.hub.store.bot("a").unwrap().unwrap().session_id.as_deref(), Some(shared.as_str()));
     close(room, server).await;
 }
+
+/// 整理无收益后原派工等待，普通群摘要留在私聊，独立群换会话不影响私聊。
+#[tokio::test]
+async fn confirmed_group_handoff_resumes_the_original_delivery_and_archives_its_session() {
+    use crate::store::deliveries::handoff::Phase;
+    for isolated in [false, true] {
+        let (room, server) = context_room().await;
+        script(&room, "a", "session-retirement.json", &json!({"archiveFails":isolated,"nativeArchive":!isolated}));
+        script(
+            &room,
+            "a",
+            "group-script.json",
+            &json!({"steps":[
+                {"reply":"shared marker"},
+                {"reply":"seeded context","usage":{"used":29_000,"size":30_000}},
+                {"reply":"ORIGINAL_DELIVERY_CONTINUED"}
+            ]}),
+        );
+        script(&room, "a", "group-compact.json", &json!({"usage":{"used":29_000,"size":30_000}}));
+        room.send("@a establish shared session", None).await;
+        room.settle().await;
+        let shared = room.hub.store.bot("a").unwrap().unwrap().session_id.unwrap();
+        room.hub
+            .add_entry(
+                &Lane::main("a"),
+                EntryKind::User,
+                1,
+                &json!({
+                    "text":"PRIVATE_ONLY_COOKIE","status":"sent"
+                }),
+            )
+            .unwrap();
+        let group = if isolated {
+            room.hub.create_group_session(&room.group, None).unwrap()["id"].as_str().unwrap().to_owned()
+        } else {
+            room.group.clone()
+        };
+        let send =
+            |text: &str| crate::api::dispatch(&room.hub, &Caller::Local, "send", json!({"botId":group,"text":text}));
+        send("@a seed execution context").await.unwrap();
+        room.settle().await;
+        let source = send("@a Finish the original assignment. Do not repeat work already finished.").await.unwrap();
+        let id = tokio::time::timeout(WAIT, async {
+            loop {
+                for d in room.hub.store.queued_deliveries(&group).unwrap() {
+                    if let Some(handoff) = room.hub.store.group_handoff(&d.id).unwrap()
+                        && handoff.phase == Phase::Draft
+                    {
+                        assert_eq!(d.source_entry_id.as_deref(), source["entry"]["id"].as_str());
+                        assert_eq!(handoff.slot.is_some(), isolated);
+                        return d.id;
+                    }
+                }
+                tokio::time::sleep(Duration::from_millis(30)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(records(&room, "a", "compactions.jsonl").len(), 1);
+        let original = room.hub.store.group_handoff(&id).unwrap().unwrap();
+        let history = room.hub.store.history(&group, i64::MAX, 500).unwrap();
+        assert!(!serde_json::to_string(&history).unwrap().contains("PRIVATE_ONLY_COOKIE"));
+        assert!(history.iter().any(|entry| entry.data["deliveryRows"][0]["groupHandoff"]["phase"] == "draft"));
+
+        let api = |method: &str, data: Value| {
+            let hub = room.hub.clone();
+            let method = method.to_owned();
+            async move { crate::api::dispatch(&hub, &Caller::Local, &method, data).await }
+        };
+        if isolated {
+            let draft = api("groupHandoff", json!({"deliveryId":id})).await.unwrap();
+            assert!(!draft["text"].as_str().unwrap().contains("PRIVATE_ONLY_COOKIE"));
+            for _ in 0..2 {
+                api(
+                    "confirmGroupHandoff",
+                    json!({"deliveryId":id,"revision":draft["revision"],"text":"EDITED_GROUP_HANDOFF"}),
+                )
+                .await
+                .unwrap();
+            }
+        } else {
+            assert!(api("groupHandoff", json!({"deliveryId":id})).await.is_err());
+            let entry_id = format!("group-handoff-{id}-{}", original.revision);
+            assert!(
+                room.hub.store.entry(&entry_id).unwrap().data["handoff"]["text"]
+                    .as_str()
+                    .unwrap()
+                    .contains("PRIVATE_ONLY_COOKIE")
+            );
+            api("editHandoff", json!({"entryId":entry_id,"text":"EDITED_GROUP_HANDOFF PRIVATE_ONLY_COOKIE"}))
+                .await
+                .unwrap();
+            for _ in 0..2 {
+                api("startHandoff", json!({"entryId":entry_id})).await.unwrap();
+            }
+        }
+        room.settle().await;
+        let done = room.hub.store.delivery(&id).unwrap().unwrap();
+        assert_eq!(done.status, Status::Completed);
+        assert_eq!(room.hub.store.group_handoff(&id).unwrap().unwrap().phase, Phase::Sent);
+        assert!(room.hub.store.kv_get(&format!("session.archive.a.{id}")).unwrap().contains(&original.session));
+        let retired = records(&room, "a", "retirement.jsonl");
+        assert_eq!(retired.len(), if isolated { 2 } else { 1 });
+        assert_eq!(retired[0]["method"], if isolated { "_session/archive" } else { "session/archive" });
+        assert_eq!(retired[0]["params"]["sessionId"], original.session);
+        if isolated {
+            assert_eq!(retired[1]["method"], "session/delete");
+        }
+        let prompts = records(&room, "a", "prompt-requests.jsonl");
+        let matching: Vec<_> = prompts
+            .iter()
+            .filter(|p| p["prompt"][0]["text"].as_str().unwrap().contains("Finish the original assignment."))
+            .collect();
+        assert_eq!(matching.len(), 1);
+        assert_ne!(matching[0]["sessionId"], original.session);
+        let resumed_prompt = matching[0]["prompt"][0]["text"].as_str().unwrap();
+        assert!(!resumed_prompt.contains("PRIVATE_ONLY_COOKIE"));
+        assert_eq!(resumed_prompt.contains("EDITED_GROUP_HANDOFF"), isolated);
+        let current = room.hub.store.bot("a").unwrap().unwrap().session_id.unwrap();
+        assert_eq!(current == shared, isolated);
+        if !isolated {
+            api("send", json!({"botId":"a","text":"Continue in private"})).await.unwrap();
+            room.settle().await;
+            let first_private = records(&room, "a", "prompt-requests.jsonl").pop().unwrap();
+            assert!(
+                first_private["prompt"][0]["text"]
+                    .as_str()
+                    .unwrap()
+                    .contains("EDITED_GROUP_HANDOFF PRIVATE_ONLY_COOKIE")
+            );
+        }
+        close(room, server).await;
+    }
+}
+
+/// 执行中的主动确认要等本轮保存，随后只给当前独立群的下一条派工带交接。
+#[tokio::test]
+async fn member_requests_new_session_after_current_group_turn_and_keeps_queued_work() {
+    let (room, server) = context_room().await;
+    script(&room, "a", "session-retirement.json", &json!({"nativeArchive":true}));
+    script(
+        &room,
+        "a",
+        "group-script.json",
+        &json!({"steps":[
+            {"reply":"seeded","usage":{"used":15_000,"size":30_000}},
+            {"reply":"FIRST TURN FINISHED","usage":{"used":16_000,"size":30_000}},
+            {"reply":"NEXT ASSIGNMENT FINISHED"}
+        ]}),
+    );
+    let group = room.hub.create_group_session(&room.group, None).unwrap()["id"].as_str().unwrap().to_owned();
+    let api = |method: &str, data: Value| {
+        let hub = room.hub.clone();
+        let method = method.to_owned();
+        async move { crate::api::dispatch(&hub, &Caller::Local, &method, data).await }
+    };
+    api("send", json!({"botId":group,"text":"@a seed the new group"})).await.unwrap();
+    room.settle().await;
+    let snapshot = api("groupSessionContexts", json!({"roomId":group})).await.unwrap();
+    let member = snapshot["members"].as_array().unwrap().iter().find(|m| m["botId"] == "a").unwrap();
+    assert_eq!((member["used"].as_u64(), member["recommended"].as_bool()), (Some(15_000), Some(true)));
+    let original = records(&room, "a", "prompt-requests.jsonl")[0]["sessionId"].clone();
+
+    api("send", json!({"botId":group,"text":"@a BLOCK Finish the active assignment"})).await.unwrap();
+    tokio::time::timeout(WAIT, async {
+        while records(&room, "a", "prompt-requests.jsonl").len() < 2 {
+            tokio::time::sleep(Duration::from_millis(30)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let draft = api("prepareGroupMemberSession", json!({"roomId":group,"botId":"a"})).await.unwrap();
+    let confirmation = json!({"roomId":group,"botId":"a","revision":draft["revision"],"text":"EDITED_MEMBER_SUMMARY"});
+    api("confirmGroupMemberSession", confirmation.clone()).await.unwrap();
+    api("confirmGroupMemberSession", confirmation).await.unwrap();
+    api("send", json!({"botId":group,"text":"@a Run the next assignment"})).await.unwrap();
+
+    let awaiting = api("groupSessionContexts", json!({"roomId":group})).await.unwrap();
+    let member = awaiting["members"].as_array().unwrap().iter().find(|m| m["botId"] == "a").unwrap();
+    assert_eq!(member["handoff"]["phase"], "approved");
+    assert_eq!(records(&room, "a", "prompt-requests.jsonl").len(), 2);
+    assert_eq!(records(&room, "a", "retirement.jsonl"), [] as [Value; 0]);
+    script(&room, "a", "release", &json!(true));
+    room.settle().await;
+
+    let prompts = records(&room, "a", "prompt-requests.jsonl");
+    assert_eq!(prompts.len(), 3);
+    assert_eq!(prompts[1]["sessionId"], original);
+    assert_ne!(prompts[2]["sessionId"], original);
+    assert!(prompts[2]["prompt"][0]["text"].as_str().unwrap().contains("EDITED_MEMBER_SUMMARY"));
+    assert!(prompts[2]["prompt"][0]["text"].as_str().unwrap().contains("Run the next assignment"));
+    let retired = records(&room, "a", "retirement.jsonl");
+    assert_eq!(retired.len(), 1);
+    assert_eq!(retired[0]["params"]["sessionId"], original);
+    close(room, server).await;
+}

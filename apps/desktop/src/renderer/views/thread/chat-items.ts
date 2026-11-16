@@ -4,7 +4,7 @@ import { groupExchanges, type BotExchange, type ChatSlot } from './bot-exchange'
 
 export type ChatItem =
   | { id: string; kind: 'separator'; date: number }
-  | { id: string; kind: 'entry'; entry: Entry; groupStart: boolean }
+  | { id: string; kind: 'entry'; entry: Entry; groupStart: boolean; groupHandoffCard?: string; latestAuthor?: boolean }
   | { id: string; kind: 'exchanges'; entry: Entry; exchanges: BotExchange[] }
 
 /**
@@ -34,6 +34,22 @@ export function buildChat(entries: Entry[]): ChatItem[] {
     out.push({ id, kind: 'entry', entry: e, groupStart: author !== lastAuthor })
     lastAuthor = author === 'user' || e.kind === 'agent' ? author : null
     lastDate = e.createdAt
+  }
+  // 以实际显示的分组为准，隐藏的工具记录不会切断作者标题。
+  const headers = new Map<string, Extract<ChatItem, { kind: 'entry' }>>()
+  const pending = new Map<string, string>()
+  for (const item of out) {
+    if (item.kind !== 'entry') continue
+    const { entry } = item
+    if (entry.kind === 'agent' && item.groupStart && entry.data.author) headers.set(entry.data.author, item)
+    for (const row of entry.data.deliveryRows ?? []) {
+      if (row.groupHandoff?.phase === 'draft') pending.set(row.targetBotId, item.id)
+    }
+  }
+  for (const header of headers.values()) header.latestAuthor = true
+  for (const [author, card] of pending) {
+    const header = headers.get(author)
+    if (header) header.groupHandoffCard = card
   }
   return out
 }

@@ -530,3 +530,83 @@ fn historical_limit_cancellation_is_not_replayed_by_recovery_or_new_input() {
     assert_eq!(s.delivery(&old.id).unwrap().unwrap().status, Status::Cancelled);
     assert_eq!(s.delivery(&old.id).unwrap().unwrap().last_error.as_deref(), Some("对话轮次上限"));
 }
+
+/// 重启只接续原派工准备的替换会话；删除来源群会同事务关闭仍未发送的私聊卡。
+#[test]
+fn group_handoff_recovery_keeps_its_replacement_and_deletion_settles_private_card() {
+    use super::handoff::{GroupHandoff, Phase};
+
+    let s = store();
+    s.set_session("a", Some("old")).unwrap();
+    s.post_group("g", &json!({"text":"Original task"}), &["a".into()]).unwrap();
+    let id = s.queued_deliveries("g").unwrap()[0].id.clone();
+    let draft = GroupHandoff {
+        phase: Phase::Draft,
+        revision: "current".into(),
+        session: "old".into(),
+        generation: None,
+        backend: "claude".into(),
+        model: None,
+        detached: false,
+        replacement: None,
+        replacement_generation: None,
+        slot: None,
+        text: "Private digest".into(),
+        window: 30_000,
+        incoming: 4_000,
+    };
+    s.draft_group_handoff(&id, &draft).unwrap();
+    assert!(s.decide_group_handoff(&id, true, true, "obsolete", None).is_err());
+    s.decide_group_handoff(&id, true, true, "current", None).unwrap();
+    assert_eq!(s.switch_group_handoff(&id, "claude", None, None, Some(29_000)).unwrap().0.unwrap().phase, Phase::Draft);
+    assert_eq!(s.bot("a").unwrap().unwrap().session_id.as_deref(), Some("old"));
+    s.decide_group_handoff(&id, true, true, "current", None).unwrap();
+    assert_eq!(
+        s.switch_group_handoff(&id, "claude", None, None, Some(4_000)).unwrap().0.unwrap().phase,
+        Phase::Switched
+    );
+    s.claim_delivery(&id, "a").unwrap();
+    s.register_group_replacement(&id, "claude", None, "replacement").unwrap();
+    s.set_session("a", Some("replacement")).unwrap();
+    s.recover_deliveries().unwrap();
+    assert_eq!(
+        s.switch_group_handoff(&id, "claude", None, None, Some(4_000)).unwrap().0.unwrap().phase,
+        Phase::Switched
+    );
+    let (_, _, cards) = s.delete_bot("g").unwrap();
+    assert!(cards.iter().any(|e| e.bot_id == "a" && e.data["handoff"]["status"] == "kept"));
+    assert_eq!(s.group_handoff(&id).unwrap().unwrap().phase, Phase::Superseded);
+}
+
+/// 显示档位不影响 50% 判断，独立群不会拿到同名执行器 ID 的私聊用量。
+#[test]
+fn group_member_context_uses_the_correct_slot_and_actual_window() {
+    let s = store();
+    s.set_session("a", Some("same-id")).unwrap();
+    s.save_scoped_context("a", "claude", None, "same-id", Some(128_000), Some(256_000)).unwrap();
+    let shared = s.group_session_contexts("g").unwrap();
+    assert_eq!(shared["basis"], 512_000);
+    assert_eq!(shared["members"][0]["used"], 128_000);
+    assert_eq!(shared["members"][0]["recommended"], true);
+
+    s.set_group_context_basis("g", 1_000_000).unwrap();
+    let shared = s.group_session_contexts("g").unwrap();
+    assert_eq!(shared["basis"], 1_000_000);
+    assert_eq!(shared["members"][0]["recommended"], true);
+    assert!(s.set_group_context_basis("g", 400_000).is_err());
+
+    let mut isolated = s.bot("g").unwrap().unwrap().config;
+    isolated.id = "isolated".into();
+    isolated.group_session_base = Some("g".into());
+    s.save_bot(&isolated).unwrap();
+    let slot = crate::store::group_session_slot("isolated", "claude");
+    s.save_slotted_session("a", &slot, "same-id").unwrap();
+    let pending = s.group_session_contexts("isolated").unwrap();
+    assert_eq!(pending["basis"], 512_000);
+    assert!(pending["members"][0]["used"].is_null());
+    s.save_scoped_context("a", "claude", Some(&slot), "same-id", Some(127_999), Some(256_000)).unwrap();
+    let isolated = s.group_session_contexts("isolated").unwrap();
+    assert_eq!(isolated["members"][0]["used"], 127_999);
+    assert_eq!(isolated["members"][0]["recommended"], false);
+    assert_eq!(s.group_session_contexts("g").unwrap()["members"][0]["used"], 128_000);
+}

@@ -33,6 +33,11 @@ import kotlinx.serialization.json.*
     @Serializable data class Row(val label: String, val value: Long?, val reports: Long? = null, val attempts: Long? = null)
 }
 
+/** 主会话占用和同一机器人的近期执行尝试，null 表示执行器缺报。 */
+@Serializable data class BotSessionUsage(val hasSession: Boolean, val used: Long?, val size: Long?, val attempts: List<Attempt>) {
+    @Serializable data class Attempt(val id: String, val backend: String, val model: String?, val at: Long, val rows: List<StageUsage.Row>)
+}
+
 /** A group uses the existing bot endpoints; it never owns an agent or workspace. */
 data class GroupDraft(
     val id: String? = null,
@@ -69,3 +74,17 @@ data class GroupDraft(
     }
 }
 
+
+/** 群成员上下文从 Host 批量读取，结算动作只依赖真实窗口。 */
+@Serializable
+data class GroupSessionContexts(val basis: Long, val members: List<Member>) {
+    @Serializable data class Member(
+        val botId: String, val hasSession: Boolean, val used: Long? = null, val size: Long? = null,
+        val shared: Boolean, val recommended: Boolean, val handoff: Review? = null,
+    )
+
+    @Serializable data class Review(
+        val phase: String? = null, val deliveryId: String? = null, val privateEntryId: String? = null,
+        val text: String? = null, val revision: String? = null,
+    )
+}

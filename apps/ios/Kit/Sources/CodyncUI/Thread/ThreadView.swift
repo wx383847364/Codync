@@ -24,6 +24,9 @@ public struct ThreadView: View {
     /// The chat stays on the newest message until the reader scrolls away.
     @State var following = true
     @State var loadingEarlier = false
+    @State private var groupContexts: GroupSessionContexts?
+    @State private var inspectingContext: String?
+    @State private var privateGroupReview: Entry?
     @Environment(\.accessibilityReduceMotion) var reduceMotion
 
     var bot: Bot? { model.bots[botId] }
@@ -33,6 +36,11 @@ public struct ThreadView: View {
     private var chat: some View {
         transcript
         .background(Palette.background)
+        .safeAreaInset(edge: .top, spacing: 0) {
+            if let bot, bot.isGroup, model.hello?.groupSessionContexts == true {
+                GroupContexts(room: bot, snapshot: $groupContexts, inspecting: $inspectingContext)
+            }
+        }
         .safeAreaInset(edge: .bottom) {
             VStack(spacing: 6) {
                 if let mismatch = model.mismatch {
@@ -71,6 +79,21 @@ public struct ThreadView: View {
             }
             // The details sheet's Library presents its own downloads.
             .fileExportSheet(model, botId: botId, active: details == nil)
+            .task(id: model.privateGroupHandoff) {
+                guard let target = model.privateGroupHandoff, target.botId == botId else { return }
+                do {
+                    struct Reply: Decodable { let entry: Entry }
+                    let result: Reply = try await model.ready().call("privateGroupHandoff", ["botId": botId, "entryId": target.entryId])
+                    guard !Task.isCancelled else { return }
+                    privateGroupReview = result.entry
+                    model.privateGroupHandoff = nil
+                } catch is CancellationError {
+                } catch {
+                    model.lastError = error.localizedDescription
+                    model.privateGroupHandoff = nil
+                }
+            }
+            .codyncSheet(item: $privateGroupReview) { PrivateGroupHandoffReview(entry: $0) }
             .codyncSheet(isPresented: $showTrace) {
                 TraceView(botId: botId)
             }
@@ -111,7 +134,12 @@ public struct ThreadView: View {
             if e.kind == "notice", let id = e.data.routineId {
                 RoutineNoticeRow(entry: e) { openRoutine(id) }
             } else {
-                ChatRow(entry: e, groupStart: groupStart, chat: bot, openTrace: { showTrace = true },
+                let reading = item.latestAuthor ? groupContexts?.members.first { $0.botId == e.data.author } : nil
+                let label = reading?.used.flatMap { used in groupContextPercent(used, groupContexts?.basis ?? 512_000).map {
+                    "\(groupContextCompact(used)) · \($0)"
+                }}
+                ChatRow(entry: e, groupStart: groupStart, handoffPending: item.handoffPending, groupContextLabel: label,
+                        inspectContext: { inspectingContext = e.data.author }, chat: bot, openTrace: { showTrace = true },
                         // An update card takes the composer's place, so there's nothing to reply with.
                         reply: e.isReplyable && model.mismatch == nil ? { reply(to: e) } : nil,
                         // In a group, the bot whose agent failed.
@@ -229,6 +257,8 @@ struct ChatItem: Identifiable {
 
     let id: String
     let kind: Kind
+    var handoffPending = false
+    var latestAuthor = false
 
     /// Chat-visible entries plus time separators (gaps > 1 h) and author grouping. A bot's
     /// messages arrive whole (Grok Bot's `send_message`); what it writes along the way is trace. Runs of
@@ -257,6 +287,20 @@ struct ChatItem: Identifiable {
                 out.append(ChatItem(id: id, kind: .entry(e, groupStart: author != lastAuthor)))
                 lastAuthor = (author == "user" || e.kind == "agent") ? author : nil
             }
+        }
+        // 从可见作者分组找最新标题，避免隐藏工具记录切断同一组。
+        var headers: [String: Int] = [:]
+        var pending = Set<String>()
+        for (index, item) in out.enumerated() {
+            guard case let .entry(entry, starts) = item.kind else { continue }
+            if entry.kind == "agent", starts, let author = entry.data.author { headers[author] = index }
+            for row in entry.data.deliveryRows ?? [] where row.groupHandoff?.phase == "draft" {
+                pending.insert(row.targetBotId)
+            }
+        }
+        for index in headers.values { out[index].latestAuthor = true }
+        for author in pending {
+            if let index = headers[author] { out[index].handoffPending = true }
         }
         return out
     }

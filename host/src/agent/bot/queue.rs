@@ -2,7 +2,7 @@
 
 use super::{Actor, CANCEL_GRACE, Cmd, Done, Queued, RESUME_PROMPT, RoutineCompletion, inflight_key};
 use crate::agent::own_memory;
-use crate::chat::memory;
+use crate::chat::{handoff, memory};
 use crate::hub::BotStatus;
 use crate::market::agent_sign_in;
 use crate::store::{Lane, now_ms};
@@ -16,7 +16,37 @@ impl Actor {
     pub(super) async fn on_cmd(&mut self, cmd: Cmd, done_tx: &mpsc::UnboundedSender<Done>) -> bool {
         let Some(cmd) = self.guard_tool_command(cmd) else { return true };
         match cmd {
-            Cmd::Delivery { id, reply } => self.begin_delivery(id, reply, done_tx).await,
+            Cmd::Delivery { id, reply } => {
+                if let Err(error) = self.apply_member_sessions().await {
+                    tracing::warn!(%error, "couldn't apply a confirmed member session");
+                    let _ = reply.send(false);
+                } else {
+                    self.begin_delivery(id, reply, done_tx).await;
+                }
+            }
+            Cmd::MemberSession { room, revision, text, reply } => {
+                let result = if let Some(revision) = revision {
+                    self.hub.group_handoff_update(|| {
+                        Ok((
+                            json!({}),
+                            self.hub.store.decide_member_session(
+                                &room,
+                                &self.cfg.id,
+                                false,
+                                &revision,
+                                true,
+                                text.as_deref(),
+                            )?,
+                        ))
+                    })
+                } else {
+                    self.prepare_member_session(&room)
+                };
+                self.hub.emit_bot(&self.cfg.id);
+                let _ = reply.send(result);
+                self.next_in_queue(done_tx).await;
+                crate::chat::group::wake(&self.hub, Some(&self.cfg.id));
+            }
             Cmd::RetryDeliverySave => {
                 if self.pending_completion.is_none() {
                     self.hub.delivery_storage_error(&self.cfg.id, None);
@@ -25,6 +55,9 @@ impl Actor {
                 self.apply_pending_session();
             }
             Cmd::SessionSwitch { mode } => {
+                if mode == "after" && handoff::approve_from_session_switch(&self.hub, &self.cfg.id) {
+                    return true;
+                }
                 if mode == "cancel" {
                     self.pending_new_session = None;
                 } else {
@@ -36,10 +69,24 @@ impl Actor {
                 }
                 self.hub.set_runtime(&self.cfg.id, |r| r.pending_new_session = self.pending_new_session.is_some());
             }
+            Cmd::PrepareHandoff(reply) => {
+                let _ = reply.send(self.prepare_handoff());
+            }
+            Cmd::UpdateHandoff { method, body, reply } => {
+                let result = handoff::call(&self.hub, &method, &body);
+                let member = result.as_ref().is_ok_and(|v| v["entry"]["data"]["memberSessionRoom"].is_string());
+                let _ = reply.send(result);
+                if member && method == "startHandoff" {
+                    self.hub.emit_bot(&self.cfg.id);
+                    self.next_in_queue(done_tx).await;
+                    crate::chat::group::wake(&self.hub, Some(&self.cfg.id));
+                }
+            }
             Cmd::RefreshTools => {
                 self.tools_changed = true;
             }
             Cmd::Routine(id) => self.enqueue(Queued::Routine(id), done_tx).await,
+            Cmd::Send { lane, entry_id, text } if self.consume_handoff_command(&lane, &text, &entry_id) => {}
             Cmd::Send { lane, entry_id, text } => self.enqueue(Queued::User { lane, entry_id, text }, done_tx).await,
             Cmd::Steer { entry_id } => self.steer(entry_id).await,
             Cmd::Steered { entry_id, outcome } => self.steer_answered(&entry_id, &outcome, done_tx).await,
@@ -49,6 +96,7 @@ impl Actor {
                 for id in &delivery_ids {
                     self.context_blocks.remove(id);
                 }
+                self.hub.emit_bot(&self.cfg.id);
                 self.queue.retain(|q| !matches!(q,Queued::Compact {group:Some(g),..} if g.room==chat && delivery_ids.contains(&g.delivery)));
                 if self.group_compaction.as_ref().is_some_and(|g| g.room == chat && delivery_ids.contains(&g.delivery))
                 {
@@ -169,6 +217,7 @@ impl Actor {
                 self.hub.set_entry(&entry_id, &e.data);
             }
         }
+        self.clear_empty_capacity_handoff();
         self.cancel_turn().await;
     }
 
@@ -198,11 +247,16 @@ impl Actor {
         for slot in self.run_slots() {
             self.set_session(Some(&slot), None);
         }
+        handoff::clear(&self.hub, &self.cfg.id);
         self.forget_session();
     }
 
     /// 保存和会话切换完成后才处理成员队列，投递选择始终由房间负责。
     pub(super) async fn next_in_queue(&mut self, done_tx: &mpsc::UnboundedSender<Done>) {
+        if let Err(error) = self.apply_member_sessions().await {
+            tracing::warn!(%error, "couldn't apply a confirmed member session");
+            return;
+        }
         if self.turn.is_none()
             && self.pending_completion.is_none()
             && self.pending_new_session.is_none()
@@ -303,23 +357,11 @@ impl Actor {
             // without crossing a bot request or reply or another lane: each gets its own reply.
             let Some(Queued::User { lane, .. }) = self.queue.front() else { continue };
             let lane = lane.clone();
-            let mut batch = Vec::new();
-            while let Some(Queued::User { lane: l, .. }) = self.queue.front()
-                && *l == lane
-            {
-                if let Some(Queued::User { entry_id, text, .. }) = self.queue.pop_front() {
-                    batch.push((entry_id, text));
-                }
+            if lane == main && self.awaits_capacity_handoff() {
+                return;
             }
-            let ids: Vec<String> = batch.iter().map(|(id, _)| id.clone()).collect();
-            let text = batch.iter().map(|(_, t)| t.as_str()).collect::<Vec<_>>().join("\n\n");
-            // A handoff waiting in the chat starts a new conversation with this message, as does one already taken
-            // for a turn that couldn't start.
-            if lane == main {
-                self.handoff = self.take_handoff().or_else(|| self.handoff.take());
-            }
-            if let Err(e) = self.start_turn(lane, &ids, &text, false, done_tx).await {
-                self.start_error(e, done_tx).await;
+            if !self.run_user_batch(lane, &main, done_tx).await {
+                return;
             }
         }
     }

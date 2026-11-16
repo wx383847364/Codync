@@ -133,7 +133,7 @@ fn bot_message_is_one_line_with_a_click_and_marks_only_failure() {
     let bot = &app.bots["a"];
     let render = |e: &Entry| {
         let mut out = Built { lines: vec![], buttons: vec![], messages: vec![] };
-        entry_lines(&mut out, &app, bot, e, &HashMap::new(), 80);
+        entry_lines(&mut out, &app, bot, e, &HashMap::new(), 80, false);
         out
     };
     let ok = render(&exchange_entry("completed"));
@@ -157,14 +157,14 @@ fn memory_lines_and_kept_handoffs_stay_out_of_the_chat() {
     line.data =
         serde_json::json!({"text": "Remembered: likes tea", "memory": {"action": "remember", "status": "done"}});
     let mut out = Built { lines: vec![], buttons: vec![], messages: vec![] };
-    entry_lines(&mut out, &app, &app.bots["a"], &line, &HashMap::new(), 80);
+    entry_lines(&mut out, &app, &app.bots["a"], &line, &HashMap::new(), 80, false);
     assert!(out.lines.is_empty() && out.messages.is_empty());
     line.data = serde_json::json!({"text": "Kept this conversation.", "handoff": {"status": "kept"}});
-    entry_lines(&mut out, &app, &app.bots["a"], &line, &HashMap::new(), 80);
+    entry_lines(&mut out, &app, &app.bots["a"], &line, &HashMap::new(), 80, false);
     assert!(out.lines.is_empty(), "a kept handoff changed nothing");
     line.data =
         serde_json::json!({"text": "Earlier context was summarized to make room.", "compaction": {"byHost": true}});
-    entry_lines(&mut out, &app, &app.bots["a"], &line, &HashMap::new(), 80);
+    entry_lines(&mut out, &app, &app.bots["a"], &line, &HashMap::new(), 80, false);
     assert!(out.lines.is_empty(), "a summary keeps the same conversation going");
 }
 
@@ -184,7 +184,7 @@ fn a_run_of_exchanges_is_one_counted_line() {
         let mut out = Built { lines: vec![], buttons: vec![], messages: vec![] };
         for item in group(&bot.id, refs) {
             match item {
-                Item::Entry(e) => entry_lines(&mut out, &app, bot, e, &HashMap::new(), 80),
+                Item::Entry(e) => entry_lines(&mut out, &app, bot, e, &HashMap::new(), 80, false),
                 Item::Group(g) => {
                     let lead = format!("{} messages with ", g.count);
                     bot_message_line(&mut out, &app, g.first, (&g.peer, g.peer_name.as_deref()), &lead, g.failed, 0);
@@ -210,7 +210,7 @@ fn a_bot_on_another_computer_is_named_by_its_exchange() {
     e.data["botMessage"]["targetBotId"] = "reviewer@desk".into();
     e.data["botMessage"]["peerName"] = "Reviewer on desk".into();
     let mut out = Built { lines: vec![], buttons: vec![], messages: vec![] };
-    entry_lines(&mut out, &app, &app.bots["a"], &e, &HashMap::new(), 80);
+    entry_lines(&mut out, &app, &app.bots["a"], &e, &HashMap::new(), 80, false);
     assert!(out.lines[out.lines.len() - 1].to_string().ends_with("Messaged ? Reviewer on desk"), "{:?}", out.lines);
 }
 
@@ -226,7 +226,7 @@ fn a_reply_shows_the_message_it_answers() {
         data: serde_json::json!({"text": "why?", "replyTo": {"id": "e", "author": "a", "text": "## Plan\n- ready"}}),
     };
     let mut out = Built { lines: vec![], buttons: vec![], messages: vec![] };
-    entry_lines(&mut out, &app, &app.bots["a"], &reply, &HashMap::new(), 80);
+    entry_lines(&mut out, &app, &app.bots["a"], &reply, &HashMap::new(), 80, false);
     let text: Vec<String> = out.lines.iter().map(ToString::to_string).collect();
     assert_eq!(text[1], " ↳ “Plan”", "{text:?}");
     assert!(text[2].contains("why?"));

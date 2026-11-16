@@ -58,6 +58,7 @@ data class Bot(
     val createdAt: Long = 0,
     val storageError: String? = null,
     val pendingNewSession: Boolean = false,
+    val mainSessionRevision: Long? = null,
     val startedAt: Long? = null,
     val workingChat: String? = null,
     val lastMessage: String? = null,

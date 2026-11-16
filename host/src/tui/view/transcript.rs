@@ -73,10 +73,37 @@ pub(super) fn build_chat(app: &App, b: &Bot, width: usize) -> Built {
     if !app.history_complete(&b.id) {
         out.lines.push(Line::from(Span::styled(" ↑ older messages load when you scroll up", t.dim)));
     }
+    // 为每个等确认的成员找到最近一条可见的最终回复。
+    let mut pending = BTreeSet::new();
+    if app.group_session_contexts
+        && let Some((room, snapshot)) = &app.group_contexts
+        && room == &b.id
+    {
+        pending.extend(snapshot["members"].as_array().into_iter().flatten().filter_map(|m| m["botId"].as_str()));
+    }
+    for entry in &entries {
+        for row in entry.data["deliveryRows"].as_array().into_iter().flatten() {
+            if row["groupHandoff"]["phase"] == "draft"
+                && let Some(author) = row["targetBotId"].as_str()
+            {
+                pending.insert(author);
+            }
+        }
+    }
+    let pending_headers: BTreeSet<&str> = entries
+        .iter()
+        .rev()
+        .filter_map(|entry| {
+            (entry.kind == Kind::Agent
+                && entry.is_final()
+                && entry.data["author"].as_str().is_some_and(|author| pending.remove(author)))
+            .then_some(entry.id.as_str())
+        })
+        .collect();
     // A bot's messages arrive whole (Grok Bot's `send_message`); what it writes along the way is trace.
     for item in group(&b.id, &entries) {
         match item {
-            Item::Entry(e) => entry_lines(&mut out, app, b, e, &info, width),
+            Item::Entry(e) => entry_lines(&mut out, app, b, e, &info, width, pending_headers.contains(e.id.as_str())),
             Item::Group(g) => {
                 let from = out.lines.len();
                 let lead = format!("{} messages with ", g.count);
@@ -151,7 +178,15 @@ fn intro(out: &mut Built, app: &App, b: &Bot, width: usize) {
 /// One chat entry.
 /// 按消息类型生成终端内容，投递卡按来源事件和 attempt 显示。
 /// 按消息类型渲染聊天内容；派工卡只在显式展开后显示投递详情，原文只出现在来源消息。
-fn entry_lines(out: &mut Built, app: &App, b: &Bot, e: &Entry, info: &HashMap<i64, TurnInfo>, width: usize) {
+fn entry_lines(
+    out: &mut Built,
+    app: &App,
+    b: &Bot,
+    e: &Entry,
+    info: &HashMap<i64, TurnInfo>,
+    width: usize,
+    handoff_pending: bool,
+) {
     let t = theme();
     // In a group each reply is its author's; elsewhere the bot's own.
     let author = if b.group { app.bots.get(e.data["author"].as_str().unwrap_or_default()) } else { Some(b) };
@@ -196,10 +231,28 @@ fn entry_lines(out: &mut Built, app: &App, b: &Bot, e: &Entry, info: &HashMap<i6
                 Some(a) => (a.name.clone(), a.color.as_str()),
                 None => ("A deleted bot".to_owned(), "gray"),
             };
-            out.lines.push(Line::from(vec![
-                Span::styled(format!(" {name}"), name_style(color)),
-                Span::styled(format!(" {}", clock(e.created_at)), t.dim),
-            ]));
+            let mut head = vec![Span::styled(format!(" {name}"), name_style(color))];
+            if handoff_pending {
+                if app.group_session_contexts {
+                    if let Some((room, snapshot)) = &app.group_contexts
+                        && room == &b.id
+                        && let Some(member) = snapshot["members"]
+                            .as_array()
+                            .and_then(|rows| rows.iter().find(|m| m["botId"] == e.data["author"]))
+                        && member["used"].is_u64()
+                    {
+                        let reading = super::super::manage::context_reading(
+                            member,
+                            snapshot["basis"].as_u64().unwrap_or(512_000),
+                        );
+                        head.push(Span::styled(format!(" · {reading}"), t.secondary));
+                    }
+                } else {
+                    head.push(Span::styled(" · 待确认新开会话", t.amber));
+                }
+            }
+            head.push(Span::styled(format!(" {}", clock(e.created_at)), t.dim));
+            out.lines.push(Line::from(head));
             if let Some(title) = app.artifact_title(e) {
                 out.lines.push(Line::from(Span::styled(
                     format!(" ▤ Artifact: {}", truncate(&title, width.saturating_sub(10))),
@@ -276,8 +329,13 @@ fn entry_lines(out: &mut Built, app: &App, b: &Bot, e: &Entry, info: &HashMap<i6
                 )
             } else if let Some(status) = e.data["handoff"]["status"].as_str() {
                 // The chat starts over with a handoff: read it, edit it or keep the conversation while it's a draft.
-                let hint =
-                    if status == "draft" { " · o shows it · e edits · K keeps this chat" } else { " · o shows it" };
+                // 容量提醒需要确认后才放行已排队的消息。
+                let hint = match (status, e.data["handoff"]["reason"].as_str()) {
+                    ("draft", Some("groupCapacity")) => " · o 查看摘要 · e 编辑 · ↵ 确认",
+                    ("draft", Some("capacity")) => " · o shows it · e edits · ↵ starts new · K tries current",
+                    ("draft", _) => " · o shows it · e edits · K keeps this chat",
+                    _ => " · o shows it",
+                };
                 format!("{}{hint}", e.notice_text())
             } else if e.data["agentSwitch"].is_object() {
                 // Another agent took over (or the bot's own came back): `o` shows what it was told.
@@ -296,6 +354,23 @@ fn entry_lines(out: &mut Built, app: &App, b: &Bot, e: &Entry, info: &HashMap<i6
             gap(out);
             // 窄终端也只占一行，完整成员状态仍可用 o 展开查看。
             if e.data["deliveryRows"].is_array() {
+                let text = if app.group_session_contexts
+                    && let Some(rows) = e.data["deliveryRows"].as_array()
+                {
+                    ["draft", "approved", "switched", "sent"]
+                        .into_iter()
+                        .find(|phase| rows.iter().any(|row| row["groupHandoff"]["phase"] == *phase))
+                        .map_or(text, |phase| {
+                            tr(match phase {
+                                "draft" => "Waiting for a new session",
+                                "sent" => "New session started. Original dispatch resumed.",
+                                _ => "Preparing a new session",
+                            })
+                            .into_owned()
+                        })
+                } else {
+                    text
+                };
                 let (prefix, style) = if e.data["style"] == "error" { (" × ", t.red) } else { (" · ", t.dim) };
                 out.lines.push(Line::from(Span::styled(truncate(&format!("{prefix}{text}"), width), style)));
             } else {
@@ -312,6 +387,35 @@ fn entry_lines(out: &mut Built, app: &App, b: &Bot, e: &Entry, info: &HashMap<i6
                         &[Span::styled(" · ", t.dim)],
                         &[Span::raw("   ")],
                     )),
+                }
+            }
+            if !app.group_session_contexts
+                && let Some(rows) = e.data["deliveryRows"].as_array()
+            {
+                let mut draft_index = 0;
+                for row in rows {
+                    let name = app.author_name(row["targetBotId"].as_str());
+                    let hint = match row["groupHandoff"]["phase"].as_str() {
+                        Some("draft") if row["groupHandoff"]["shared"] == true => {
+                            "待确认新开会话 · 也会切换私聊会话 · ↵ 去私聊查看交接"
+                        }
+                        Some("draft") => "待确认新开会话 · ↵ 新开会话",
+                        Some("approved" | "switched") => "正在准备新会话",
+                        Some("sent") => "已新开会话，原派工已接续",
+                        _ => continue,
+                    };
+                    if row["groupHandoff"]["phase"] == "draft" {
+                        draft_index += 1;
+                    }
+                    let choice = if row["groupHandoff"]["phase"] == "draft" && (1..=9).contains(&draft_index) {
+                        format!("{draft_index} · ")
+                    } else {
+                        String::new()
+                    };
+                    out.lines.push(Line::from(Span::styled(
+                        truncate(&format!("   {choice}{name} · {hint}"), width),
+                        t.amber,
+                    )));
                 }
             }
             let folded = unfoldable(e);

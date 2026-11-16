@@ -262,6 +262,14 @@ extension BotStore {
         answer(entry, "handoff") { try await $0.keepConversation(entryId: entry.id) }
     }
 
+    /// 确认后用交接摘要执行已经排队的任务。
+    func startHandoff(_ entry: Entry) {
+        // 与编辑、沿用旧会话共享防重复提交状态。
+        answer(entry, "handoff") { client in
+            let _: Empty = try await client.call("startHandoff", ["entryId": entry.id])
+        }
+    }
+
     /// Runs a failed routine run's work again, from its notice; the notice's update drops the button.
     public func retryRoutineRun(_ entry: Entry) {
         guard let runId = entry.data.runId else { return }
@@ -421,6 +429,18 @@ extension BotStore {
     func stageUsage(_ botId: String) async throws -> StageUsage {
         struct Request: Encodable { var botId: String }
         return try await ready().call("stageUsage", Request(botId: botId))
+    }
+
+    /// 读取 Host 实报的主会话窗口与近期执行用量。
+    func botSessionUsage(_ botId: String) async throws -> BotSessionUsage {
+        try await ready().call("botSessionUsage", ["botId": botId])
+    }
+
+    /// 先同步交接卡，返回聊天时便可查看摘要。
+    func prepareHandoff(_ botId: String) async throws {
+        struct Reply: Decodable { var entry: Entry }
+        let reply: Reply = try await ready().call("prepareHandoff", ["botId": botId])
+        upsert(reply.entry)
     }
 
     /// 手动恢复未发出的首条任务，已有本地草稿继续保留。
