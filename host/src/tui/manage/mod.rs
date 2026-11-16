@@ -442,7 +442,14 @@ impl App {
             let Some(bot) = reading["botId"].as_str() else { continue };
             let name = self.author_name(Some(bot));
             let reading_text = context_reading(reading, basis);
-            choices.push(format!("{name} · {reading_text}"));
+            // 确认后的等待状态跟随成员显示，不能从这里重复确认。
+            let waiting = matches!(reading["handoff"]["phase"].as_str(), Some("approved" | "switched"));
+            let label = if waiting {
+                format!("{name} · {reading_text} · {}", super::l10n::tr("New session after this turn"))
+            } else {
+                format!("{name} · {reading_text}")
+            };
+            choices.push(label);
             members.push((bot.to_owned(), false));
             if context_action(reading) {
                 choices.push(format!("{} · {name}", super::l10n::tr("Open new session")));

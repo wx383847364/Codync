@@ -256,7 +256,10 @@ struct BotListView: View {
         }
         .codyncSheet(item: $editingGroup) { target in
             if let store = accounts.store(for: target.computerId) {
-                GroupEditorView(group: target.group).environment(store)
+                GroupEditorView(group: target.group) {
+                    // 只允许当前仍打开的群设置发起跳转。
+                    editingGroup?.id == target.id
+                }.environment(store)
             }
         }
         .codyncSheet(item: $creatingGroupSession) { target in

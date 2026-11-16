@@ -7,16 +7,29 @@ struct PrivateGroupHandoffTarget: Equatable {
     let entryId: String
 }
 
-/// 群顶部用量和交接入口，窄屏可以横向浏览所有成员。
+/// 在群成员设置的现有名单显示上下文及交接入口。
 struct GroupContexts: View {
     let room: Bot
-    @Binding var snapshot: GroupSessionContexts?
-    @Binding var inspecting: String?
+    let members: [Bot]
+    let remove: (String) -> Void
+    let canLeaveEditor: () -> Bool
+    @State private var snapshot: GroupSessionContexts?
+    @State private var inspecting: String?
+    @Environment(\.dismissModal) private var dismiss
     @Environment(BotStore.self) private var model
     @State private var edit: Review?
+    @State private var preparing: Task<Void, Never>?
     @State private var busy = false
     @State private var error: String?
     @State private var refreshError: String?
+
+    /// 成员增删使用编辑页的暂存名单，会话确认由 Host 处理。
+    init(room: Bot, members: [Bot], remove: @escaping (String) -> Void, canLeaveEditor: @escaping () -> Bool) {
+        self.room = room
+        self.members = members
+        self.remove = remove
+        self.canLeaveEditor = canLeaveEditor
+    }
 
     private struct Review: Identifiable {
         let id: String
@@ -27,13 +40,7 @@ struct GroupContexts: View {
 
     private var basis: Int { snapshot?.basis ?? 512_000 }
 
-    /// 房间或成员更新时合并取数，旧响应不得覆盖新房间。
-    private var revision: String {
-        let members = model.members(of: room).map { "\($0.id):\($0.rev)" }.joined(separator: "|")
-        return "\(room.id):\(room.rev):\(members):\(model.isOffline)"
-    }
-
-    /// 所有成员的读数保留在一行，显示基准和操作属于当前群。
+    /// 在成员名单顶端设置全群显示档位。
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
             HStack {
@@ -54,17 +61,21 @@ struct GroupContexts: View {
                         .disabled(busy || model.isOffline)
                 }
             }
-            ScrollView(.horizontal) {
-                HStack(spacing: 7) {
-                    ForEach(model.members(of: room)) { bot in card(bot) }
-                }
+            ForEach(members) { bot in
+                // 同一行提供头像、读数、会话动作和原有移除操作。
+                memberRow(bot)
             }
-            .scrollIndicators(.hidden)
+            if snapshot?.members.contains(where: { $0.shared && ($0.recommended || $0.handoff?.phase == "draft") }) == true, !canLeaveEditor() {
+                Text(L10n.tr("Save changes")).font(.caption).foregroundStyle(Palette.secondary)
+            }
             if let error = error ?? refreshError, edit == nil { Text(error).font(.caption).foregroundStyle(Palette.danger) }
         }
-        .padding(.horizontal, 13).padding(.vertical, 6)
-        .background(Palette.background)
-        .task(id: revision) { await refresh() }
+        .groupContextUpdates(room: room, model: model, snapshot: $snapshot, failure: $refreshError)
+        .groupContextInspection(snapshot: snapshot, inspecting: $inspecting, model: model)
+        .onDisappear {
+            // 设置页已关闭时，正在生成的摘要不得再导航到私聊。
+            preparing?.cancel()
+        }
         .codyncSheet(item: $edit) { draft in
             VStack(spacing: 0) {
                 ModalHeader("Open new session")
@@ -81,79 +92,66 @@ struct GroupContexts: View {
             }
             .background(Palette.background)
         }
-        .codyncSheet(isPresented: Binding(get: { inspecting != nil }, set: { if !$0 { inspecting = nil } })) {
-            if let inspecting, let member = snapshot?.members.first(where: { $0.botId == inspecting }) {
-                VStack(spacing: 0) {
-                    ModalHeader(model.bots[inspecting]?.name ?? "Member context")
-                    CardForm {
-                        CardSection("Current context") {
-                            Text(member.used.map { "\($0.formatted()) token" } ?? L10n.tr(member.hasSession ? "Usage not reported" : "No session yet"))
-                            Text("\(L10n.tr("Display basis")) · \(groupContextCompact(basis)) · \(groupContextPercent(member.used, basis) ?? "—")")
-                            Text("\(L10n.tr("Actual model window")) · \(member.size.map(groupContextCompact) ?? "—") · \(member.size.flatMap { groupContextPercent(member.used, $0) } ?? "—")")
-                            if member.shared { Text(L10n.tr("This also starts a new private session")) }
-                        }
-                    }
-                }
-                .background(Palette.background)
-            }
-        }
     }
 
-    /// 卡片在右上角提供动作，用量区域单独打开详情。
-    private func card(_ bot: Bot) -> some View {
+    /// 展示成员的用量，普通群的新开入口会转到该成员的私聊。
+    private func memberRow(_ bot: Bot) -> some View {
         let member = snapshot?.members.first { $0.botId == bot.id }
-        return VStack(alignment: .leading, spacing: 5) {
-            HStack(spacing: 4) {
-                CharacterAvatar(bot: bot, size: 19, animated: false)
-                Text(bot.name).font(.caption.weight(.semibold)).lineLimit(1)
-                Spacer(minLength: 3)
-                if let member {
-                    if ["approved", "switched"].contains(member.handoff?.phase ?? "") {
+        let waiting = ["approved", "switched"].contains(member?.handoff?.phase ?? "")
+        let canReview = !waiting && (member?.recommended == true || member?.handoff?.phase == "draft")
+        return HStack(alignment: .top, spacing: 9) {
+            CharacterAvatar(bot: bot, size: 32, animated: false)
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 4) {
+                    Text(bot.name).font(.footnote.weight(.semibold)).lineLimit(1)
+                    Spacer(minLength: 0)
+                    if waiting {
                         Text(L10n.tr("New session after this turn")).font(.caption2).foregroundStyle(Palette.secondary)
-                    } else if member.recommended || member.handoff?.phase == "draft" {
-                        Button(L10n.tr("Open new session")) { Task { await open(member) } }
-                            .font(.caption2.weight(.semibold))
-                            .disabled(busy || model.isOffline)
+                    } else if canReview, let member {
+                        Button(L10n.tr("Open new session")) {
+                            // 只准备草稿，确认权留在摘要页面。
+                            preparing = Task { await open(member) }
+                        }
+                        .font(.caption2.weight(.semibold))
+                        .padding(5)
+                        .background(Palette.background, in: RoundedRectangle(cornerRadius: 6))
+                        .disabled(busy || model.isOffline || (member.shared && !canLeaveEditor()))
                     }
                 }
-            }
-            Button {
-                if member != nil { inspecting = bot.id }
-            } label: {
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack {
-                        Text(member?.used.map(groupContextCompact) ?? "—").font(.subheadline.weight(.semibold))
-                        Spacer()
-                        Text(groupContextPercent(member?.used, basis) ?? L10n.tr(member?.hasSession == false ? "No session yet" : "Usage not reported"))
-                            .font(.caption2).foregroundStyle(Palette.secondary)
-                    }
-                    GeometryReader { geometry in
-                        Capsule().fill(Palette.secondary.opacity(0.16)).overlay(alignment: .leading) {
-                            Capsule().fill(AvatarPalette.color(bot.avatarColor))
-                                .frame(width: geometry.size.width * CGFloat(min(1, Double(member?.used ?? 0) / Double(basis))))
+                Button {
+                    // 可从用量读数查看精确 Token 数及实际模型窗口。
+                    inspecting = bot.id
+                } label: {
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            Text(member?.used.map(groupContextCompact) ?? "—").font(.caption.weight(.semibold))
+                            Spacer()
+                            Text(groupContextPercent(member?.used, basis) ?? L10n.tr(member?.hasSession == false ? "No session yet" : member == nil ? "Unavailable" : "Usage not reported"))
+                                .font(.caption2).foregroundStyle(Palette.secondary)
                         }
-                    }.frame(height: 3)
-                }.foregroundStyle(Palette.text)
+                        if let used = member?.used {
+                            GeometryReader { geometry in
+                                Capsule().fill(Palette.secondary.opacity(0.16)).overlay(alignment: .leading) {
+                                    Capsule().fill(AvatarPalette.color(bot.avatarColor))
+                                        .frame(width: geometry.size.width * CGFloat(min(1, Double(used) / Double(basis))))
+                                }
+                            }.frame(height: 3)
+                        }
+                    }.foregroundStyle(Palette.text)
+                }
+                .buttonStyle(.plain)
+                .disabled(member == nil)
             }
-            .buttonStyle(.plain)
+            IconButton("Remove \(bot.name)", systemImage: "xmark") {
+                // 移除仍然只编辑尚未保存的成员名单。
+                remove(bot.id)
+            }
         }
-        .frame(width: 181)
         .padding(8)
-        .background(Palette.bubbleAgent, in: RoundedRectangle(cornerRadius: 12))
+        .background(canReview ? Palette.bubbleAgent : Color.clear, in: RoundedRectangle(cornerRadius: 10))
     }
 
-    /// 只在在线时读取并忽略已取消的刷新。
-    private func refresh() async {
-        guard !model.isOffline else { return }
-        do {
-            try await Task.sleep(for: .milliseconds(90))
-            let value: GroupSessionContexts = try await model.ready().call("groupSessionContexts", ["roomId": room.id])
-            if !Task.isCancelled { snapshot = value; refreshError = nil }
-        } catch is CancellationError {
-        } catch { refreshError = error.localizedDescription }
-    }
-
-    /// 更新群共享档位，响应立即更新顶部和名字旁。
+    /// 更新群共享档位，群修订会同步聊天名字旁的占比。
     private func setBasis(_ value: Int) async {
         busy = true
         defer { busy = false }
@@ -166,22 +164,28 @@ struct GroupContexts: View {
 
     /// 已有阻塞任务沿用原交接，共享摘要只在正确的私聊打开。
     private func open(_ member: GroupSessionContexts.Member) async {
+        guard !busy, !member.shared || canLeaveEditor() else { return }
         busy = true
         defer { busy = false }
         do {
             let response: GroupSessionContexts.Review = try await model.ready()
                 .call("prepareGroupMemberSession", ["roomId": room.id, "botId": member.botId])
+            guard !Task.isCancelled else { return }
             error = nil
             if let id = response.privateEntryId {
+                // 等待请求期间也可能编辑群资料，离开前再读一次暂存状态。
+                guard canLeaveEditor() else { return }
+                dismiss()
                 model.privateGroupHandoff = PrivateGroupHandoffTarget(botId: member.botId, entryId: id)
                 model.selection = member.botId
             } else if let delivery = response.deliveryId {
                 let draft = try await model.groupHandoff(delivery)
+                guard !Task.isCancelled else { return }
                 edit = Review(id: draft.revision, botId: member.botId, deliveryId: delivery, text: draft.text)
             } else if let text = response.text, let rev = response.revision {
                 edit = Review(id: rev, botId: member.botId, deliveryId: nil, text: text)
             }
-        } catch { self.error = error.localizedDescription }
+        } catch { if !Task.isCancelled { self.error = error.localizedDescription } }
     }
 
     /// 确认成功才关闭编辑面板，保存失败可保留输入后重试。
@@ -198,6 +202,57 @@ struct GroupContexts: View {
             }
             self.edit = nil
         } catch { self.error = error.localizedDescription }
+    }
+}
+
+extension View {
+    /// 监听当前群和成员的修订，使聊天标签在成员页面关闭时也能实时更新。
+    func groupContextUpdates(room: Bot?, model: BotStore, snapshot: Binding<GroupSessionContexts?>,
+                             failure: Binding<String?>) -> some View {
+        let ready = room?.isGroup == true && model.hello?.groupSessionContexts == true && !model.isOffline && model.mismatch == nil
+        let revisions = room.map { bot in
+            // 合并成员、群和连接状态，重连时重新同步。
+            model.members(of: bot).map { "\($0.id):\($0.rev)" }.joined(separator: "|")
+        } ?? ""
+        return task(id: "\(room?.id ?? ""):\(room?.rev ?? 0):\(revisions):\(ready)") {
+            guard let room, ready else { return }
+            do {
+                try await Task.sleep(for: .milliseconds(90))
+                let value: GroupSessionContexts = try await model.ready().call("groupSessionContexts", ["roomId": room.id])
+                guard !Task.isCancelled else { return }
+                snapshot.wrappedValue = value
+                failure.wrappedValue = nil
+            } catch {
+                if !Task.isCancelled { failure.wrappedValue = error.localizedDescription }
+            }
+        }
+    }
+
+    /// 从聊天标签或成员行都能查看同一套精确读数。
+    func groupContextInspection(snapshot: GroupSessionContexts?, inspecting: Binding<String?>, model: BotStore) -> some View {
+        let presentation = Binding(get: {
+            // 存在有效目标才呈现详情。
+            inspecting.wrappedValue != nil
+        }, set: { shown in
+            if !shown { inspecting.wrappedValue = nil }
+        })
+        return codyncSheet(isPresented: presentation) {
+            if let botId = inspecting.wrappedValue, let member = snapshot?.members.first(where: { $0.botId == botId }) {
+                let basis = snapshot?.basis ?? 512_000
+                VStack(spacing: 0) {
+                    ModalHeader(model.bots[botId]?.name ?? "Member context")
+                    CardForm {
+                        CardSection("Current context") {
+                            Text(member.used.map { "\($0.formatted()) token" } ?? L10n.tr(member.hasSession ? "Usage not reported" : "No session yet"))
+                            Text("\(L10n.tr("Display basis")) · \(groupContextCompact(basis)) · \(groupContextPercent(member.used, basis) ?? "—")")
+                            Text("\(L10n.tr("Actual model window")) · \(member.size.map(groupContextCompact) ?? "—") · \(member.size.flatMap { groupContextPercent(member.used, $0) } ?? "—")")
+                            if member.shared { Text(L10n.tr("This also starts a new private session")) }
+                        }
+                    }
+                }
+                .background(Palette.background)
+            }
+        }
     }
 }
 

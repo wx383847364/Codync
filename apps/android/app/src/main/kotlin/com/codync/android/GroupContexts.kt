@@ -2,7 +2,6 @@ package com.codync.android
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -10,8 +9,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.Text
@@ -20,6 +17,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
@@ -46,30 +44,40 @@ internal fun groupContextPercent(used: Long?, size: Long): String? = used?.takeI
     NumberFormat.getPercentInstance().apply { minimumFractionDigits = 1; maximumFractionDigits = 1 }.format(it.toDouble() / size)
 }
 
-/** 群顶部固定成员卡，交接操作与显示基准属于当前房间。 */
-@Composable internal fun GroupContexts(room: Bot, state: AppState, store: AppStore, snapshot: GroupSessionContexts?,
-    update: (GroupSessionContexts) -> Unit, inspecting: String?, inspect: (String?) -> Unit, modifier: Modifier = Modifier) {
-    val scope = rememberCoroutineScope()
-    val members = room.memberBots(state.bots)
+/** 监听群与成员修订，聊天和成员编辑页各自在可见期间刷新。 */
+@Composable internal fun ObserveGroupContexts(room: Bot, state: AppState, store: AppStore,
+    update: (GroupSessionContexts) -> Unit, fail: (String?) -> Unit = {}) {
     val online = state.actualConnection is LinkState.Ready && state.mismatch == null
+    val memberRevisions = room.memberBots(state.bots).map { it.id to it.rev }
+    LaunchedEffect(room.id, room.rev, memberRevisions, online) {
+        // 合并同一回合的多个更新，切换房间时取消旧快照请求。
+        if (!online) return@LaunchedEffect
+        delay(90)
+        try {
+            update(WireJson.decodeFromJsonElement(store.hostCall("groupSessionContexts", body("roomId" to room.id))))
+            fail(null)
+        } catch (cancelled: CancellationException) { throw cancelled }
+        catch (failure: Exception) { fail(failure.localizedMessage) }
+    }
+}
+
+/** 在群成员设置的现有名单显示上下文、档位和会话操作。 */
+@Composable internal fun GroupContexts(room: Bot, state: AppState, store: AppStore, members: List<Bot>,
+    remove: (String) -> Unit, canLeaveEditor: () -> Boolean) {
+    val scope = rememberCoroutineScope()
+    val dismiss = LocalDismissModal.current
+    val online = state.actualConnection is LinkState.Ready && state.mismatch == null
+    var snapshot by remember(room.id) { mutableStateOf<GroupSessionContexts?>(null) }
+    var inspecting by remember(room.id) { mutableStateOf<String?>(null) }
     val basis = snapshot?.basis ?: 512_000L
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var refreshError by remember { mutableStateOf<String?>(null) }
     var review by remember { mutableStateOf<GroupReview?>(null) }
-    val memberRevisions = members.map { it.id to it.rev }
-    LaunchedEffect(room.id, room.rev, memberRevisions, online) {
-        // 合并同一回合的多个更新，切换房间会取消旧快照请求。
-        if (!online) return@LaunchedEffect
-        delay(90)
-        try {
-            update(WireJson.decodeFromJsonElement(store.hostCall("groupSessionContexts", body("roomId" to room.id))))
-            refreshError = null
-        } catch (cancelled: CancellationException) { throw cancelled }
-        catch (failure: Exception) { refreshError = failure.localizedMessage }
-    }
+    ObserveGroupContexts(room, state, store,
+        update = { snapshot = it }, fail = { refreshError = it })
 
-    Column(modifier.fillMaxWidth().background(Palette.background).padding(horizontal = 12.dp, vertical = 5.dp),
+    Column(Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(5.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
             Column(Modifier.weight(1f)) {
@@ -89,7 +97,7 @@ internal fun groupContextPercent(used: Long?, size: Long): String? = used?.takeI
                             error = null
                             try {
                                 val request = buildJsonObject { put("roomId", room.id); put("basis", value) }
-                                update(WireJson.decodeFromJsonElement(store.hostCall("setGroupContextBasis", request)))
+                                snapshot = WireJson.decodeFromJsonElement(store.hostCall("setGroupContextBasis", request))
                             } catch (cancelled: CancellationException) { throw cancelled }
                             catch (failure: Exception) { error = failure.localizedMessage }
                             finally { busy = false }
@@ -97,10 +105,12 @@ internal fun groupContextPercent(used: Long?, size: Long): String? = used?.takeI
                     }.padding(horizontal = 6.dp, vertical = 5.dp), style = Type.caption.medium, color = Palette.text)
             }
         }
-        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+        Column {
             for (bot in members) {
                 val member = snapshot?.members?.firstOrNull { it.botId == bot.id }
-                GroupContextCard(bot, member, basis, busy || !online, { inspect(bot.id) }) {
+                // 行内读数查看精确值，移除仍改动尚未保存的成员名单。
+                GroupContextRow(bot, state.bots, member, basis, busy || !online || (member?.shared == true && !canLeaveEditor()),
+                    { inspecting = bot.id }, { remove(bot.id) }) {
                     // 阻塞派工保留原身份，共享摘要在对应的私聊展示。
                     scope.launch {
                         busy = true
@@ -110,9 +120,10 @@ internal fun groupContextPercent(used: Long?, size: Long): String? = used?.takeI
                                 "prepareGroupMemberSession", body("roomId" to room.id, "botId" to bot.id)))
                             val entryId = response.privateEntryId
                             val deliveryId = response.deliveryId
-                            if (entryId != null) {
+                            if (entryId != null && canLeaveEditor()) {
+                                dismiss()
                                 store.openBot(bot.id, entryId)
-                            } else if (response.phase !in listOf("approved", "switched")) {
+                            } else if (entryId == null && response.phase !in listOf("approved", "switched")) {
                                 val draft = if (deliveryId != null) WireJson.decodeFromJsonElement<GroupSessionContexts.Review>(
                                     store.hostCall("groupHandoff", body("deliveryId" to deliveryId))) else response
                                 if (draft.text != null && draft.revision != null) review = GroupReview(
@@ -125,23 +136,12 @@ internal fun groupContextPercent(used: Long?, size: Long): String? = used?.takeI
                 }
             }
         }
+        if (snapshot?.members?.any { it.shared && (it.recommended || it.handoff?.phase == "draft") } == true && !canLeaveEditor()) {
+            Text(tr("Save changes"), style = Type.caption, color = Palette.secondary)
+        }
         if (review == null) (error ?: refreshError)?.let { Text(it, style = Type.caption, color = Palette.danger) }
     }
-    CodyncSheet(inspecting != null, { inspect(null) }) {
-        val member = snapshot?.members?.firstOrNull { it.botId == inspecting }
-        if (member != null) Column {
-            ModalHeader(members.firstOrNull { it.id == inspecting }?.name ?: "Member context")
-            CardForm {
-                CardSection("Current context") {
-                    row { Text(member.used?.let { "${NumberFormat.getIntegerInstance().format(it)} token" }
-                        ?: tr(if (member.hasSession) "Usage not reported" else "No session yet")) }
-                    row { Text("${tr("Display basis")} · ${groupContextCompact(basis)} · ${groupContextPercent(member.used, basis) ?: "—"}") }
-                    row { Text("${tr("Actual model window")} · ${member.size?.let(::groupContextCompact) ?: "—"} · ${member.size?.let { groupContextPercent(member.used, it) } ?: "—"}") }
-                    if (member.shared) row { Text(tr("This also starts a new private session")) }
-                }
-            }
-        }
-    }
+    GroupContextInspection(snapshot, members, inspecting) { inspecting = it }
     CodyncSheet(review != null, { review = null }) {
         val draft = review
         if (draft != null) Column {
@@ -174,32 +174,66 @@ internal fun groupContextPercent(used: Long?, size: Long): String? = used?.takeI
     }
 }
 
-/** 成员卡将新开入口放在右上角，读数区域打开详情。 */
-@Composable private fun GroupContextCard(bot: Bot, member: GroupSessionContexts.Member?, basis: Long,
-    disabled: Boolean, inspect: () -> Unit, open: () -> Unit) {
-    Column(Modifier.width(197.dp).clip(RoundedCornerShape(10.dp)).background(Palette.bubbleAgent).padding(7.dp),
-        verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
-            CharacterAvatar(bot.avatarShape, bot.avatarColor, 18.dp, customImage = bot.customIcon?.dataUrl)
-            Text(bot.name, Modifier.weight(1f), style = Type.caption.medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            if (member?.handoff?.phase in listOf("approved", "switched")) {
-                Text(tr("New session after this turn"), style = Type.caption, color = Palette.secondary)
-            } else if (member?.recommended == true || member?.handoff?.phase == "draft") {
-                Text(tr("Open new session"), Modifier.clip(RoundedCornerShape(6.dp))
-                    .clickable(enabled = !disabled, onClick = open).padding(3.dp), style = Type.caption.medium, color = Palette.accent)
+/** 从消息标签或成员名单查看精确读数，避免在聊天中同时展开成员管理。 */
+@Composable internal fun GroupContextInspection(snapshot: GroupSessionContexts?, members: List<Bot>, inspecting: String?,
+    inspect: (String?) -> Unit) {
+    CodyncSheet(inspecting != null, { inspect(null) }) {
+        val member = snapshot?.members?.firstOrNull { it.botId == inspecting }
+        val basis = snapshot?.basis ?: 512_000L
+        if (member != null) Column {
+            ModalHeader(members.firstOrNull { it.id == inspecting }?.name ?: "Member context")
+            CardForm {
+                CardSection("Current context") {
+                    row { Text(member.used?.let { "${NumberFormat.getIntegerInstance().format(it)} token" }
+                        ?: tr(if (member.hasSession) "Usage not reported" else "No session yet")) }
+                    row { Text("${tr("Display basis")} · ${groupContextCompact(basis)} · ${groupContextPercent(member.used, basis) ?: "—"}") }
+                    row { Text("${tr("Actual model window")} · ${member.size?.let(::groupContextCompact) ?: "—"} · ${member.size?.let { groupContextPercent(member.used, it) } ?: "—"}") }
+                    if (member.shared) row { Text(tr("This also starts a new private session")) }
+                }
             }
         }
-        Column(Modifier.clickable(enabled = member != null, onClick = inspect), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(member?.used?.let(::groupContextCompact) ?: "—", Modifier.weight(1f), style = Type.body.medium)
-                Text(groupContextPercent(member?.used, basis) ?: tr(if (member?.hasSession == false) "No session yet" else "Usage not reported"),
-                    style = Type.caption, color = Palette.secondary)
+    }
+}
+
+/** 右侧是会话操作和原有移除按钮，名字下方显示用量。 */
+@Composable private fun GroupContextRow(bot: Bot, bots: List<Bot>, member: GroupSessionContexts.Member?, basis: Long,
+    disabled: Boolean, inspect: () -> Unit, remove: () -> Unit, open: () -> Unit) {
+    val waiting = member?.handoff?.phase in listOf("approved", "switched")
+    val canReview = !waiting && (member?.recommended == true || member?.handoff?.phase == "draft")
+    Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp))
+        .then(if (canReview) Modifier.background(Palette.bubbleAgent) else Modifier).padding(7.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.Top) {
+        BotAvatar(bot, bots, 32.dp)
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(5.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(bot.name, Modifier.weight(1f), style = Type.caption.medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                if (waiting) {
+                    Text(tr("New session after this turn"), style = Type.caption, color = Palette.secondary)
+                } else if (canReview) {
+                    Text(tr("Open new session"), Modifier.clip(RoundedCornerShape(6.dp)).background(Palette.background)
+                        .clickable(enabled = !disabled, role = Role.Button, onClick = open).padding(5.dp), style = Type.caption.medium, color = Palette.accent)
+                }
             }
-            Box(Modifier.fillMaxWidth().height(3.dp).clip(RoundedCornerShape(4.dp)).background(Palette.secondary.copy(alpha = 0.18f))) {
-                Box(Modifier.fillMaxWidth(((member?.used ?: 0).toFloat() / basis).coerceIn(0f, 1f)).height(3.dp)
-                    .background(AvatarPalette.tint(bot.avatarColor)))
+            Column(Modifier.fillMaxWidth().clickable(enabled = member != null, onClick = inspect),
+                verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(member?.used?.let(::groupContextCompact) ?: "—", Modifier.weight(1f), style = Type.body.medium)
+                    Text(groupContextPercent(member?.used, basis) ?: tr(when {
+                        member == null -> "Unavailable"
+                        !member.hasSession -> "No session yet"
+                        else -> "Usage not reported"
+                    }), style = Type.caption, color = Palette.secondary)
+                }
+                member?.used?.let { used ->
+                    // 进度条封顶，文本仍显示真实的显示基准占比。
+                    Box(Modifier.fillMaxWidth().height(3.dp).clip(RoundedCornerShape(4.dp)).background(Palette.secondary.copy(alpha = 0.18f))) {
+                        Box(Modifier.fillMaxWidth((used.toFloat() / basis).coerceIn(0f, 1f)).height(3.dp)
+                            .background(AvatarPalette.tint(bot.avatarColor)))
+                    }
+                }
             }
         }
+        IconButton("Remove ${bot.name}", "xmark", action = remove)
     }
 }
 

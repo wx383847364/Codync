@@ -35,12 +35,15 @@ import androidx.compose.ui.text.style.TextOverflow
 import com.codync.android.core.Bot
 import com.codync.android.core.GroupDraft
 import com.codync.android.design.*
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.jsonPrimitive
 
 /**
  * Change a group chat's name, what it's for and who's in it (iOS `GroupEditorView`); new groups start in [NewGroupView].
  * Bots are picked like recipients: members on top, a search, and the bots not in it yet.
+ * 关闭设置页后，正在准备的共享交接不得再打开私聊。
  */
-@Composable internal fun GroupEditor(state: AppState, initial: GroupDraft, store: AppStore) {
+@Composable internal fun GroupEditor(state: AppState, initial: GroupDraft, store: AppStore, isPresented: () -> Boolean) {
     val dismiss = LocalDismissModal.current
     var draft by remember(initial.id) { mutableStateOf(initial) }
     var query by remember { mutableStateOf("") }
@@ -71,8 +74,16 @@ import com.codync.android.design.*
                     style = Type.subheadline.copy(textAlign = TextAlign.Center, color = Palette.secondary), maxLines = 4)
             }
             Column(Modifier.fillMaxWidth().animateContentSize(Motion.layoutSize)) {
-                Text("Members", Modifier.padding(bottom = 4.dp), style = Type.subheadline.semibold, color = Palette.secondary)
-                for (bot in picked) MemberRow(bot, state.bots) { IconButton("Remove ${bot.name}", "xmark") { toggle(bot.id) } }
+                val source = state.bots.firstOrNull { it.id == initial.id }
+                if (source != null && state.hello?.get("groupSessionContexts")?.jsonPrimitive?.booleanOrNull == true) {
+                    GroupContexts(source, state, store, picked, ::toggle) {
+                        // 离开设置去确认私聊摘要前，群资料必须已经保存。
+                        isPresented() && draft == initial && !saving
+                    }
+                } else {
+                    Text("Members", Modifier.padding(bottom = 4.dp), style = Type.subheadline.semibold, color = Palette.secondary)
+                    for (bot in picked) MemberRow(bot, state.bots) { IconButton("Remove ${bot.name}", "xmark") { toggle(bot.id) } }
+                }
                 if (adding) {
                     Box(Modifier.padding(vertical = 6.dp)) {
                         FieldBox(query, { query = it }, "Search bots", fill = Palette.surface, imeAction = ImeAction.Done,
@@ -86,7 +97,6 @@ import com.codync.android.design.*
                     Box(Modifier.width(32.dp), contentAlignment = Alignment.Center) { Symbol("plus", size = 18.dp, tint = Palette.secondary) }
                     Text("Add Member", style = Type.body, color = Palette.secondary)
                 }
-                val source = state.bots.firstOrNull { it.id == initial.id }
                 val lead = state.bots.firstOrNull { it.id in draft.members && it.id == (source?.stage?.leaderId ?: source?.groupLeaderId) }
                 val route = when {
                     lead != null -> tr("Ask {name} · @ to choose another recipient").replace("{name}", lead.name)
