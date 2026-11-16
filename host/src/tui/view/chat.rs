@@ -16,6 +16,7 @@ use super::time::elapsed;
 use super::transcript::build_chat;
 
 /// 呈现来源群、投递状态和成员保存故障，不依赖新卡片写入。
+/// 渲染消息记录、队列和输入框，接收范围仅作为空输入框的占位提示。
 pub(super) fn chat(buf: &mut Buffer, r: Rect, app: &mut App, narrow: bool) {
     let t = theme();
     app.hits.chat = r;
@@ -220,20 +221,8 @@ pub(super) fn chat(buf: &mut Buffer, r: Rect, app: &mut App, narrow: bool) {
         set_cursor(Position::new(r.x + 3 + u(cursor.0), cy.min(comp_top + ch)));
     }
 
-    let mut strip_top = queue_band(buf, r, app, &b, box_top, typing);
-    if !draft.text.is_empty()
-        && app.reply.is_none()
-        && strip_top > top + 1
-        && (b.group_leader().is_some() || b.stage.as_ref().is_some_and(|stage| !stage.leader_id.is_empty()))
-    {
-        // 草稿有正文时仍显示默认接收范围，保留已有任务队列的显示位置。
-        strip_top -= 1;
-        let label = b.group_leader().and_then(|id| app.bots.get(id)).map_or_else(
-            || tr("Choose a recipient with @").into_owned(),
-            |bot| tr("Default recipient · {name}").replace("{name}", &bot.name),
-        );
-        put(buf, r.x + 3, strip_top, r.width.saturating_sub(4), &label, t.dim);
-    }
+    // 接收范围只在空输入框里显示，队列与消息记录直接相邻。
+    let strip_top = queue_band(buf, r, app, &b, box_top, typing);
 
     // Transcript.
     let body = Rect::new(r.x, top + 1, r.width, strip_top.saturating_sub(top + 1));

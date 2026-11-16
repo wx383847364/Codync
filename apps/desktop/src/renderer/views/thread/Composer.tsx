@@ -52,7 +52,7 @@ export function Composer({ botId, reply = null, about = null, cancelReply, onCal
     botId={botId} reply={reply} about={about} cancelReply={cancelReply} onCall={onCall} onInterrupt={onInterrupt} />
 }
 
-/** 管理单一目标编辑器，选人和发送共享同一草稿身份。 */
+/** 管理单一目标的草稿与发送，接收范围只通过输入框占位文字提示。 */
 function DestinationComposer({ botId, reply, about, cancelReply, onCall, onInterrupt }: {
   botId: string; reply: Entry | null; about: Artifact | null; cancelReply?: () => void; onCall?: (() => void) | null; onInterrupt?: (() => void) | null
 }) {
@@ -85,9 +85,7 @@ function DestinationComposer({ botId, reply, about, cancelReply, onCall, onInter
   const storageFailures = (bot && isGroup(bot) ? members.filter((member) => member.workingChat === botId) : bot ? [bot] : []).filter((member) => member.storageError)
 
   const name = bot?.name ?? ''
-  // 保留默认接收范围提示，首条草稿预填时也能看到。
   const leader = members.find((member) => member.id === (bot?.stage?.leaderId ?? bot?.groupLeaderId))
-  const route = leader ? tr('Default recipient · {name}').replace('{name}', () => leader.name) : tr('Choose a recipient with @')
   const placeholder = about
     ? tr('Message about “{title}”').replace('{title}', about.title)
     : reply
@@ -230,7 +228,6 @@ function DestinationComposer({ botId, reply, about, cancelReply, onCall, onInter
         <div className="composer-surface">
           <MentionMenu menu={{ ...mentionMenu, pick: mentionMenu.choose }} />
           <CommandMenu menu={commandMenu} />
-          {(leader || bot?.stage?.leaderId) && draft && !reply && !about && <div className="composer-reply">{route}</div>}
           <ComposerReveal open={!!reply}>
             {reply ? (
               <HStack gap={4} className="composer-reply">
