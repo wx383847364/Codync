@@ -197,6 +197,16 @@ impl Store {
         Ok(st.query_map(params![since, cap], row_entry)?.collect::<rusqlite::Result<_>>()?)
     }
 
+    /// 恢复因交接确认而暂停的私聊消息，只读取该任务起点之后仍在排队的用户消息。
+    pub(crate) fn queued_private_from(&self, bot: &str, first_seq: i64) -> Result<Vec<Entry>> {
+        let db = self.db.locked();
+        let mut query = db.prepare(&format!(
+            "SELECT {ENTRY_COLS} FROM entries WHERE bot_id = ?1 AND seq >= ?2 AND kind = 'user'
+             AND {NOT_REMOVED} AND json_extract(data, '$.status') = 'queued' ORDER BY turn, seq"
+        ))?;
+        Ok(query.query_map(params![bot, first_seq], row_entry)?.collect::<rusqlite::Result<_>>()?)
+    }
+
     /// Older entries of a chat, without the messages taken back: a client hears of those through `entries_since`.
     pub fn history(&self, bot_id: &str, before_seq: i64, limit: i64) -> Result<Vec<Entry>> {
         let c = self.db.locked();
@@ -346,13 +356,18 @@ impl Store {
 
     /// Permission cards left `pending` (and sends left `queued`) by a crash or restart
     /// can never be honored; returns how many were closed out.
-    /// 只清理旧普通通知，投递卡片由持久投递恢复逻辑管理。
+    /// 交接暂停中的用户消息由 actor 恢复，群投递由独立的持久投递逻辑恢复。
     pub fn expire_pending(&self) -> Result<usize> {
         let ids: Vec<String> = {
             let c = self.db.locked();
             let mut st = c.prepare(
                 "SELECT id FROM entries WHERE json_extract(data, '$.deliveryId') IS NULL AND ((kind = 'permission' AND json_extract(data, '$.status') = 'pending')
-                  OR (kind = 'user' AND json_extract(data, '$.status') = 'queued')
+                  OR (kind = 'user' AND json_extract(data, '$.status') = 'queued' AND NOT EXISTS (
+                    SELECT 1 FROM kv JOIN entries AS card ON card.id = kv.v
+                    WHERE kv.k = 'handoff.' || entries.bot_id
+                      AND entries.seq >= json_extract(card.data, '$.handoff.firstQueuedSeq')
+                      AND json_extract(card.data, '$.handoff.status') IN ('draft', 'approved', 'kept')
+                  ))
                   OR (kind = 'notice' AND json_extract(data, '$.delegationId') IS NOT NULL
                       AND json_extract(data, '$.status') IN ('queued', 'sent')))",
             )?;

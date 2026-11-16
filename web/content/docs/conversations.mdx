@@ -133,7 +133,7 @@ Type `/` at the start of a message to see the bot's commands:
 - `/servers` (terminal UI): opens the bot's [dev servers](/docs/dev-servers), while it has some.
 - `/` followed by a skill's ID: tells the bot to read that skill first and follow it for this message. The bot's skills are listed after the built-in commands.
 
-Any other `/command` goes to the agent unchanged, so the agent's own commands keep working. In the terminal UI that includes `/servers` while the bot has no dev servers. There's no command to start a new session: Codync starts one on its own when a conversation needs it. See [Bots](/docs/bots#sessions).
+Any other `/command` goes to the agent unchanged, so the agent's own commands keep working. In the terminal UI that includes `/servers` while the bot has no dev servers. To prepare a fresh main session with a summary, open the bot's Details. See [Bots](/docs/bots#sessions).
 
 ## Fresh conversations
 
@@ -141,7 +141,9 @@ When a conversation in a bot's own chat has grown long, Codync may start the age
 
 **What it carries** unfolds to what the new conversation begins with: the latest summary of the conversation, your last four messages word for word, the bot's last reply and its open plan. The bot can still search the earlier chat. The chat, memory, settings and files stay as they are.
 
-Before your next message, you can:
+When a private task may exceed the available window, Codync keeps that message queued and shows a handoff card. Choose **Start new session with summary** to run the same task there, or **Try current session** to use the existing session. The bot’s queue waits for this choice. You can also use `/new` to accept the summary. In the terminal, pick the card and press Enter for a new session or `K` to try the current one.
+
+For a handoff prepared before you send the next message, you can:
 
 - **Edit what it carries** (the pencil): change the text in **Edit the handoff** and save.
 - **Keep this conversation:** the bot carries on in the same conversation.

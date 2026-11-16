@@ -9,6 +9,7 @@ use super::{Page, Reply, RoutineField, RoutineForm, RoutineList, ctrl, newline, 
 use crate::routines::local_zone;
 
 impl App {
+    /// 打开机器人详情，同时加载常规任务和当前会话用量。
     pub fn open_routines(&mut self) {
         let Some(b) = self.bot().filter(|b| !b.group) else {
             self.flash("Routines belong to a bot, not a group");
@@ -16,9 +17,19 @@ impl App {
         };
         let bot = b.id.clone();
         self.sheet("routines", json!({"botId": bot}), Reply::Routines(bot.clone()));
-        self.overlays.push(Overlay::Routines(RoutineList { bot, items: None, runs: Vec::new(), cursor: 0 }));
+        if self.bot_session_usage {
+            self.sheet("botSessionUsage", json!({"botId": bot}), Reply::BotSessionUsage(bot.clone()));
+        }
+        self.overlays.push(Overlay::Routines(RoutineList {
+            bot,
+            session_usage: Value::Null,
+            items: None,
+            runs: Vec::new(),
+            cursor: 0,
+        }));
     }
 
+    /// 详情支持手动刷新用量及准备交接，其他按键继续管理常规任务。
     pub(in crate::tui) fn routines_key(&mut self, mut l: RoutineList, k: KeyEvent) -> Option<Overlay> {
         if let Some(page) = Page::Details.step(k) {
             self.open_page(page);
@@ -28,6 +39,12 @@ impl App {
         let current = l.items.as_ref().and_then(|v| v.get(l.cursor)).cloned();
         let bot = l.bot.clone();
         match (k.code, current) {
+            (KeyCode::F(7), _) if self.bot_session_usage => {
+                self.sheet("botSessionUsage", json!({"botId": bot}), Reply::BotSessionUsage(bot.clone()));
+            }
+            (KeyCode::Char('S'), _) if l.session_usage["hasSession"] == true => {
+                self.sheet("prepareHandoff", json!({"botId": bot}), Reply::PrepareHandoff(bot.clone()));
+            }
             (KeyCode::Esc | KeyCode::Char('q' | 'R'), _) => return None,
             // The agent, model and instructions shown above the routines are edited in Settings.
             (KeyCode::Char('i'), _) => {

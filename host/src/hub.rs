@@ -57,6 +57,8 @@ pub struct Runtime {
     /// The ACP session the running turn prompts. A memory write made there is one that session already knows.
     pub session: Option<String>,
     pub pending_new_session: bool,
+    /// 主会话提交后变更的版本，只用于客户端使旧用量失效。
+    pub main_session_revision: u64,
     pub storage_error: Option<String>,
     pub fast_mode: crate::agent::config::FastModeSupport,
     /// The fallback the bot is on; `None` on its own agent (see `agent::fallback`).
@@ -173,7 +175,7 @@ impl Hub {
 
     /// 恢复投递保守执行边界，再启动成员与统一房间周期补查。
     pub fn start(self: &Arc<Self>) -> Result<()> {
-        // Approval cards and queued sends from a previous run can't be honored anymore.
+        // 未发送的普通消息过期，等待交接确认的消息由成员恢复。
         self.store.expire_pending()?;
         self.store.recover_deliveries()?;
         self.store.interrupt_usage_attempts()?;
@@ -286,6 +288,7 @@ impl Hub {
             || before.lane != after.lane
             || before.fast_mode != after.fast_mode
             || before.pending_new_session != after.pending_new_session
+            || before.main_session_revision != after.main_session_revision
             || before.agent_step != after.agent_step
         {
             self.emit_bot(id);

@@ -84,6 +84,10 @@ pub(super) fn chat(buf: &mut Buffer, r: Rect, app: &mut App, narrow: bool) {
         top += 1;
     }
 
+    if b.group && app.group_session_contexts {
+        top = member_context_lines(buf, r, top, app, &b.id);
+    }
+
     // 群内也显示成员的保存故障，V 会重试这些成员，不向群本身发送 actor 命令。
     for member in app
         .bots
@@ -354,6 +358,43 @@ pub(super) fn with_bg(lines: Vec<Line<'static>>, width: usize, bg: Style) -> Vec
             Line::from(spans)
         })
         .collect()
+}
+
+/// 窄终端用 W 查看完整名单，空闲高度内显示同样的成员卡和按钮。
+fn member_context_lines(buf: &mut Buffer, r: Rect, mut top: u16, app: &mut App, room: &str) -> u16 {
+    let t = theme();
+    let snapshot = app.group_contexts.as_ref().filter(|(id, _)| id == room).map(|(_, snapshot)| snapshot);
+    let basis = snapshot.and_then(|v| v["basis"].as_u64()).unwrap_or(512_000);
+    let label = if basis == 1_000_000 { "1M".into() } else { format!("{}K", basis / 1000) };
+    put(buf, r.x + 1, top, r.width.saturating_sub(2), &format!("{} · {label} · W", tr("Member context")), t.bold);
+    app.hits.clicks.push((Rect::new(r.x, top, r.width, 1), Click::GroupContexts));
+    top += 1;
+    let Some(members) = snapshot.and_then(|v| v["members"].as_array()) else { return top };
+    let max = usize::from((r.height / 6).min(5));
+    for member in members.iter().take(max) {
+        let Some(bot) = member["botId"].as_str() else { continue };
+        let name = app.author_name(Some(bot));
+        let reading = super::super::manage::context_reading(member, basis);
+        let actionable = super::super::manage::context_action(member);
+        let action = if actionable {
+            tr("Open new session")
+        } else if matches!(member["handoff"]["phase"].as_str(), Some("approved" | "switched")) {
+            tr("New session after this turn")
+        } else {
+            "".into()
+        };
+        let left =
+            if action.is_empty() { r.width.saturating_sub(2) } else { r.width.saturating_sub(u(w(&action)) + 3) };
+        put(buf, r.x + 1, top, left, &format!("{name} · {reading}"), t.secondary);
+        if !action.is_empty() && r.width > u(w(&action)) + 4 {
+            let at = rput(buf, r.right() - 1, top, &action, if actionable { t.amber } else { t.secondary });
+            if actionable {
+                app.hits.clicks.push((Rect::new(at, top, r.right() - at, 1), Click::MemberSession(bot.to_owned())));
+            }
+        }
+        top += 1;
+    }
+    top
 }
 
 #[cfg(test)]

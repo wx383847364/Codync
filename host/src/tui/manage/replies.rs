@@ -8,6 +8,7 @@ use super::super::l10n::tr;
 use super::{Market, MemoryMode, Reply, Shell, open_browser, s};
 
 impl App {
+    /// 更新当前详情的会话统计，准备交接后返回原聊天。
     pub(in crate::tui) fn on_sheet_reply(&mut self, r: Reply, res: Result<Value, String>) {
         let v = match res {
             Ok(v) => v,
@@ -91,6 +92,52 @@ impl App {
                 } else {
                     // A change: the list comes again.
                     self.sheet("routines", json!({"botId": bot}), Reply::Routines(bot.clone()));
+                }
+            }
+            Reply::BotSessionUsage(bot) => {
+                for overlay in &mut self.overlays {
+                    if let Overlay::Routines(details) = overlay
+                        && details.bot == bot
+                    {
+                        details.session_usage = v.clone();
+                    }
+                }
+            }
+            Reply::PrepareHandoff(bot) => {
+                if matches!(self.overlays.last(), Some(Overlay::Routines(details)) if details.bot == bot) {
+                    self.overlays.pop();
+                }
+            }
+            Reply::GroupHandoff(id) => {
+                if let (Some(text), Some(revision)) = (v["text"].as_str(), v["revision"].as_str()) {
+                    self.overlays.push(Overlay::Fields(Box::new(super::fields::group_handoff_fields(
+                        id,
+                        revision.into(),
+                        text,
+                    ))));
+                }
+            }
+            Reply::MemberSession { room, bot } => {
+                if self.selected.as_deref() != Some(&room)
+                    || matches!(v["phase"].as_str(), Some("approved" | "switched"))
+                {
+                    return;
+                }
+                if let Some(id) = v["privateEntryId"].as_str() {
+                    self.call(
+                        "privateGroupHandoff",
+                        json!({"botId":bot,"entryId":id}),
+                        After::PrivateGroupHandoff(bot),
+                    );
+                } else if let Some(id) = v["deliveryId"].as_str() {
+                    self.sheet("groupHandoff", json!({"deliveryId":id}), Reply::GroupHandoff(id.into()));
+                } else if let (Some(text), Some(revision)) = (v["text"].as_str(), v["revision"].as_str()) {
+                    self.overlays.push(Overlay::Fields(Box::new(super::fields::member_session_fields(
+                        room,
+                        bot,
+                        revision.into(),
+                        text,
+                    ))));
                 }
             }
             Reply::Library(bot) => self.library_loaded(&bot, v["items"].as_array().map_or(&[], Vec::as_slice)),

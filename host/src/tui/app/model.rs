@@ -55,6 +55,8 @@ pub enum After {
         saved: bool,
     },
     StageUsage(String),
+    GroupContexts(String),
+    PrivateGroupHandoff(String),
     Connectors,
     Skills,
     Installed,
@@ -182,6 +184,11 @@ impl Entry {
             "cancelled" => "已停止",
             _ => "状态待更新",
         }
+    }
+
+    /// 原派工下仍需确认的成员，顺序与终端显示相同。
+    pub(super) fn pending_group_handoff(&self, index: usize) -> Option<&Value> {
+        self.data["deliveryRows"].as_array()?.iter().filter(|row| row["groupHandoff"]["phase"] == "draft").nth(index)
     }
 
     /// 只聚合结构化目标行；全部因同一保护规则停止时才显示对应停止原因。

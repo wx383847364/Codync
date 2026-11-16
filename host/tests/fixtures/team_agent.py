@@ -379,7 +379,24 @@ for line in sys.stdin:
         capabilities = {"loadSession": True}
         if not pathlib.Path("first-message").exists():
             capabilities["_meta"] = {"claudeCode": {}}
-        send({"id": request["id"], "result": {"agentCapabilities": capabilities}})
+        result = {"agentCapabilities": capabilities}
+        # 以明确的能力和不同结局验证归档优先、明确失败后才删除。
+        if pathlib.Path("session-retirement.json").exists():
+            capabilities["sessionCapabilities"] = {"delete": {}}
+            retirement = json.loads(pathlib.Path("session-retirement.json").read_text())
+            if retirement.get("nativeArchive"):
+                capabilities["sessionCapabilities"]["archive"] = {}
+            else:
+                result["_meta"] = {"jetbrains": {"air": {"capabilities": ["sessionArchive"]}}}
+        send({"id": request["id"], "result": result})
+    elif method in ("_session/archive", "session/archive", "session/delete") and pathlib.Path("session-retirement.json").exists():
+        with open("retirement.jsonl", "a") as log:
+            log.write(json.dumps(request) + "\n")
+        retirement = json.loads(pathlib.Path("session-retirement.json").read_text())
+        if method != "session/delete" and retirement.get("archiveFails"):
+            send({"id": request["id"], "error": {"code": -32601, "message": "archive unavailable"}})
+        else:
+            send({"id": request["id"], "result": {}})
     elif method in ("session/new", "session/load"):
         # 测试在claimed与started之间强杀host，准备会话时绝不发送任务prompt。
         while pathlib.Path("hold-session").exists():

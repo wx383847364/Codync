@@ -25,6 +25,7 @@ mod fallback;
 mod fast_mode;
 mod files;
 mod group_context;
+mod group_handoff;
 mod launch;
 mod lifecycle;
 mod modes;
@@ -110,6 +111,7 @@ pub fn spawn(hub: Arc<Hub>, base: BotConfig) -> BotHandle {
         context_usage_at: HashMap::new(),
         raw_prompt: false,
         handoff: None,
+        private_group_summary_key: None,
         compaction_notice: None,
         applied_system: HashMap::new(),
         dreamer,
@@ -161,6 +163,9 @@ struct SessionCaps {
     reopen: Option<&'static str>,
     /// `session/close`: an idle session can be released while the agent keeps running.
     close: bool,
+    /// 已声明的原生或 AIR 归档请求，各自的 RPC 名称不同。
+    archive: Option<&'static str>,
+    delete: bool,
     /// ACP `systemPrompt`: instructions on `session/new` and `load` that the agent keeps at system level.
     system_prompt: bool,
     /// ACP `additionalDirectories`: folders outside `cwd` the agent may work in, here the memory folders.
@@ -195,6 +200,8 @@ pub(crate) struct Conn {
     pub(crate) rx: mpsc::UnboundedReceiver<Incoming>,
     sessions: SessionCaps,
     pub(crate) adapter: Adapter,
+    /// 启动后保持执行器身份，重新配置不能改变旧连接的用量归属。
+    backend: String,
     /// pi 的 MCP 工具按进程绑定，保存该进程可服务的独立群。
     tool_group: Option<String>,
     /// Sessions already created or loaded in this process, and when each was last used.
@@ -294,6 +301,7 @@ struct Actor {
     raw_prompt: bool,
     /// What the next prompt carries from the conversation it starts over from.
     handoff: Option<String>,
+    private_group_summary_key: Option<String>,
     /// The chat line of the last compaction, which a late summary fills in.
     compaction_notice: Option<String>,
     /// Session -> the instructions this process last handed Claude as its system prompt.
@@ -394,6 +402,14 @@ impl Actor {
         {
             return;
         }
+        // 保留共享交接直至私聊任务结束，受控回退仍可收到同一份摘要。
+        if let Some(key) = self.private_group_summary_key.take()
+            && done.is_ok()
+            && !self.stop_requested
+            && let Err(error) = self.hub.store.kv_delete(&key)
+        {
+            tracing::warn!(%error, "couldn't acknowledge the private group handoff");
+        }
         let (session, routine) = (self.turn_session.clone(), self.active_routine.is_some());
         let failed = done.as_ref().is_err_and(acp::may_end_session);
         self.finish_turn(&done);
@@ -417,6 +433,10 @@ impl Actor {
             self.resume_interrupted(Lane::main(&self.cfg.id), &done_tx).await;
         } else if let Some(lane) = interrupted {
             self.resume_interrupted(lane, &done_tx).await;
+        }
+        self.restore_handoff_queue();
+        if let Err(error) = self.apply_member_sessions().await {
+            tracing::warn!(%error, "couldn't recover confirmed member sessions");
         }
         let mut delivery_ticks = 0u8;
         loop {
@@ -447,7 +467,12 @@ impl Actor {
                     }
                     // 周期补查保证丢失的提交后通知和启动窗口不会遗失 queued 投递。
                     delivery_ticks=(delivery_ticks+1)%10;
-                    if delivery_ticks==0 {crate::chat::group::wake(&self.hub,None);}
+                    if delivery_ticks == 0 {
+                        if let Err(error) = self.apply_member_sessions().await {
+                            tracing::warn!(%error, "couldn't apply a confirmed member session");
+                        }
+                        crate::chat::group::wake(&self.hub, None);
+                    }
                     // 超时仅结束维护，投递仍保持排队。
                     self.expire_group_compaction().await;
                     self.retry_delivery_save(false);

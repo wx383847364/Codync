@@ -140,6 +140,14 @@ impl Hub {
         Ok(())
     }
 
+    /// 交接和原派工的投影共用事件锁。
+    pub(crate) fn group_handoff_update<T>(&self, apply: impl FnOnce() -> Result<(T, Vec<Entry>)>) -> Result<T> {
+        let _guard = self.emit_lock.locked();
+        let (result, cards) = apply()?;
+        self.delivery_entries(&cards);
+        Ok(result)
+    }
+
     /// 持久取消和发布成功后调用方才能停止执行。
     pub fn cancel_deliveries(&self, room: &str, target: Option<&str>, reason: &str) -> Result<()> {
         let _guard = self.emit_lock.locked();

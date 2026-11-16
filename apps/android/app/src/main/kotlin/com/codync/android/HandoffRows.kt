@@ -39,10 +39,13 @@ import kotlinx.serialization.json.JsonObject
     var expanded by remember { mutableStateOf(false) }
     var editing by remember { mutableStateOf(false) }
     val carried = card.text("text").orEmpty()
+    val groupCapacity = card.text("reason") == "groupCapacity"
+    val needsConfirmation = card.text("reason") == "capacity" || groupCapacity
+    val answering = "handoff:${entry.id}" in state.busy
     val label: @Composable RowScope.() -> Unit = {
         Symbol("arrow.triangle.branch", size = 13.dp, tint = Palette.secondary)
         Spacer(Modifier.width(6.dp))
-        Text(entry.text, Modifier.weight(1f, fill = false), style = Type.footnote, color = Palette.secondary)
+        Text(tr(entry.text), Modifier.weight(1f, fill = false), style = Type.footnote, color = Palette.secondary)
     }
     val what: @Composable () -> Unit = {
         SelectionContainer {
@@ -56,20 +59,24 @@ import kotlinx.serialization.json.JsonObject
             Disclosure(expanded, { expanded = !expanded }, Modifier.fillMaxWidth(), {
                 Text(tr("What it carries"), style = Type.footnote.medium, color = Palette.text)
             }) { what() }
+            // 窄屏上确认按钮独占一行，方便继续查看和编辑摘要。
+            if (needsConfirmation && !answering) {
+                PrimaryButton("Start new session with summary") { store.startHandoff(entry) }
+            }
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                if ("handoff:${entry.id}" in state.busy) Spinner()
+                if (answering) Spinner()
                 else {
-                    SecondaryButton("Keep this conversation") { store.keepConversation(entry) }
+                    if (!groupCapacity) SecondaryButton(if (needsConfirmation) "Try current session" else "Keep this conversation") { store.keepConversation(entry) }
                     IconButton("Edit what it carries", "pencil") { editing = true }
                 }
             }
         }
-        CodyncSheet(editing, { editing = false }) { HandoffEditor(entry, carried, store) }
+        CodyncSheet(editing, { editing = false }) { HandoffEditor(entry, carried, needsConfirmation, store) }
     } else Disclosure(expanded, { expanded = !expanded }, Modifier.fillMaxWidth(), label) { what() }
 }
 
-/** Edits what the next conversation starts with (iOS `HandoffEditorView`). */
-@Composable private fun HandoffEditor(entry: Entry, initial: String, store: AppStore) {
+/** 编辑交接文本，并按已排队或新发送的任务显示生效时机。 */
+@Composable private fun HandoffEditor(entry: Entry, initial: String, needsConfirmation: Boolean, store: AppStore) {
     var text by remember { mutableStateOf(initial) }
     var saving by remember { mutableStateOf(false) }
     val dismiss = LocalDismissModal.current
@@ -84,7 +91,9 @@ import kotlinx.serialization.json.JsonObject
             }
         }
         CardForm {
-            CardSection(footer = "Your next message starts a fresh conversation that begins with this.") {
+            CardSection(footer = if (entry.data["handoff"]?.let { it as? JsonObject }?.text("reason") == "groupCapacity") "Your next private message will start with this summary."
+                else if (needsConfirmation) "The queued task will start with this summary."
+                else "Your next message starts a fresh conversation that begins with this.") {
                 row {
                     val style = Type.footnote.copy(fontFamily = FontFamily.Monospace, color = Palette.text)
                     BasicTextField(text, { text = it }, Modifier.fillMaxWidth().heightIn(min = 180.dp), textStyle = style,

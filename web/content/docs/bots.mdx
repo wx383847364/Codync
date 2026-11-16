@@ -124,7 +124,11 @@ Sections group a computer's bots under headings you name, such as Work and Perso
 
 A bot's chat and its agent's session are two different things. The chat is the permanent record you scroll through. The session is the agent's working context: what the model currently remembers of the conversation.
 
-You never start a session yourself. Codync starts a fresh one on its own when a long conversation needs one; the chat then shows a card with a summary you can edit or skip. See [Fresh conversations](/docs/conversations#fresh-conversations). A new session also starts when you change the bot's agent, model or folder. Either way the chat history stays where it is, and so do the bot's memory, settings and files.
+Open the bot's **Details** to see its **Main session context** and up to five recent task attempts. Expand an attempt to see the token fields the provider reported. Failed attempts and retries can have their own entries. A missing report shows as **Unavailable**. In the terminal, press `R` for Details and `F7` to refresh usage.
+
+Choose **Prepare new session with summary** in Details (terminal: `S`). Back in the chat, you can review and edit what will carry over. Your next private message uses the new session. When a queued private task may exceed the current window, the chat instead asks you to choose **Start new session with summary** or **Try current session** for that task. See [Fresh conversations](/docs/conversations#fresh-conversations).
+
+A bot's private chat and ordinary groups share its main session. Explicitly created [group sessions](/docs/groups#starting-a-new-session) and stage groups have their own sessions for their members. A fresh main session keeps the bot's chat history, memory, settings and files.
 
 ## Delete a bot
 

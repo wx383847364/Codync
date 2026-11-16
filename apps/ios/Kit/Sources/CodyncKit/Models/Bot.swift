@@ -82,6 +82,7 @@ public struct Bot: Codable, Identifiable, Hashable, Sendable {
     public var activity: String
     public var storageError: String?
     public var pendingNewSession: Bool?
+    public var mainSessionRevision: UInt64?
     public var startedAt: Int64?
     /// Where the running turn talks: the bot's own chat, or a group.
     public var workingChat: String?
@@ -109,6 +110,7 @@ public struct Bot: Codable, Identifiable, Hashable, Sendable {
 
 extension Bot {
     /// 解码群及可选阶段配置，兼容未提供阶段字段的 Host。
+    /// 解码 Host 已提交的主会话版本，使机器人详情能够刷新用量。
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(String.self, forKey: .id)
@@ -160,6 +162,7 @@ extension Bot {
         activity = try c.decodeIfPresent(String.self, forKey: .activity) ?? ""
         storageError = try c.decodeIfPresent(String.self, forKey: .storageError)
         pendingNewSession = try c.decodeIfPresent(Bool.self, forKey: .pendingNewSession)
+        mainSessionRevision = try c.decodeIfPresent(UInt64.self, forKey: .mainSessionRevision)
         startedAt = try c.decodeIfPresent(Int64.self, forKey: .startedAt)
         workingChat = try c.decodeIfPresent(String.self, forKey: .workingChat)
         agentStep = try? c.decodeIfPresent(AgentStep.self, forKey: .agentStep)

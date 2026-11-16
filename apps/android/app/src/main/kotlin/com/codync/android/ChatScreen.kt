@@ -60,6 +60,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.codync.android.core.*
 import com.codync.android.design.*
 import com.kyant.shapes.Capsule
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.jsonPrimitive
 
 /**
  * One endless conversation with a bot or a group, as iOS `ThreadView`: only deliberate messages
@@ -92,6 +94,10 @@ import com.kyant.shapes.Capsule
     LaunchedEffect(state.callRequest) { if (store.takeCallRequest(bot.id) && state.voice == null) startCall() }
     val top = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
     var composerHeight by remember { mutableIntStateOf(0) }
+    var contextHeight by remember { mutableIntStateOf(0) }
+    var groupContexts by remember { mutableStateOf<GroupSessionContexts?>(null) }
+    var inspectingContext by remember { mutableStateOf<String?>(null) }
+    val showContexts = bot.kind == "group" && state.hello?.get("groupSessionContexts")?.jsonPrimitive?.booleanOrNull == true
     val density = LocalDensity.current
     // The message the composer quotes, until it sends or this chat closes.
     var replyId by rememberSaveable(bot.id) { mutableStateOf<String?>(null) }
@@ -105,6 +111,10 @@ import com.kyant.shapes.Capsule
         ScrollEdge(Edge.Top, top + 84.dp)
         ScrollEdge(Edge.Bottom, with(density) { composerHeight.toDp() } + 4.dp, Modifier.align(Alignment.BottomCenter))
         ThreadHeader(bot, state, store) { if (bot.kind == "group") editGroup(bot) else details = DetailsRequest() }
+        if (showContexts && state.voice == null) {
+            GroupContexts(bot, state, store, groupContexts, { groupContexts = it }, inspectingContext, { inspectingContext = it },
+                Modifier.padding(top = top + 54.dp).onSizeChanged { contextHeight = it.height })
+        }
         // The call floats over the chat under the header, as on iOS; the chat stays readable and usable.
         AnimatedVisibility(state.voice != null, Modifier.padding(top = top + 54.dp),
             enter = fadeIn(Motion.fade()) + slideInVertically(Motion.layoutOffset) { -it }, exit = fadeOut(Motion.fade()) + slideOutVertically(Motion.layoutOffset) { -it }) {
@@ -123,10 +133,12 @@ import com.kyant.shapes.Capsule
                 queued = queuedMessages(state.chatEntries(bot), bot.isWorking))
         }
     }) {
-        Transcript(bot, chatState, store, connect, PaddingValues(start = 16.dp, end = 16.dp, top = top + 60.dp,
+        val transcriptTop = if (showContexts && state.voice == null && contextHeight > 0) with(density) { contextHeight.toDp() } + 6.dp else top + 60.dp
+        Transcript(bot, chatState, store, connect, groupContexts, { inspectingContext = it }, PaddingValues(start = 16.dp, end = 16.dp, top = transcriptTop,
             bottom = with(density) { composerHeight.toDp() } + 8.dp), indicatorTop = top + 50.dp, openRoutine = openRoutine, reply = reply,
             addFallback = { details = DetailsRequest(botId = it.id) }, openArtifact = { viewing = it }, openCall = { callLine = it }, saveSharedFile = saveSharedFile) { peer = it }
     }
+    if (bot.kind != "group") PrivateGroupHandoff(bot, state, store)
     CodyncDialog("Microphone access is off", micDenied, { micDenied = false },
         message = "Allow the microphone in Android settings to talk to your bot.") {
         listOf(DialogAction("Open settings") { openAppSettings(context) })
@@ -219,7 +231,8 @@ import com.kyant.shapes.Capsule
 private fun AppState.chatEntries(bot: Bot) = entries.filter { it.botId == bot.id && it.isChat }.hidingCalls()
 
 /** 呈现会话消息与实时活动，向上滚动时加载更早的消息。 */
-@Composable private fun Transcript(bot: Bot, state: AppState, store: AppStore, connect: ConnectionRequestActions, padding: PaddingValues,
+@Composable private fun Transcript(bot: Bot, state: AppState, store: AppStore, connect: ConnectionRequestActions,
+    groupContexts: GroupSessionContexts?, inspectContext: (String) -> Unit, padding: PaddingValues,
     indicatorTop: Dp, openRoutine: (String) -> Unit, reply: (Entry) -> Unit, addFallback: (Bot) -> Unit, openArtifact: (OpenArtifact) -> Unit,
     openCall: (String) -> Unit, saveSharedFile: (Entry, SharedFile) -> Unit, openPeer: (String) -> Unit) {
     val entries = state.chatEntries(bot)
@@ -262,10 +275,15 @@ private fun AppState.chatEntries(bot: Bot) = entries.filter { it.botId == bot.id
                     else if (item.entry.kind == "notice" && item.entry.call != null) Box(Modifier.padding(top = 6.dp)) {
                         CallLineRow(item.entry) { openCall(item.entry.id) }
                     }
-                    else ChatRow(item.entry, item.groupStart, bot, state, store, openTrace = { store.showTrace(true) },
+                    else {
+                        val author = item.entry.data.text("author")
+                        val used = groupContexts?.members?.firstOrNull { item.latestAuthor && it.botId == author }?.used
+                        val details = used?.let { "${groupContextCompact(it)} · ${groupContextPercent(it, groupContexts.basis)}" }
+                        ChatRow(item.entry, item.groupStart, item.handoffPending, details, { author?.let(inspectContext) }, bot, state, store, openTrace = { store.showTrace(true) },
                         // An update card takes the composer's place, so there's nothing to reply with.
                         reply = if (item.entry.isReplyable && state.mismatch == null) { { reply(item.entry) } } else null, connect = connect,
                         addFallback = addFallback, openArtifact = openArtifact, saveSharedFile = saveSharedFile)
+                    }
                 }
                 is ChatItem.Pending -> PendingBubble(item.send, item.groupStart, state, store)
                 is ChatItem.Exchanges -> BotMessageRow(item.group, state) { openPeer(item.group.peerId) }

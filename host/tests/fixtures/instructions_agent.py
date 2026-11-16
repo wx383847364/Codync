@@ -10,6 +10,7 @@ import json
 import os
 import re
 import sys
+import time
 
 mode = sys.argv[1] if len(sys.argv) > 1 else "reporting"
 sessions = 0
@@ -53,6 +54,10 @@ for line in sys.stdin:
         if mode == "codex":
             result["agentInfo"] = {"name": "@agentclientprotocol/codex-acp", "version": "0"}
     elif method == "session/new":
+        # 只暂停一次，测试 Host 在摘要已确认但任务尚未发送时重启。
+        if os.path.exists("pause-next-session"):
+            os.remove("pause-next-session")
+            time.sleep(8)
         sessions += 1
         result = {"sessionId": f"s{sessions}"}
     elif method == "session/load":
@@ -76,6 +81,11 @@ for line in sys.stdin:
                              "size": int(size.group(1)) if size else 200000})
         update(session, {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "ok"}})
         result = {"stopReason": "end_turn"}
+        # 特定测试回合上报包含零值和缺失字段的实际用量。
+        if "PAUSE_NEXT_SESSION" in text:
+            open("pause-next-session", "w").close()
+        if "REPORT_TOKENS" in text:
+            result["usage"] = {"inputTokens": 1234, "cachedReadTokens": 0, "outputTokens": 42}
     else:
         result = {}
     if "id" in request:

@@ -1,8 +1,9 @@
+import { useEffect, useState } from 'react'
 import { hasLibrary } from '@shared/artifacts'
-import { isGroup, isWorking, type Bot } from '@shared/models'
+import { isGroup, isWorking, type Bot, type BotSessionUsage } from '@shared/models'
 import { AgentIcon } from '../../components/AgentIcon'
 import { BotAvatar, GroupAvatar } from '../../components/Avatar'
-import { IconButton, RowLabel, Switch, TabChoice } from '../../components/Controls'
+import { Button, CardSection, Disclosure, IconButton, RowLabel, Switch, TabChoice } from '../../components/Controls'
 import { LeadAgentBadge } from '../../components/LeadAgentBadge'
 import { Icon } from '../../components/Icon'
 import { HStack, VStack } from '../../components/Stack'
@@ -64,6 +65,7 @@ export function DetailsPanel({ botId, routineId, tab, setTab, editGroup, openArt
                   {bot ? <DevServersSection bot={bot} /> : null}
                   <BotSettingsPanel botId={botId} part="often" />
                   {bot ? <ComputerUse bot={bot} /> : null}
+                  {bot && store.hello?.botSessionUsage ? <SessionUsage key={bot.id} bot={bot} close={close} /> : null}
                   <RoutinesView botId={botId} initialId={routineId} />
                 </>
               ) : tab === 'library' ? (
@@ -78,6 +80,74 @@ export function DetailsPanel({ botId, routineId, tab, setTab, editGroup, openArt
         )}
       </div>
     </div>
+  )
+}
+
+/** 展示主会话实报资源以及最近的任务尝试，保留执行器各字段的口径。 */
+function SessionUsage({ bot, close }: { bot: Bot; close: () => void }) {
+  const store = useStore()
+  const tr = useTr()
+  const [usage, setUsage] = useState<BotSessionUsage | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [refresh, setRefresh] = useState(0)
+  const [preparing, setPreparing] = useState(false)
+  const [expanded, setExpanded] = useState<string | null>(null)
+  const online = !store.isOffline
+
+  // 展开详情、手动刷新或任务状态切换时读取最新快照，忽略过时响应。
+  useEffect(() => {
+    if (!online) return
+    let active = true
+    store.botSessionUsage(bot.id).then(
+      (result) => { if (active) { setUsage(result); setError(null) } },
+      (failure: unknown) => { if (active) setError(String(failure instanceof Error ? failure.message : failure)) },
+    )
+    return () => { active = false }
+  }, [store, bot.id, bot.status, bot.mainSessionRevision, online, refresh])
+
+  /** 用户主动准备交接后回到聊天，方便查看摘要。 */
+  const prepare = async () => {
+    setPreparing(true)
+    setError(null)
+    try {
+      await store.prepareHandoff(bot.id)
+      close()
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : String(failure))
+      setPreparing(false)
+    }
+  }
+
+  /** 未上报与已知的零分别展示。 */
+  const number = (value: number | null) => value?.toLocaleString() ?? tr('Unavailable')
+  const context = usage ? usage.hasSession ? `${number(usage.used)} / ${number(usage.size)}` : tr('No active main session.')
+    : tr(online ? 'Loading…' : 'Unavailable')
+  return (
+    <VStack gap={10}>
+      <CardSection title={tr('Main session context')} accessory={
+        <IconButton title="Refresh usage" icon="arrow.clockwise" disabled={!online} onClick={() => setRefresh(refresh + 1)} />
+      }>
+        <RowLabel label={context} />
+      </CardSection>
+      {error ? <Text size="footnote">{tr(error)}</Text> : null}
+      {usage?.hasSession ? <Button kind="secondary" disabled={!online || isWorking(bot) || preparing} onClick={() => { void prepare() }}>
+        {tr('Prepare new session with summary')}
+      </Button> : null}
+      {usage ? <CardSection title={tr('Recent task attempts')}>
+        {usage.attempts.length === 0 ? <RowLabel label={tr('No recent task attempts')} /> : usage.attempts.map((attempt) => {
+          const key = attempt.id
+          const date = new Date(attempt.at).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' })
+          return (
+            <Disclosure key={key} expanded={expanded === key} onToggle={() => setExpanded(expanded === key ? null : key)}
+              label={<Text size="footnote">{date} · {attempt.backend} · {attempt.model ?? tr('Unknown model')}</Text>}>
+              <VStack gap={4}>
+                {attempt.rows.map((row) => <Text size="footnote" key={row.label}>{tr(row.label)} · {number(row.value)}</Text>)}
+              </VStack>
+            </Disclosure>
+          )
+        })}
+      </CardSection> : null}
+    </VStack>
   )
 }
 

@@ -75,6 +75,8 @@ pub(super) async fn call(hub: &Arc<Hub>, caller: &Caller, method: &str, b: Value
                 "groupMemberPicker": true,
                 "optionalStageSetup": true,
                 "stageRoster": true,
+                "botSessionUsage": true,
+                "groupSessionContexts": true,
                 "stageGroups": true,
                 // Whether `installHostUpdate` can update this computer, from here or a phone.
                 "canUpdate": tokio::task::spawn_blocking(crate::update::installable).await?,

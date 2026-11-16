@@ -215,7 +215,42 @@ impl App {
                     self.overlays.push(super::Overlay::Fields(Box::new(crate::tui::manage::handoff_fields(&e))));
                 }
             }
-            KeyCode::Char('K') if picked.as_ref().is_some_and(|e| e.data["handoff"]["status"] == "draft") => {
+            KeyCode::Enter | KeyCode::Char('1'..='9')
+                if !self.group_session_contexts
+                    && picked.as_ref().is_some_and(|entry| entry.pending_group_handoff(0).is_some()) =>
+            {
+                let index = if let KeyCode::Char(key) = k.code { key as usize - '1' as usize } else { 0 };
+                if let Some(row) = picked.as_ref().and_then(|entry| entry.pending_group_handoff(index)) {
+                    if row["groupHandoff"]["shared"] == true {
+                        if let Some(bot) = row["targetBotId"].as_str() {
+                            self.select(bot);
+                            self.pick = row["groupHandoff"]["privateEntryId"].as_str().map(str::to_owned);
+                        }
+                    } else if let Some(delivery) = row["deliveryId"].as_str() {
+                        self.call(
+                            "groupHandoff",
+                            json!({"deliveryId":delivery}),
+                            After::Sheet(crate::tui::manage::Reply::GroupHandoff(delivery.into())),
+                        );
+                    }
+                }
+            }
+            // 只有容量提醒需要显式确认，Enter 会接续已排队的任务。
+            KeyCode::Enter
+                if picked.as_ref().is_some_and(|e| {
+                    e.data["handoff"]["status"] == "draft"
+                        && matches!(e.data["handoff"]["reason"].as_str(), Some("capacity" | "groupCapacity"))
+                }) =>
+            {
+                if let Some(e) = picked {
+                    self.call("startHandoff", json!({"entryId": e.id}), After::Answered(e.id.clone()));
+                }
+            }
+            KeyCode::Char('K')
+                if picked.as_ref().is_some_and(|e| {
+                    e.data["handoff"]["status"] == "draft" && e.data["handoff"]["reason"] != "groupCapacity"
+                }) =>
+            {
                 if let Some(e) = picked {
                     self.call("keepConversation", json!({"entryId": e.id}), After::Answered(e.id.clone()));
                 }

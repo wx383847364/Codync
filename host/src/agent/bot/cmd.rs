@@ -86,9 +86,24 @@ pub enum Cmd {
         id: String,
         reply: tokio::sync::oneshot::Sender<bool>,
     },
+    /// 群成员的主动新开会话与执行队列串行。
+    MemberSession {
+        room: String,
+        revision: Option<String>,
+        text: Option<String>,
+        reply: tokio::sync::oneshot::Sender<Result<Value>>,
+    },
     RetryDeliverySave,
     SessionSwitch {
         mode: String,
+    },
+    /// 通过机器人自己的队列准备私聊交接，避免与会话切换并发。
+    PrepareHandoff(tokio::sync::oneshot::Sender<Result<crate::store::Entry>>),
+    /// 卡片决策和消费同在 actor 内串行。
+    UpdateHandoff {
+        method: String,
+        body: Value,
+        reply: tokio::sync::oneshot::Sender<Result<Value>>,
     },
     Reconfigure(Box<BotConfig>),
     /// The user wants the bot's own agent again (`switchBack`).

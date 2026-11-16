@@ -55,7 +55,7 @@ When a fallback takes a turn over, it hears what it needs before the turn's mess
 - If it has: a catch-up of what was said since it last answered. Each agent keeps its own session, so coming back resumes it.
 - If agents already failed during this turn: which one stopped and why, what each of them did (tool calls, messages, last note), and a reminder to check what's done before redoing any step.
 
-**New session** (in the bot's menu) clears every agent's session, and none of them is told what was said before.
+Starting a [new main session](/docs/bots#sessions) from Details replaces the current session and clears parked main sessions. The new session starts with the handoff you reviewed. If a capacity reminder is open, `/new` accepts its handoff.
 
 ## What the chat shows
 

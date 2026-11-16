@@ -1,7 +1,7 @@
 //! 投递 turn 的执行和结果保存。房间等待超时不丢弃在途结果。
 
 use super::{Actor, Done, SegKind};
-use crate::store::deliveries::{Delivery, Status};
+use crate::store::deliveries::{Delivery, Status, handoff::Phase};
 use crate::store::{Lane, group_session_slot};
 use anyhow::{Result, ensure};
 use std::collections::HashMap;
@@ -11,6 +11,9 @@ use tokio::sync::{mpsc, oneshot};
 pub(super) struct ActiveDelivery {
     pub delivery: Delivery,
     pub isolated: bool,
+    /// 只在原连接和会话槽同时匹配时操作进程内旧会话。
+    pub archive_connection: Option<Instant>,
+    pub member_summary_revision: Option<String>,
     output: Option<String>,
     pub output_open: bool,
     /// 最近一次工具之后、被思考片段分开的正文，供尾部 pass 时保留。
@@ -150,15 +153,26 @@ impl Actor {
             }
         };
         let slot = isolated.then(|| group_session_slot(&queued.room_id, &self.cfg.backend));
-        // 若该回合会切换后端，旧连接的用量不代表它将使用的会话。
-        let session = if !isolated || self.next_group_turn_uses_current_backend() {
-            self.session_for(slot.as_deref())
-        } else {
-            None
+        let mut handoff = match self.delivery_handoff(&queued, slot.as_deref(), None) {
+            Ok(Some(handoff)) if handoff.phase == Phase::Draft => {
+                let _ = reply.send(false);
+                return;
+            }
+            Ok(handoff) => handoff.filter(|handoff| matches!(handoff.phase, Phase::Approved | Phase::Switched)),
+            Err(error) => {
+                tracing::warn!(%error,"group handoff remains queued");
+                let _ = reply.send(false);
+                return;
+            }
         };
+        // 若该回合会切换后端，旧连接的用量不代表它将使用的会话。
+        let session =
+            if !isolated || self.next_turn_uses_current_backend() { self.session_for(slot.as_deref()) } else { None };
         // 维护先于领取；DB、会话和房间条件不变时不重复构建超窗任务包。
         match self.context_is_blocked(&queued, session.as_deref()).and_then(|blocked| {
-            if blocked {
+            if handoff.is_some() {
+                Ok(false)
+            } else if blocked {
                 Ok(true)
             } else {
                 self.prepare_group_context(&queued, slot.as_deref(), session.as_deref(), None)
@@ -177,25 +191,87 @@ impl Actor {
         }
         // 文件证据可能需要分片校验，构建提示包不阻塞 Tokio 执行线程。
         let (hub, config, work) = (self.hub.clone(), self.cfg.clone(), queued.clone());
-        let prepared = tokio::task::spawn_blocking(move || crate::chat::group::delivery_prompt(&hub, &work, &config))
-            .await
-            .map_err(anyhow::Error::from)
-            .and_then(std::convert::identity);
-        if let Ok(packet) = &prepared {
-            let estimated = self.group_prompt_estimate(&packet.prompt, session.as_deref(), slot.is_none()).await;
-            match estimated.and_then(|estimate| {
-                self.prepare_group_context(&queued, slot.as_deref(), session.as_deref(), Some(estimate))
-            }) {
-                Ok(true) => {
+        let mut prepared =
+            tokio::task::spawn_blocking(move || crate::chat::group::delivery_prompt(&hub, &work, &config))
+                .await
+                .map_err(anyhow::Error::from)
+                .and_then(std::convert::identity);
+        let mut member_summary_revision = None;
+        if let Ok(packet) = &mut prepared
+            && isolated
+            && handoff.is_none()
+        {
+            match self.add_member_summary(&queued, &mut packet.prompt).await {
+                Ok((true, revision)) => member_summary_revision = revision,
+                Ok((false, _)) => {
                     let _ = reply.send(false);
                     return;
                 }
                 Err(error) => {
-                    tracing::error!(%error,"context space check failed; delivery kept queued");
+                    tracing::warn!(%error, "couldn't prepare member summary");
                     let _ = reply.send(false);
                     return;
                 }
-                Ok(false) => {}
+            }
+        }
+        let mut archive_connection = None;
+        if let Ok(packet) = &prepared {
+            if let Some(before) = &handoff {
+                let opening = self.fresh_group_estimate(&packet.prompt).await;
+                let current_connection = self.conn.as_ref().and_then(|conn| {
+                    (conn.loaded.contains_key(&before.session)
+                        && conn
+                            .session_slots
+                            .get(&before.session)
+                            .is_some_and(|owner| owner.as_deref() == slot.as_deref()))
+                    .then_some(conn.started)
+                });
+                match opening.and_then(|size| self.delivery_handoff(&queued, slot.as_deref(), Some(size as u64))) {
+                    Ok(Some(after)) if after.phase == Phase::Switched => {
+                        if before.phase == Phase::Approved {
+                            archive_connection = current_connection;
+                        }
+                        handoff = Some(after);
+                    }
+                    Ok(_) => {
+                        let _ = reply.send(false);
+                        return;
+                    }
+                    Err(error) => {
+                        tracing::warn!(%error, "group handoff recheck failed; kept queued");
+                        let _ = reply.send(false);
+                        return;
+                    }
+                }
+            } else {
+                let estimated = self.prompt_estimate(&packet.prompt, session.as_deref(), slot.is_none()).await;
+                let fresh = match &estimated {
+                    Ok(estimate) if self.group_needs_fresh_estimate(session.as_deref(), *estimate) => {
+                        match self.fresh_group_estimate(&packet.prompt).await {
+                            Ok(fresh) => fresh,
+                            Err(error) => {
+                                tracing::warn!(%error, "fresh group context estimate failed; kept queued");
+                                let _ = reply.send(false);
+                                return;
+                            }
+                        }
+                    }
+                    _ => 0,
+                };
+                match estimated.and_then(|estimate| {
+                    self.prepare_group_context(&queued, slot.as_deref(), session.as_deref(), Some((estimate, fresh)))
+                }) {
+                    Ok(true) => {
+                        let _ = reply.send(false);
+                        return;
+                    }
+                    Err(error) => {
+                        tracing::error!(%error,"context space check failed; delivery kept queued");
+                        let _ = reply.send(false);
+                        return;
+                    }
+                    Ok(false) => {}
+                }
             }
         }
         let claimed = self.hub.claim_delivery(&id, &self.cfg.id);
@@ -204,6 +280,8 @@ impl Actor {
                 self.active_delivery = Some(ActiveDelivery {
                     delivery: delivery.clone(),
                     isolated,
+                    archive_connection,
+                    member_summary_revision,
                     reply,
                     output: None,
                     output_open: false,
@@ -228,9 +306,16 @@ impl Actor {
                         if let Some(active) = self.active_delivery.as_mut() {
                             active.shown_entries = prepared.shown;
                         }
-                        if let Err(error) =
-                            self.start_turn(Lane::main(&delivery.room_id), &[], &prepared.prompt, false, done_tx).await
-                        {
+                        let prompt = if let Some(handoff) = &handoff.filter(|h| h.slot.is_some()) {
+                            format!(
+                                "<session-handoff>\nHandoff context for this assignment. Follow the original task below.\n{}\n</session-handoff>\n\n{}",
+                                handoff.text, prepared.prompt
+                            )
+                        } else {
+                            prepared.prompt
+                        };
+                        let result = self.start_turn(Lane::main(&delivery.room_id), &[], &prompt, false, done_tx).await;
+                        if let Err(error) = result {
                             if self
                                 .hub
                                 .store
@@ -361,7 +446,9 @@ impl Actor {
             self.pending_new_session = None;
             self.hub.set_runtime(&self.cfg.id, |r| r.pending_new_session = false);
             // 持久清理成功后才清除内存会话；queued投递随后在新会话执行。
+            crate::chat::handoff::clear(&self.hub, &self.cfg.id);
             self.session_id = None;
+            self.main_session_changed();
             self.relay.recap = None;
             let _ = self.dreamer.send(crate::chat::memory::DreamEvent::Flush);
             crate::chat::group::wake(&self.hub, Some(&self.cfg.id));

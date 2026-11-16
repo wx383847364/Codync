@@ -91,7 +91,7 @@ impl Actor {
     }
 
     /// 群会话预检只读取本轮将使用的后端；另一后端的用量与上下文无关。
-    pub(super) fn next_group_turn_uses_current_backend(&self) -> bool {
+    pub(super) fn next_turn_uses_current_backend(&self) -> bool {
         let target = self.next_step(now_ms(), &[]).unwrap_or(0);
         fallback::account(&self.base, target) == rest::account(&self.cfg)
     }

@@ -12,7 +12,7 @@ struct HandoffCardRow: View {
     var body: some View {
         if card.isDraft {
             VStack(alignment: .leading, spacing: 10) {
-                Label(entry.data.text ?? "", systemImage: "arrow.triangle.branch")
+                Label(L10n.tr(entry.data.text ?? ""), systemImage: "arrow.triangle.branch")
                     .font(.footnote)
                     .foregroundStyle(Palette.secondary)
                 Disclosure(isExpanded: $expanded) {
@@ -20,12 +20,19 @@ struct HandoffCardRow: View {
                 } label: {
                     Text(L10n.tr("What it carries")).font(.footnote.weight(.medium)).foregroundStyle(Palette.text)
                 }
+                // 窄屏上独占一行，避免和编辑或沿用按钮挤在一起。
+                if (card.reason == "capacity" || card.reason == "groupCapacity"), model.answering[entry.id] == nil {
+                    Button(L10n.tr("Start new session with summary")) { model.startHandoff(entry) }
+                        .buttonStyle(.primary)
+                }
                 HStack(spacing: 8) {
                     if model.answering[entry.id] != nil {
                         Spinner()
                     } else {
-                        Button(L10n.tr("Keep this conversation")) { model.keepConversation(entry) }
-                            .buttonStyle(SecondaryButtonStyle())
+                        if card.reason != "groupCapacity" {
+                            Button(L10n.tr(card.reason == "capacity" ? "Try current session" : "Keep this conversation")) { model.keepConversation(entry) }
+                                .buttonStyle(SecondaryButtonStyle())
+                        }
                         IconButton("Edit what it carries", systemImage: "pencil") {
                             withAnimation(Motion.layout) { editing = true }
                         }
@@ -40,7 +47,7 @@ struct HandoffCardRow: View {
             Disclosure(isExpanded: $expanded) {
                 carried
             } label: {
-                Label(entry.data.text ?? "", systemImage: "arrow.triangle.branch")
+                Label(L10n.tr(entry.data.text ?? ""), systemImage: "arrow.triangle.branch")
                     .font(.footnote)
                     .foregroundStyle(Palette.secondary)
             }
@@ -119,7 +126,9 @@ struct HandoffEditorView: View {
                 }
             }
             CardForm {
-                CardSection(footer: "Your next message starts a fresh conversation that begins with this.") {
+                CardSection(footer: entry.data.handoff?.reason == "groupCapacity" ? "Your next private message will start with this summary."
+                    : entry.data.handoff?.reason == "capacity" ? "The queued task will start with this summary."
+                    : "Your next message starts a fresh conversation that begins with this.") {
                     TextField("What the new conversation should know", text: $text, axis: .vertical)
                         .lineLimit(10...24)
                         .font(.footnote.monospaced())

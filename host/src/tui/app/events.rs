@@ -201,7 +201,7 @@ impl App {
             Err(e) => {
                 match after {
                     After::Hello => self.error = Some(e),
-                    After::Tracked => {}
+                    After::Tracked | After::GroupContexts(_) => {}
                     After::History(id) => {
                         self.history_busy.remove(&id);
                     }
@@ -265,6 +265,8 @@ impl App {
                 self.group_member_picker = v["groupMemberPicker"] == true;
                 self.optional_stage_setup = v["optionalStageSetup"] == true;
                 self.stage_roster = v["stageRoster"] == true;
+                self.bot_session_usage = v["botSessionUsage"] == true;
+                self.group_session_contexts = v["groupSessionContexts"] == true;
                 self.stage_groups = v["stageGroups"] == true;
                 self.mismatch = crate::compat::check(env!("CARGO_PKG_VERSION"), crate::compat::MIN_HOST, &v);
                 v["name"].as_str().unwrap_or("computer").clone_into(&mut self.host);
@@ -354,6 +356,22 @@ impl App {
             After::GroupSessionCreated => self.receive_saved_bot(&v["bot"], true),
             After::StageGroupCreated => self.receive_stage_group(&v),
             After::StageDetails { room, saved } => self.receive_stage_details(&room, v, saved),
+            After::GroupContexts(room) => {
+                if self.selected.as_deref() == Some(&room) {
+                    self.group_contexts = Some((room, v));
+                }
+            }
+            After::PrivateGroupHandoff(expected) => {
+                if let Some((bot, entry)) = Entry::parse(&v["entry"])
+                    && bot == expected
+                {
+                    self.select(&bot);
+                    self.focus = super::Focus::Chat;
+                    self.chat_page = true;
+                    self.pick = Some(entry.id.clone());
+                    self.entries.entry(bot).or_default().insert(entry.seq, entry);
+                }
+            }
             After::StageUsage(room) => self.receive_stage_usage(&room, &v),
             After::Connectors | After::Skills => {
                 let connectors = matches!(after, After::Connectors);

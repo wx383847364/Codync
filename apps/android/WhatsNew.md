@@ -7,6 +7,16 @@ released version's section; a version without one gets the PRs' "What's New: And
 else a generic "Bug fixes and improvements" line. Delete old sections.
 -->
 
+## 2.48.0
+
+### zh-Hant
+- 在機器人詳情查看主會話的上下文與近期 token 用量。私聊任務預計放不下時，可以帶著摘要開啟新會話，保留同一個機器人及聊天記錄。
+- 群組頂端可查看各成員的實際上下文用量，並從成員卡審閱摘要、開啟新會話。等待中的原派工會自動接續。
+
+### en-US
+- See the main session's context and recent token usage in bot details. When a private task may exceed the available context, start a fresh session with a summary and keep the same bot and chat history.
+- See each group member’s context use at the top of the chat and review a handoff from their card. Waiting assignments continue in the new session.
+
 ## 2.45.2
 
 ### zh-Hant

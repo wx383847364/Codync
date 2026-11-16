@@ -392,3 +392,67 @@ test('stage opens with fresh roles, saves a versioned handoff and closes indepen
     await browser.close()
   }
 })
+
+/** 验证从成员卡新开会话仍接续原派工，普通群通过私聊审阅。 */
+test('capacity handoffs continue the original group dispatch in a new session', async () => {
+  const { browser, page } = await attach()
+  const workspace = mkdtempSync(join(tmpdir(), 'codync-group-handoff-'))
+  const ids: string[] = []
+  try {
+    for (const shared of [false, true]) {
+      const cwd = join(workspace, shared ? 'main' : 'isolated')
+      mkdirSync(cwd)
+      writeFileSync(join(cwd, 'group-script.json'), JSON.stringify({ steps: [
+        { reply: 'Pressure seeded', usage: { used: 29000, size: 30000 } },
+        { reply: 'Original dispatch resumed' },
+      ] }))
+      writeFileSync(join(cwd, 'group-compact.json'), JSON.stringify({ usage: { used: 29000, size: 30000 } }))
+      const name = `Reviewer ${shared ? 'shared' : 'isolated'} ${Date.now()}`
+      const { bot } = await api<{ bot: Group }>(page, 'createBot', {
+        name, cwd, backend: 'custom', command: `python3 -u '${join(__dirname, '../../../host/tests/fixtures/team_agent.py')}'`,
+        connectors: [], skills: [], notify: false,
+      })
+      ids.unshift(bot.id)
+      const { bot: original } = await api<{ bot: Group }>(page, 'createBot', { name: `Review group ${Date.now()}`, kind: 'group', members: [bot.id] })
+      ids.unshift(original.id)
+      const group = shared ? original : (await api<{ bot: Group }>(page, 'createGroupSession', { botId: original.id })).bot
+      if (!shared) ids.unshift(group.id)
+      const groupRow = page.locator('.roster-row').getByText(group.name, { exact: true })
+      await groupRow.click()
+      await typeMessage(page, 'Seed context')
+      await expect(page.getByText('Pressure seeded', { exact: true })).toBeVisible()
+      await typeMessage(page, 'Continue the original group assignment')
+      await expect(page.getByText('Waiting for a new session', { exact: false })).toBeVisible()
+      const overview = page.getByRole('region', { name: 'Member context' })
+      const card = overview.locator('.group-context-card').filter({ hasText: name })
+      await expect(card.getByText('29K', { exact: true })).toBeVisible()
+      await expect(page.locator('.group-context-chip')).toContainText('29K · 5.7%')
+      await overview.getByRole('button', { name: '1M', exact: true }).click()
+      await expect(page.locator('.group-context-chip')).toContainText('29K · 2.9%')
+      await expect(card.getByRole('button', { name: 'Open new session' })).toBeVisible()
+      if (shared) {
+        await expect(overview.getByText('Shares private sessions')).toBeVisible()
+        await card.getByRole('button', { name: 'Open new session' }).click()
+        const privateCard = page.locator('.handoff-card')
+        await expect(privateCard.getByText(/群派工等待确认新开会话/)).toBeVisible()
+        await privateCard.getByRole('button', { name: 'Start new session with summary' }).click()
+        await groupRow.click()
+      } else {
+        await card.getByRole('button', { name: 'Open new session' }).click()
+        await page.getByRole('dialog').getByRole('textbox').fill('Edited handoff from the original dispatch')
+        await page.getByRole('button', { name: 'Confirm new session' }).click()
+      }
+      await expect(page.getByText('Original dispatch resumed', { exact: true })).toHaveCount(1)
+      await expect(page.getByText(/New session started. Original dispatch resumed./)).toBeVisible()
+      const prompts = readFileSync(join(cwd, 'prompt-requests.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line) as Prompt)
+      const resumed = prompts.at(-1)!
+      expect(resumed.sessionId).not.toEqual(prompts[0].sessionId)
+      expect(resumed.prompt[0].text).toContain('Continue the original group assignment')
+      if (!shared) expect(resumed.prompt[0].text).toContain('Edited handoff from the original dispatch')
+    }
+  } finally {
+    for (const id of ids) await api(page, 'deleteBot', { botId: id }).catch(() => {})
+    await browser.close()
+    rmSync(workspace, { recursive: true, force: true })
+  }
+})

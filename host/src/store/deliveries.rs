@@ -1,6 +1,8 @@
 //! 群投递的持久状态与原子领取；actor 只能领取房间 runner 指定的 ID。
 
 mod completion;
+pub(crate) mod handoff;
+pub(crate) mod member_session;
 #[cfg(test)]
 mod tests;
 
@@ -184,7 +186,9 @@ pub(super) fn cancel_for_deletion(c: &Connection, id: &str) -> Result<(Vec<Deliv
         .query_map([id],row)?.collect::<rusqlite::Result<Vec<_>>>()?;
     c.execute("UPDATE deliveries SET status='cancelled',finished_at=?2,last_error='群或成员已删除' WHERE (room_id=?1 OR target_bot_id=?1 OR source_bot_id=?1) AND status IN ('queued','claimed','started')",params![id,now_ms()])?;
     let mut live = Vec::new();
+    let mut cards = Vec::new();
     for delivery in &changed {
+        cards.extend(handoff::discard(c, delivery)?);
         let exists: bool =
             c.query_row("SELECT EXISTS(SELECT 1 FROM bots WHERE id=? AND deleted=0)", [&delivery.room_id], |row| {
                 row.get(0)
@@ -193,7 +197,8 @@ pub(super) fn cancel_for_deletion(c: &Connection, id: &str) -> Result<(Vec<Deliv
             live.push(delivery.clone());
         }
     }
-    Ok((changed, completion::cards(c, live)?))
+    cards.extend(completion::cards(c, live)?);
+    Ok((changed, cards))
 }
 
 impl Delivery {
@@ -242,7 +247,10 @@ pub(super) fn cancel_in_transaction(
         delivery.finished_at = Some(at);
         delivery.last_error = Some(reason.to_owned());
     }
-    let entries = completion::cards(c, changed.clone())?;
+    let mut entries = completion::cards(c, changed.clone())?;
+    for delivery in &changed {
+        entries.extend(handoff::discard(c, delivery)?);
+    }
     Ok((changed, entries))
 }
 
@@ -410,9 +418,10 @@ impl Store {
         ensure!(!super::bots::stage_closed(&tx, &delivery.room_id)?, "Restore or reopen the stage to send work.");
         if !eligible(&tx, &delivery.room_id, bot, delivery.source_bot_id.as_deref())? {
             tx.execute("UPDATE deliveries SET status='cancelled',finished_at=?2,last_error='已不在群内' WHERE id=?1 AND status='queued'", params![id,now_ms()])?;
-            let card = completion::card(&tx, &delivery)?;
+            let mut cards = vec![completion::card(&tx, &delivery)?];
+            cards.extend(handoff::discard(&tx, &delivery)?);
             tx.commit()?;
-            return Ok((None, vec![card]));
+            return Ok((None, cards));
         }
         // 同一 ID 只能从 queued 领取一次；成员资格和状态都在本事务内核验。
         let changed = tx.execute(
@@ -498,6 +507,9 @@ impl Store {
             .query_map([],row)?.collect::<rusqlite::Result<Vec<_>>>()?;
         tx.execute("UPDATE deliveries SET status='queued',claimed_at=NULL WHERE status='claimed'", [])?;
         tx.execute("UPDATE deliveries SET status='interrupted',finished_at=?1,last_error='host 重启时正在执行，执行结果不确定，请检查后手动重试' WHERE status='started'",[now_ms()])?;
+        for delivery in changed.iter().filter(|d| d.status == Status::Started) {
+            handoff::discard(&tx, delivery)?;
+        }
         completion::cards(&tx, changed)?;
         tx.commit()?;
         Ok(())

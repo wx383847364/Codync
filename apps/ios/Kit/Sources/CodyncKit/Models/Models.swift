@@ -241,6 +241,8 @@ public struct Hello: Codable, Sendable {
     public var groupMemberPicker: Bool?
     public var optionalStageSetup: Bool?
     public var stageRoster: Bool?
+    public var botSessionUsage: Bool?
+    public var groupSessionContexts: Bool?
     public var icons: [String: CustomIcon]?
     public var iconsRevision: Int64?
     public var hostId: String
@@ -502,6 +504,21 @@ public struct StageUsage: Decodable, Sendable {
     public var observedSince: Int64
     public var stageCreatedAt: Int64
     public var sections: [Section]
+}
+
+/// 主会话占用和同一机器人的近期执行尝试，nil 表示执行器缺报。
+public struct BotSessionUsage: Decodable, Sendable {
+    public struct Attempt: Decodable, Sendable, Identifiable {
+        public var id: String
+        public var backend: String
+        public var model: String?
+        public var at: Int64
+        public var rows: [StageUsage.Section.Row]
+    }
+    public var hasSession: Bool
+    public var used: Int64?
+    public var size: Int64?
+    public var attempts: [Attempt]
 }
 
 /// 用户已确认的阶段草稿，创建 ID 可用于断线后重传。

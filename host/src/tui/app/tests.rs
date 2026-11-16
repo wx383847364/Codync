@@ -10,6 +10,7 @@ async fn routines_keep_the_chat_draft_until_the_user_returns_to_chat() {
     app.drafts.insert("b".into(), Editor::with("My unfinished message"));
     app.overlays.push(Overlay::Routines(RoutineList {
         bot: "b".into(),
+        session_usage: Value::Null,
         items: Some(Vec::new()),
         runs: Vec::new(),
         cursor: 0,

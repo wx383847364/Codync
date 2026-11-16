@@ -60,6 +60,13 @@ pub enum Reply {
     /// A note the bot's memory sheet has open.
     MemoryFile(String),
     Routines(String),
+    BotSessionUsage(String),
+    PrepareHandoff(String),
+    GroupHandoff(String),
+    MemberSession {
+        room: String,
+        bot: String,
+    },
     RoutineSaved,
     /// A bot's Library (`library {botId}`).
     Library(String),
@@ -119,6 +126,7 @@ pub struct Library {
 
 pub struct RoutineList {
     pub bot: String,
+    pub session_usage: Value,
     pub items: Option<Vec<Value>>,
     /// The bot's runs, newest first.
     pub runs: Vec<Value>,
@@ -216,6 +224,19 @@ pub enum Submit {
     Import,
     /// A handoff card's text (the card's entry id).
     Handoff(String),
+    GroupHandoff {
+        delivery: String,
+        revision: String,
+    },
+    MemberSession {
+        room: String,
+        bot: String,
+        revision: String,
+    },
+    GroupContextOptions {
+        room: String,
+        members: Vec<(String, bool)>,
+    },
     /// A bot's section (its id): a name, or empty for none.
     Section(String),
     /// A section's new name (its current one), or empty to remove it.
@@ -373,4 +394,111 @@ impl App {
 pub(super) fn open_browser(url: &str, host: &str) -> bool {
     let local = ["//127.0.0.1", "//localhost", "//[::1]"].iter().any(|h| host.contains(h));
     local && !url.is_empty() && crate::shell::open(std::ffi::OsStr::new(url))
+}
+
+/// 比例以整数舍入到一位小数，避免放大 Token 计数或浮点精度损失。
+fn context_percent(used: u64, capacity: u64) -> String {
+    let capacity = u128::from(capacity.max(1));
+    let tenths = (u128::from(used) * 1000 + capacity / 2) / capacity;
+    format!("{}.{:01}%", tenths / 10, tenths % 10)
+}
+
+/// 当前选择的基准只控制显示，超过档位的比例原样显示。
+pub(in crate::tui) fn context_reading(member: &Value, basis: u64) -> String {
+    member["used"].as_u64().map_or_else(
+        || {
+            super::l10n::tr(if member["hasSession"] == false { "No session yet" } else { "Usage not reported" })
+                .into_owned()
+        },
+        |used| {
+            let tenths = (u128::from(used) + 50) / 100;
+            format!("{}.{:01}K · {}", tenths / 10, tenths % 10, context_percent(used, basis))
+        },
+    )
+}
+
+/// 只有待确认派工或真实窗口达到阈值才有主动入口。
+pub(in crate::tui) fn context_action(member: &Value) -> bool {
+    match member["handoff"]["phase"].as_str() {
+        Some("draft") => true,
+        Some("approved" | "switched") => false,
+        _ => member["recommended"] == true,
+    }
+}
+
+impl App {
+    /// 键盘也能浏览全部成员及实际窗口，并选择显示档位。
+    pub(in crate::tui) fn open_group_contexts(&mut self) {
+        let Some((room, snapshot)) =
+            self.group_contexts.as_ref().filter(|(room, _)| self.selected.as_ref() == Some(room))
+        else {
+            self.flash("Loading member context…");
+            return;
+        };
+        let basis = snapshot["basis"].as_u64().unwrap_or(512_000);
+        let mut choices: Vec<String> = ["256K", "512K", "1M"].into_iter().map(str::to_owned).collect();
+        let mut members = Vec::new();
+        for reading in snapshot["members"].as_array().into_iter().flatten() {
+            let Some(bot) = reading["botId"].as_str() else { continue };
+            let name = self.author_name(Some(bot));
+            let reading_text = context_reading(reading, basis);
+            choices.push(format!("{name} · {reading_text}"));
+            members.push((bot.to_owned(), false));
+            if context_action(reading) {
+                choices.push(format!("{} · {name}", super::l10n::tr("Open new session")));
+                members.push((bot.to_owned(), true));
+            }
+        }
+        self.overlays.push(super::app::Overlay::Fields(Box::new(Fields {
+            title: "Member context".into(),
+            note: "← → choose a display basis or inspect a member. ↵ confirms.".into(),
+            choices,
+            choice: [256_000, 512_000, 1_000_000].iter().position(|&size| size == basis).unwrap_or(1),
+            inputs: Vec::new(),
+            cursor: 0,
+            error: None,
+            saving: false,
+            submit: Submit::GroupContextOptions { room: room.clone(), members },
+        })));
+    }
+
+    /// 查看任何成员的精确用量和真实窗口，不受推荐阈值影响。
+    pub(in crate::tui) fn inspect_member_context(&mut self, room: &str, bot: &str) {
+        let reading = self
+            .group_contexts
+            .as_ref()
+            .filter(|(chat, _)| chat == room)
+            .and_then(|(_, snapshot)| snapshot["members"].as_array())
+            .and_then(|members| members.iter().find(|row| row["botId"] == bot));
+        if let Some(reading) = reading {
+            let used = reading["used"].as_u64();
+            let cap = reading["size"].as_u64();
+            let occupancy = used.zip(cap).map_or_else(|| "—".into(), |(n, size)| context_percent(n, size));
+            let name = self.author_name(Some(bot));
+            self.flash(&format!(
+                "{name} · {} token · {} {} · {occupancy}",
+                used.map_or_else(|| "—".into(), |n| n.to_string()),
+                super::l10n::tr("Actual model window"),
+                cap.map_or_else(|| "—".into(), |n| n.to_string())
+            ));
+        }
+    }
+
+    /// 从成员卡准备交接，普通群在服务端只返回私聊定位。
+    pub(in crate::tui) fn open_member_session(&mut self, room: String, bot: String) {
+        let action = self
+            .group_contexts
+            .as_ref()
+            .filter(|(chat, _)| chat == &room)
+            .and_then(|(_, snapshot)| snapshot["members"].as_array())
+            .and_then(|members| members.iter().find(|m| m["botId"] == bot))
+            .is_some_and(context_action);
+        if action {
+            self.sheet(
+                "prepareGroupMemberSession",
+                json!({"roomId":room,"botId":bot}),
+                Reply::MemberSession { room, bot },
+            );
+        }
+    }
 }
