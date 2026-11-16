@@ -133,14 +133,9 @@ struct Composer: View {
         }
     }
 
-    /// 已开放的群沿用现有草稿、选择与发送操作。
+    /// 已开放的群在输入框为空时通过占位文字提示接收范围。
     private var editor: some View {
         VStack(alignment: .leading, spacing: 6) {
-            if (bot?.stage?.leaderId.isEmpty == false || stageLead != nil) && !draft.isEmpty && replyingTo == nil && artifact == nil {
-                Text(stageLead.map { L10n.tr("Default recipient · {name}").replacingOccurrences(of: "{name}", with: $0.name) }
-                     ?? L10n.tr("Choose a recipient with @"))
-                    .font(.footnote).foregroundStyle(Palette.secondary)
-            }
             ForEach(storageFailures) { member in
                 Text("\(member.name): \(member.storageError ?? "")").font(.footnote).foregroundStyle(Palette.danger)
                 Button("重试保存") {
