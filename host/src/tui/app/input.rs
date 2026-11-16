@@ -466,11 +466,6 @@ impl App {
                     Some(Click::BotChat(entry)) => self.open_bot_chat(&entry),
                     Some(Click::DevServers) => self.open_dev_servers(),
                     Some(Click::GroupContexts) => self.open_group_contexts(),
-                    Some(Click::MemberSession(bot)) => {
-                        if let Some(room) = self.selected.clone() {
-                            self.open_member_session(room, bot);
-                        }
-                    }
                     Some(Click::Section(name)) => {
                         self.click_section(&name);
                         self.focus = Focus::Roster;

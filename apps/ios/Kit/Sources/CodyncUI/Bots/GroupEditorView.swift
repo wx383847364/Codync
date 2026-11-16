@@ -6,7 +6,14 @@ import SwiftUI
 public struct GroupEditorView: View {
     @Environment(BotStore.self) private var model
     @Environment(\.dismissModal) private var dismiss
-    let groupId: String
+    @State private var initial: Bot
+    private let isPresented: () -> Bool
+    /// 会话跳转前核对本页的草稿，避免丢掉尚未保存的修改。
+    private var groupId: String { initial.id }
+    /// 滑动关闭后也禁止晚到的请求跳转。
+    private var canLeaveEditor: Bool {
+        isPresented() && !saving && name == initial.name && about == initial.description && members == initial.members
+    }
     @State private var name: String
     @State private var about: String
     @State private var members: [String]
@@ -16,8 +23,10 @@ public struct GroupEditorView: View {
     @State private var error: String?
     @State private var confirmDelete: Bot?
 
-    public init(group: Bot) {
-        groupId = group.id
+    /// 由呈现端提供关闭状态，使关闭动画中的请求也不能触发跳转。
+    public init(group: Bot, isPresented: @escaping () -> Bool = { true }) {
+        _initial = State(initialValue: group)
+        self.isPresented = isPresented
         _name = State(initialValue: group.name)
         _about = State(initialValue: group.description)
         _members = State(initialValue: group.members)
@@ -61,15 +70,21 @@ public struct GroupEditorView: View {
                     }
                     .frame(maxWidth: .infinity)
                     VStack(alignment: .leading, spacing: 0) {
-                        Text(L10n.tr("Members"))
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(Palette.secondary)
-                            .padding(.bottom, 4)
-                        ForEach(picked) { bot in
-                            memberRow(bot) {
-                                IconButton("Remove \(bot.name)", systemImage: "xmark") { toggle(bot.id) }
+                        let room = model.bots[groupId]
+                        if let room, model.hello?.groupSessionContexts == true {
+                            // 用量直接进入已有成员名单，新增和移除仍由这个编辑页处理。
+                            GroupContexts(room: room, members: picked, remove: toggle, canLeaveEditor: { canLeaveEditor })
+                        } else {
+                            Text(L10n.tr("Members"))
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(Palette.secondary)
+                                .padding(.bottom, 4)
+                            ForEach(picked) { bot in
+                                memberRow(bot) {
+                                    IconButton("Remove \(bot.name)", systemImage: "xmark") { toggle(bot.id) }
+                                }
+                                .transition(.opacity)
                             }
-                            .transition(.opacity)
                         }
                         if adding {
                             TextField("Search bots", text: $query)
@@ -97,9 +112,9 @@ public struct GroupEditorView: View {
                             }
                             .buttonStyle(PressScale())
                         }
-                        let lead = picked.first { $0.id == (group.stage?.leaderId ?? group.groupLeaderId) }
+                        let lead = picked.first { $0.id == (room?.stage?.leaderId ?? room?.groupLeaderId) }
                         Text(lead.map { L10n.tr("Ask {name} · @ to choose another recipient").replacingOccurrences(of: "{name}", with: $0.name) }
-                             ?? L10n.tr(group.stage?.leaderId.isEmpty == false ? "Choose a recipient with @" : "Everyone answers in turn unless you @mention someone."))
+                             ?? L10n.tr(room?.stage?.leaderId.isEmpty == false ? "Choose a recipient with @" : "Everyone answers in turn unless you @mention someone."))
                             .font(.caption)
                             .foregroundStyle(Palette.tertiary)
                             .padding(.top, 10)

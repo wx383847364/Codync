@@ -60,9 +60,9 @@ export const ThreadView = memo(function ThreadView({ botId }: { botId: string })
   const [callLine, setCallLine] = useState<string | null>(null)
   const [editingGroup, setEditingGroup] = useState(false)
   const [templateDraft, setTemplateDraft] = useState<BotDraft | null>(null)
-  const [showSettings, setShowSettings] = useState(false)
+  // 详情沿用原入口，打开后在宽窄窗口之间保留同一份编辑状态。
+  const [detailsOpen, setDetailsOpen] = useState(false)
   const [detailsTab, setDetailsTab] = useState<DetailsTab>('details')
-  const [compactDetails, setCompactDetails] = useState(false)
   const [calling, setCalling] = useState(false)
   const [callSpeaking, setCallSpeaking] = useState(false)
   const interruptCall = useRef<(() => void) | null>(null)
@@ -104,18 +104,16 @@ export const ThreadView = memo(function ThreadView({ botId }: { botId: string })
     }
   }, [])
 
-  const panelOpen = wide && showSettings
+  const panelOpen = wide && detailsOpen
+  const compactDetails = !wide && detailsOpen
   squeezeBelow.current = panelOpen ? Math.max(360, detailsWidth) : 0
   // The side panel's edge drags its width, leaving the conversation at least 380 wide.
   const panelWidth = (w: number) => Math.min(Math.max(360, w), width.current - 380)
-  // A compact Details presentation dismisses once the window is wide enough for the inspector.
-  useEffect(() => {
-    if (wide) setCompactDetails(false)
-  }, [wide])
+  /** 关闭操作对宽窄窗口一致，修改尺寸时保留显式打开的详情。 */
   const toggleDetails = useCallback(() => {
-    if (!wide) setCompactDetails((c) => !c)
-    else setShowSettings((s) => !s)
-  }, [wide])
+    // 读取当前值，避免快捷键和鼠标共用入口时基于过时的面板状态。
+    setDetailsOpen(open => !open)
+  }, [])
   const devServers = devServerSummary(bot?.devServers ?? [])
   // The title's port leads to its row, whichever page the inspector was left on.
   const openFromTitle = useCallback(() => {
@@ -132,18 +130,18 @@ export const ThreadView = memo(function ThreadView({ botId }: { botId: string })
   )
 
   const openTrace = useCallback(() => setShowTrace(true), [])
+  /** 在窄窗口关闭详情，保证文件查看器显示在前面。 */
   const openArtifact = useCallback((id: string) => {
     setArtifactId(id)
-    setCompactDetails(false)
-  }, [])
+    if (!wide) setDetailsOpen(false)
+  }, [wide])
 
   const presentRoutine = useCallback((id: string | null) => {
     setRoutineId(id)
     setRoutineRequest((r) => r + 1)
     setDetailsTab('details')
-    setShowSettings(true)
-    if (!wide) setCompactDetails(true)
-  }, [wide])
+    setDetailsOpen(true)
+  }, [])
 
   // This bot's Agent card is on the Details tab; a group member's is in its settings.
   const presentAgent = useCallback((id: string) => (id === botId ? presentRoutine(null) : setEditingMember(id)), [botId, presentRoutine])
@@ -159,24 +157,21 @@ export const ThreadView = memo(function ThreadView({ botId }: { botId: string })
       editGroup={() => setEditingGroup(true)}
       openArtifact={openArtifact}
       share={() => {
-        setCompactDetails(false)
+        if (!wide) setDetailsOpen(false)
         if (bot) setTemplateDraft(draftOf(bot))
       }}
-      close={() => {
-        setShowSettings(false)
-        setCompactDetails(false)
-      }}
+      close={() => { /* 与标题和快捷键使用相同的详情状态。 */ setDetailsOpen(false) }}
     />
   )
 
   return (
-    <div className="thread-view" ref={root}>
+    <GroupContexts room={bot} panelVisible={detailsOpen}><div className="thread-view" ref={root}>
       <div className="conversation">
         <div className="top-chrome">
           <TopFade />
           <div className="top-chrome-row">
             <Spacer />
-            {(!showSettings || !wide) && !compactDetails ? (
+            {!detailsOpen ? (
               <MacChatButton className="ringed" title="Conversation details" icon="chevron.left.2" direction={[-1, 0]} onClick={toggleDetails} />
             ) : null}
           </div>
@@ -195,9 +190,7 @@ export const ThreadView = memo(function ThreadView({ botId }: { botId: string })
           </button>
         </div>
         {/* An update card takes the composer's place, so there's nothing to reply with. */}
-        <GroupContexts room={bot}>
         <Transcript botId={botId} openTrace={openTrace} onReply={store.mismatch ? undefined : setReplyTo} openRoutine={presentRoutine} openAgent={presentAgent} openBotChat={setBotChat} openArtifact={openArtifact} openCall={setCallLine} />
-        </GroupContexts>
         <div className="composer-dock" ref={dock}>
           <div className="composer-fade" />
           {store.mismatch ? (
@@ -235,7 +228,7 @@ export const ThreadView = memo(function ThreadView({ botId }: { botId: string })
         {details}
       </ChatSidePanel>
 
-      <Sheet open={compactDetails} onClose={() => setCompactDetails(false)} width={400} height={600}>
+      <Sheet open={compactDetails} onClose={() => { /* 关闭窄屏详情也清除当前审阅。 */ setDetailsOpen(false) }} width={400} height={600}>
         {details}
       </Sheet>
       <Sheet open={botChat !== null} onClose={() => setBotChat(null)} width={620} height={560}>
@@ -256,7 +249,7 @@ export const ThreadView = memo(function ThreadView({ botId }: { botId: string })
       <FormSheet open={!!member} onClose={() => setEditingMember(null)} width={520} height={680} fixed>
         {member ? <BotEditorView key={member.id} draft={draftOf(member)} /> : null}
       </FormSheet>
-    </div>
+    </div></GroupContexts>
   )
 })
 

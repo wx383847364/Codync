@@ -94,10 +94,13 @@ import kotlinx.serialization.json.jsonPrimitive
     LaunchedEffect(state.callRequest) { if (store.takeCallRequest(bot.id) && state.voice == null) startCall() }
     val top = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
     var composerHeight by remember { mutableIntStateOf(0) }
-    var contextHeight by remember { mutableIntStateOf(0) }
     var groupContexts by remember { mutableStateOf<GroupSessionContexts?>(null) }
     var inspectingContext by remember { mutableStateOf<String?>(null) }
     val showContexts = bot.kind == "group" && state.hello?.get("groupSessionContexts")?.jsonPrimitive?.booleanOrNull == true
+    if (showContexts) {
+        ObserveGroupContexts(bot, state, store, update = { groupContexts = it })
+        GroupContextInspection(groupContexts, bot.memberBots(state.bots), inspectingContext) { inspectingContext = it }
+    }
     val density = LocalDensity.current
     // The message the composer quotes, until it sends or this chat closes.
     var replyId by rememberSaveable(bot.id) { mutableStateOf<String?>(null) }
@@ -111,10 +114,6 @@ import kotlinx.serialization.json.jsonPrimitive
         ScrollEdge(Edge.Top, top + 84.dp)
         ScrollEdge(Edge.Bottom, with(density) { composerHeight.toDp() } + 4.dp, Modifier.align(Alignment.BottomCenter))
         ThreadHeader(bot, state, store) { if (bot.kind == "group") editGroup(bot) else details = DetailsRequest() }
-        if (showContexts && state.voice == null) {
-            GroupContexts(bot, state, store, groupContexts, { groupContexts = it }, inspectingContext, { inspectingContext = it },
-                Modifier.padding(top = top + 54.dp).onSizeChanged { contextHeight = it.height })
-        }
         // The call floats over the chat under the header, as on iOS; the chat stays readable and usable.
         AnimatedVisibility(state.voice != null, Modifier.padding(top = top + 54.dp),
             enter = fadeIn(Motion.fade()) + slideInVertically(Motion.layoutOffset) { -it }, exit = fadeOut(Motion.fade()) + slideOutVertically(Motion.layoutOffset) { -it }) {
@@ -133,8 +132,7 @@ import kotlinx.serialization.json.jsonPrimitive
                 queued = queuedMessages(state.chatEntries(bot), bot.isWorking))
         }
     }) {
-        val transcriptTop = if (showContexts && state.voice == null && contextHeight > 0) with(density) { contextHeight.toDp() } + 6.dp else top + 60.dp
-        Transcript(bot, chatState, store, connect, groupContexts, { inspectingContext = it }, PaddingValues(start = 16.dp, end = 16.dp, top = transcriptTop,
+        Transcript(bot, chatState, store, connect, groupContexts, { inspectingContext = it }, PaddingValues(start = 16.dp, end = 16.dp, top = top + 60.dp,
             bottom = with(density) { composerHeight.toDp() } + 8.dp), indicatorTop = top + 50.dp, openRoutine = openRoutine, reply = reply,
             addFallback = { details = DetailsRequest(botId = it.id) }, openArtifact = { viewing = it }, openCall = { callLine = it }, saveSharedFile = saveSharedFile) { peer = it }
     }
