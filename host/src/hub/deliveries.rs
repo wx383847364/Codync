@@ -174,11 +174,14 @@ impl Hub {
         let _guard = self.emit_lock.locked();
         let outcome = serde_json::to_value(status)?;
         let cards = self.store.complete_delivery(id, status, text, detail, turn, guidance)?;
-        // 暂停后退出的旧回合没有提交新的终态，继续后的真正结果才计作完成。
         if cards.is_empty() {
             return Ok(());
         }
         self.delivery_entries(&cards);
+        // 暂停后的旧回合可能只结算引导状态卡；原派工没有结束，不能重复统计完成。
+        if self.store.delivery(id)?.is_some_and(|delivery| delivery.held_after_pause()) {
+            return Ok(());
+        }
         // 等待位超时、runner已经退出的迟到回复仍留在来源群并推送群身份。
         if let Some(entry) = cards.iter().find(|e| e.kind == "agent" && e.data["final"] == true)
             && !self.groups.running(&crate::store::Lane::main(&entry.bot_id))

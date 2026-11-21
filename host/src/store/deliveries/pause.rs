@@ -38,7 +38,11 @@ impl Store {
         let mut delivery =
             get(&tx, id)?.filter(|d| d.room_id == room).ok_or_else(|| anyhow!("unknown group delivery"))?;
         let expected = if paused { Status::Started } else { Status::Paused };
-        if delivery.status != expected || delivery.started_at != Some(started_at) {
+        // 引导直接加入原回合、未经独立领取，只能随原任务暂停，不能单独重排执行。
+        if delivery.status != expected
+            || delivery.started_at != Some(started_at)
+            || (paused && delivery.claimed_at.is_none())
+        {
             return Ok(None);
         }
         if paused {
@@ -67,6 +71,7 @@ impl Store {
                 substr(COALESCE(d.body,json_extract(e.data,'$.text'),''),1,160)
              FROM deliveries d LEFT JOIN entries e ON e.id=d.source_entry_id
              WHERE d.room_id=? AND d.started_at IS NOT NULL AND d.status IN ('queued','claimed','started','paused')
+             AND (d.status!='started' OR d.claimed_at IS NOT NULL)
              ORDER BY d.room_seq",
         )?;
         Ok(query

@@ -227,6 +227,40 @@ fn claim_and_late_completion_are_conditional() {
     assert!(entries.iter().filter(|e| e.kind == "agent").all(|e| e.data["final"] == false));
 }
 
+/// 暂停当前回合后，引导必须退出执行态且不能自动重复已接受的输入。
+#[test]
+fn pausing_settles_guidance_without_replaying_accepted_messages() {
+    for (outcome, expected) in [
+        (Guidance::Joined, Status::Interrupted),
+        (Guidance::Deferred, Status::Queued),
+        (Guidance::Uncertain, Status::Interrupted),
+    ] {
+        let s = store();
+        s.post_group("g", &json!({"text":"@a original"}), &["a".into()]).unwrap();
+        let original = s.queued_deliveries("g").unwrap().remove(0);
+        s.claim_delivery(&original.id, "a").unwrap();
+        s.start_delivery(&original.id, "a").unwrap();
+        s.post_group("g", &json!({"text":"@a guidance","directMentions":["a"]}), &["a".into()]).unwrap();
+        let guide = s.queued_deliveries("g").unwrap().remove(0);
+        s.start_guidance(&guide.id, &original.id, "a").unwrap();
+        // 引导共用原任务的执行，既不显示第二个暂停按钮，也拒绝伪造的独立暂停。
+        let controls = s.group_delivery_controls("g").unwrap();
+        assert_eq!(controls.len(), 1);
+        assert_eq!(controls[0].delivery_id, original.id);
+        let guide_started = s.delivery(&guide.id).unwrap().unwrap().started_at.unwrap();
+        assert!(s.set_delivery_paused("g", &guide.id, guide_started, true).unwrap().is_none());
+        let started = s.delivery(&original.id).unwrap().unwrap().started_at.unwrap();
+        s.set_delivery_paused("g", &original.id, started, true).unwrap();
+        let updates = s
+            .complete_delivery(&original.id, Status::Interrupted, None, None, 1, &[(guide.id.clone(), outcome)])
+            .unwrap();
+        assert!(!updates.is_empty());
+        assert_eq!(s.delivery(&original.id).unwrap().unwrap().status, Status::Paused);
+        assert_eq!(s.delivery(&guide.id).unwrap().unwrap().status, expected);
+        assert!(updates.iter().all(|entry| entry.data["final"] != true));
+    }
+}
+
 /// 暂停可跨恢复保留，快速继续、迟到回合与重传都不能改变其他任务。
 #[test]
 fn pausing_and_resuming_keeps_the_delivery_and_rejects_stale_actions() {
@@ -257,7 +291,9 @@ fn pausing_and_resuming_keeps_the_delivery_and_rejects_stale_actions() {
     assert!(s.queued_deliveries("g").unwrap().is_empty());
     assert!(s.set_delivery_paused("g", &first.id, started_at, false).unwrap().is_some());
     assert!(s.set_delivery_paused("g", &first.id, started_at, false).unwrap().is_none());
-    assert!(s.complete_delivery(&first.id, Status::Completed, Some("@c late result"), None, 1, &[]).unwrap().is_empty());
+    assert!(
+        s.complete_delivery(&first.id, Status::Completed, Some("@c late result"), None, 1, &[]).unwrap().is_empty()
+    );
     let queued = s.queued_deliveries("g").unwrap();
     assert_eq!(queued.len(), 1);
     assert_eq!((&queued[0].id, queued[0].room_seq, queued[0].attempt), (&first.id, first.room_seq, first.attempt));

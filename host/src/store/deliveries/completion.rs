@@ -138,7 +138,30 @@ impl Store {
         // 暂停后的旧回合可能在继续请求之后才退出。它的片段已保存在执行记录中，
         // 不能写入共享的最终结果 ID，也不能触发派工；同一成员会等它退出才重新领取。
         if d.held_after_pause() {
-            return Ok(vec![]);
+            // 原回合取消后，引导不能永远停留在 started；已接受或结果不明的引导需要人工检查，
+            // 只有明确被执行器拒绝的引导能恢复为普通排队消息。
+            let mut changed = Vec::new();
+            for (guide, outcome) in guidance {
+                let queued = matches!(outcome, Guidance::Deferred);
+                let next = if queued { Status::Queued } else { Status::Interrupted };
+                let detail = if queued {
+                    "等待下一回合"
+                } else {
+                    "原任务已暂停，引导已中断，请检查进度后重试"
+                };
+                let count = tx.execute(
+                    "UPDATE deliveries SET status=?2,finished_at=?3,started_at=CASE WHEN ?4 THEN NULL ELSE started_at END,last_error=?5 WHERE id=?1 AND status='started'",
+                    params![guide, wire(&next), (!queued).then(now_ms), queued, detail],
+                )?;
+                if count == 1
+                    && let Some(delivery) = get(&tx, guide)?
+                {
+                    changed.push(delivery);
+                }
+            }
+            let entries = cards(&tx, changed)?;
+            tx.commit()?;
+            return Ok(entries);
         }
         let changed = tx.execute("UPDATE deliveries SET status=?2,finished_at=?3,last_error=?4 WHERE id=?1 AND status IN ('claimed','started')",
             params![id,wire(&status),now_ms(),detail])?;

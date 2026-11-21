@@ -38,5 +38,6 @@ if (typeof CLEANUP !== 'undefined') {
   output.group = group.name
   output.alpha = alpha.name
   output.beta = beta.name
-  api('send', { botId: group.id, text: `@${beta.name} review the build` })
+  // 暂停测试稍后显式启动两条任务，避免这里额外占用同一成员。
+  if (!taskTest) api('send', { botId: group.id, text: `@${beta.name} review the build` })
 }
