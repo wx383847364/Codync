@@ -6,7 +6,7 @@ use anyhow::{Result, anyhow, ensure};
 use rusqlite::{Connection, OptionalExtension, params};
 use std::collections::HashSet;
 
-const UNRESOLVED: &str = "status IN ('queued','claimed','started') OR ((status IN ('failed','interrupted') OR (kind='task' AND status='noReply')) AND NOT EXISTS(SELECT 1 FROM deliveries child WHERE child.parent_id=deliveries.id))";
+const UNRESOLVED: &str = "status IN ('queued','claimed','started','paused') OR ((status IN ('failed','interrupted') OR (kind='task' AND status='noReply')) AND NOT EXISTS(SELECT 1 FROM deliveries child WHERE child.parent_id=deliveries.id))";
 const VISIBLE: &str = "COALESCE(json_extract(data,'$.removed'),0)=0 AND (kind='user' OR (kind='agent' AND json_extract(data,'$.final')=1))";
 
 pub(crate) struct Snapshot {

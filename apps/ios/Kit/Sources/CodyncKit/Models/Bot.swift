@@ -2,6 +2,16 @@ import Foundation
 
 // A bot as codync-host sends it (`bot` events, `sync`); field names match its camelCase JSON.
 
+/// Host 提供的单任务状态和当前可操作的回合。
+public struct GroupDeliveryControl: Codable, Hashable, Identifiable, Sendable {
+    public let deliveryId: String
+    public let targetBotId: String
+    public let startedAt: Int64
+    public let status: String
+    public let preview: String
+    public var id: String { deliveryId }
+}
+
 public struct Bot: Codable, Identifiable, Hashable, Sendable {
     public var id: String
     /// `agent`, or `group`: several bots and the user in one chat (it has no agent, folder or harness).
@@ -83,6 +93,7 @@ public struct Bot: Codable, Identifiable, Hashable, Sendable {
     public var storageError: String?
     public var pendingNewSession: Bool?
     public var startedAt: Int64?
+    public var deliveryControls: [GroupDeliveryControl] = []
     /// Where the running turn talks: the bot's own chat, or a group.
     public var workingChat: String?
     /// The fallback it runs on; nil on its own agent.
@@ -161,6 +172,7 @@ extension Bot {
         storageError = try c.decodeIfPresent(String.self, forKey: .storageError)
         pendingNewSession = try c.decodeIfPresent(Bool.self, forKey: .pendingNewSession)
         startedAt = try c.decodeIfPresent(Int64.self, forKey: .startedAt)
+        deliveryControls = try c.decodeIfPresent([GroupDeliveryControl].self, forKey: .deliveryControls) ?? []
         workingChat = try c.decodeIfPresent(String.self, forKey: .workingChat)
         agentStep = try? c.decodeIfPresent(AgentStep.self, forKey: .agentStep)
         resting = (try? c.decodeIfPresent([AgentRest].self, forKey: .resting)) ?? []

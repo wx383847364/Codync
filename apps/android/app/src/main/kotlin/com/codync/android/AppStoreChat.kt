@@ -197,6 +197,16 @@ fun AppStore.respond(entry: Entry, option: String?) = action("permission:" + ent
 /** A queued message goes now: into the running turn when the agent can take it, else as the next turn (the host decides). */
 internal fun AppStore.steer(entry: Entry) = command("steer", body("botId" to entry.botId, "entryId" to entry.id), "steer:" + entry.id)
 
+/** 操作群内固定的任务回合，由已有命令处理展示错误和同步结果。 */
+internal fun AppStore.setDeliveryPaused(botId: String, task: GroupDeliveryControl, paused: Boolean) =
+    command("setDeliveryPaused", buildJsonObject {
+        // 发送回合时间，避免延迟请求作用到继续后的执行。
+        put("botId", botId)
+        put("deliveryId", task.deliveryId)
+        put("startedAt", task.startedAt)
+        put("paused", paused)
+    }, "delivery:" + task.deliveryId)
+
 /** A queued message never goes out: gone at once, back if the computer refuses (its error shows). */
 internal fun AppStore.unqueue(entry: Entry) {
     pendingRemovals[entry.id] = entry.rev

@@ -227,9 +227,10 @@ struct Composer: View {
         case interrupt, stop, call, send
     }
 
+    /// 空草稿可停止工作，群剩下暂停任务时仍保留群级停止。
     private var trailing: Trailing {
         if onInterrupt != nil, draft.isEmpty, files.isEmpty { return .interrupt }
-        if working, draft.isEmpty, files.isEmpty { return .stop }
+        if working || (!model.isOffline && !(bot?.deliveryControls.isEmpty ?? true)), draft.isEmpty, files.isEmpty { return .stop }
         if onCall != nil, draft.isEmpty, files.isEmpty { return .call }
         return .send
     }

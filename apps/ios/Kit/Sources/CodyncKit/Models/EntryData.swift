@@ -228,6 +228,7 @@ public struct DeliveryRow: Codable, Hashable, Sendable {
         case "queued": "等待执行"
         case "claimed": "准备执行"
         case "started": "执行中"
+        case "paused": "已暂停"
         case "completed": "已完成"
         case "failed": "失败"
         case "interrupted": "已中断"

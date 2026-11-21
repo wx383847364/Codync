@@ -26,6 +26,12 @@ impl Hub {
             v["devServers"] = self.dev_servers.wire(&cfg.id);
         }
         let rt = if cfg.is_group() {
+            if !row.deleted {
+                match self.store.group_delivery_controls(&cfg.id) {
+                    Ok(controls) => v["deliveryControls"] = json!(controls),
+                    Err(error) => tracing::warn!(%error, "could not read group delivery controls"),
+                }
+            }
             // A group has no agent: Fast mode belongs to its members.
             crate::hub::Runtime {
                 fast_mode: crate::agent::config::FastModeSupport::default(),

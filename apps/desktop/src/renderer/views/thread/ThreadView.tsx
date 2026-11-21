@@ -415,7 +415,7 @@ const Transcript = memo(function Transcript({ botId, openTrace, onReply, openRou
               <Row item={item} chat={bot} openTrace={openTrace} onReply={onReply} openRoutine={openRoutine} openAgent={openAgent} openBotChat={openBotChat} openArtifact={openArtifact} openCall={openCall} />
             </div>
           ))}
-          {bot ? <WorkingTransition bots={active} group={isGroup(bot)} entries={entries} /> : null}
+          {bot ? <WorkingTransition bots={active} chat={bot} entries={entries} /> : null}
           <div className="chat-end" />
         </div>
       </div>

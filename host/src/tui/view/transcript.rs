@@ -68,6 +68,7 @@ pub(super) fn build_chat(app: &App, b: &Bot, width: usize) -> Built {
     let info = turn_info(&entries);
     if entries.is_empty() {
         intro(&mut out, app, b, width);
+        super::activity::held_deliveries(&mut out, app, b, width);
         return out;
     }
     if !app.history_complete(&b.id) {
@@ -99,6 +100,7 @@ pub(super) fn build_chat(app: &App, b: &Bot, width: usize) -> Built {
         };
         out.lines.push(Line::from(line));
     }
+    super::activity::held_deliveries(&mut out, app, b, width);
     out
 }
 

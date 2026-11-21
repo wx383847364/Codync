@@ -298,6 +298,9 @@ impl Actor {
         {
             *used = Instant::now();
         }
+        let paused_delivery = self.delivery_held_after_pause();
+        // 持久暂停可能先于 actor 收到取消命令，旧回合仍应按中断清理。
+        self.stop_requested |= paused_delivery;
         let stopped = self.stop_requested || matches!(&done, Ok(v) if v["stopReason"] == "cancelled");
         self.close_attempt(stopped || done.is_err());
         let mut final_text = None;
@@ -354,6 +357,7 @@ impl Actor {
                 }
             }
             // A stopped turn says so even when its agent still ended it normally: its reply is withheld above.
+            _ if paused_delivery => {} // 群内已有单任务暂停状态，无需插入通用停止提示。
             (_, "cancelled") | (Err(_), _) => self.stop_notice("Stopped.", "cancelled"),
             (Ok(_), _) if self.stop_requested => self.stop_notice("Stopped.", "cancelled"),
             (_, "max_tokens") => self.stop_notice("The agent hit its output limit.", "max_tokens"),

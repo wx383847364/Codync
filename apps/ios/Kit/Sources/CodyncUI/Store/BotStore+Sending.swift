@@ -42,6 +42,24 @@ extension BotStore {
         }
     }
 
+    /// 操作固定群内的一个任务回合，错误交给聊天已有提示。
+    func setDeliveryPaused(_ botId: String, task: GroupDeliveryControl, paused: Bool) {
+        struct Body: Encodable {
+            let botId: String
+            let deliveryId: String
+            let startedAt: Int64
+            let paused: Bool
+        }
+        // 等待 Host 的实时事件后更新按钮，避免另一设备的操作被本地覆盖。
+        Task {
+            do {
+                try await withLink { client in
+                    let _: Empty = try await client.call("setDeliveryPaused", Body(botId: botId, deliveryId: task.id, startedAt: task.startedAt, paused: paused))
+                }
+            } catch { lastError = error.localizedDescription }
+        }
+    }
+
     /// 保存内存中的投递结果，不要求存在可用的状态卡片。
     func retryDeliverySave(_ botId: String) {
         Task {

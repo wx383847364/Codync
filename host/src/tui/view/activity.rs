@@ -1,12 +1,17 @@
 //! The current activity and how many steps the turn has taken: with thinking details on, `>` (or a
 //! click) unfolds them under it; `t` opens Full conversation.
 
-use ratatui::text::{Line, Span};
+use crate::store::deliveries::DeliveryControl;
+use ratatui::{
+    buffer::Buffer,
+    layout::Rect,
+    text::{Line, Span},
+};
 
 use super::super::app::{App, Bot, Click, Entry, Status, running_turn, working_steps};
 use super::super::l10n::tr;
 use super::super::md::truncate;
-use super::buffer::u;
+use super::buffer::{centered, frame_box, put, u, window};
 use super::style::{spin, theme};
 use super::time::elapsed;
 use super::trace::push_step;
@@ -29,6 +34,18 @@ pub(super) fn activity(out: &mut Built, app: &App, bot: &Bot, entries: &[&Entry]
     // 成员标签按终端列宽排列，长标签自然换行。
     let mut row = Line::default();
     for member in &members {
+        if let Some(task) =
+            bot.delivery_controls.iter().find(|task| task.target_bot_id == member.id && task.status == "started")
+            && app.can_toggle_delivery(bot, task)
+        {
+            // 运行中的任务操作占用该成员行末，避免多个按钮与不同成员串位。
+            if !row.spans.is_empty() {
+                out.lines.push(std::mem::take(&mut row));
+            }
+            let label = activity_label(app, member, width.saturating_sub(12), true);
+            delivery_row(out, bot, task, label, width, true);
+            continue;
+        }
         let label = Line::from(activity_label(app, member, width, true));
         if !row.spans.is_empty() {
             if row.width() + label.width() + 2 > width {
@@ -44,13 +61,15 @@ pub(super) fn activity(out: &mut Built, app: &App, bot: &Bot, entries: &[&Entry]
     }
     if details {
         // 终端详情按群回合展开，入口移到成员标签下方的群提示行。
-        let line = out.lines.len() + usize::from(!members.is_empty());
+        let line = out.lines.len() + usize::from(!members.is_empty() && !row.spans.is_empty());
         out.buttons.push((line, 0, u(width), Click::Steps));
         if members.is_empty() {
             row.spans.push(Span::styled(if open { "  v" } else { "  >" }, t.dim));
         }
     }
-    out.lines.push(row);
+    if !row.spans.is_empty() {
+        out.lines.push(row);
+    }
     let scope = if members.is_empty() { String::new() } else { format!("{} · ", truncate(&bot.name, width / 3)) };
     let disclosure = if !details {
         ""
@@ -75,6 +94,73 @@ pub(super) fn activity(out: &mut Built, app: &App, bot: &Bot, entries: &[&Entry]
             out.lines.push(Line::from(Span::styled(format!("   … {earlier} earlier lines · t shows them"), t.dim)));
         }
         out.lines.extend(lines.into_iter().skip(earlier));
+    }
+}
+
+/// 在底部保留暂停或等待继续的任务，和成员当前工作独立。
+pub(super) fn held_deliveries(out: &mut Built, app: &App, bot: &Bot, width: usize) {
+    if !app.online || !bot.delivery_controls.iter().any(|task| task.status != "started") {
+        return;
+    }
+    let t = theme();
+    gap(out);
+    for task in bot.delivery_controls.iter().filter(|task| task.status != "started") {
+        let action = app.can_toggle_delivery(bot, task);
+        let name = app.author_name(Some(&task.target_bot_id));
+        let status = tr(if task.status == "paused" { "Paused" } else { "Continuing…" });
+        let text = format!(" {name} · {status} · {}", task.preview);
+        let label = Span::styled(truncate(&text, width.saturating_sub(if action { 14 } else { 0 })), t.secondary);
+        delivery_row(out, bot, task, vec![label], width, action);
+    }
+}
+
+/// 鼠标任务范围仅覆盖按钮文字，其他点击仍交给原聊天。
+fn delivery_row(
+    out: &mut Built,
+    bot: &Bot,
+    task: &DeliveryControl,
+    label: Vec<Span<'static>>,
+    width: usize,
+    action: bool,
+) {
+    let mut line = Line::from(label);
+    if action {
+        let label = tr(if task.status == "started" { "Pause" } else { "Continue" });
+        let start = line.width();
+        line.spans.push(Span::styled(format!(" [{label}]"), theme().bold));
+        out.buttons.push((
+            out.lines.len(),
+            u(start),
+            u(line.width().min(width).saturating_sub(start)),
+            Click::DeliveryControl(bot.id.clone(), task.clone()),
+        ));
+    }
+    out.lines.push(line);
+}
+
+/// 键盘选择框按窗口高度滚动，整组任务都可通过上下键选择。
+pub(super) fn delivery_controls(buf: &mut Buffer, area: Rect, app: &App, tasks: &[DeliveryControl], cursor: usize) {
+    let t = theme();
+    let frame = centered(area, 78, 15);
+    let inner = frame_box(buf, frame, t.text, t.panel, Some(("Group tasks", t.text)));
+    let rows = usize::from(inner.height.saturating_sub(1));
+    for (line, (index, task)) in tasks.iter().enumerate().skip(window(cursor, rows)).take(rows).enumerate() {
+        let name = app.author_name(Some(&task.target_bot_id));
+        let action = tr(if task.status == "started" { "Pause" } else { "Continue" });
+        let mark = if index == cursor { ">" } else { " " };
+        let label = format!("{mark} {action} {name} · {}", task.preview);
+        let style = if index == cursor { t.bold } else { t.text };
+        put(buf, inner.x, inner.y + u(line), inner.width, &label, style.patch(t.panel));
+    }
+    if inner.height > 0 {
+        put(
+            buf,
+            inner.x,
+            inner.bottom() - 1,
+            inner.width,
+            "↑ ↓ select · enter apply · esc close",
+            t.dim.patch(t.panel),
+        );
     }
 }
 

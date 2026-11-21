@@ -375,7 +375,7 @@ internal val Entry.botReactions: Map<String, List<String>> get() =
 }
 
 /** 展示成员当前的活动和用时，开启思考详情时可展开本次执行的步骤。 */
-@Composable internal fun WorkingIndicator(bot: Bot, entries: List<Entry>, details: Boolean, chatId: String) {
+@Composable internal fun WorkingIndicator(bot: Bot, entries: List<Entry>, details: Boolean, chatId: String, pause: (() -> Unit)? = null) {
     val needs = bot.status == "needsInput"
     // Each turn starts folded.
     var expanded by remember(bot.startedAt) { mutableStateOf(false) }
@@ -390,24 +390,28 @@ internal val Entry.botReactions: Map<String, List<String>> get() =
     val color = if (needs) Palette.warning else Palette.secondary
     // 折叠时按标签内容取宽，展开时独占一行以容纳步骤。
     Column(Modifier.then(if (open) Modifier.fillMaxWidth() else Modifier).animateContentSize(Motion.layoutSize)
-        .clip(RoundedRectangle(18.dp)).background(Palette.bubbleAgent).padding(horizontal = 16.dp, vertical = 12.dp)) {
-        Row(Modifier.then(if (open) Modifier.fillMaxWidth() else Modifier).then(toggle),
-            verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            ThinkingOrb(if (needs) ThinkingOrbState.Listening else ThinkingOrbState.Working, 16.dp, if (needs) Palette.warning else Palette.secondary)
-            if (member) {
-                // 各自截断名称和状态，避免长成员名吃掉整个状态文本。
-                Row(Modifier.weight(1f, fill = open), horizontalArrangement = Arrangement.spacedBy(3.dp)) {
-                    Text("${bot.name}:", Modifier.weight(1f, fill = false), style = Type.subheadline,
-                        color = color, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Text(activity, Modifier.weight(1f, fill = false), style = Type.subheadline,
+        .clip(RoundedRectangle(18.dp)).background(Palette.bubbleAgent).padding(horizontal = 16.dp, vertical = if (pause == null) 12.dp else 4.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            // 折叠详情区域和暂停按钮分别响应点击。
+            Row(Modifier.weight(1f, fill = open).then(toggle),
+                verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                ThinkingOrb(if (needs) ThinkingOrbState.Listening else ThinkingOrbState.Working, 16.dp, if (needs) Palette.warning else Palette.secondary)
+                if (member) {
+                    // 各自截断名称和状态，避免长成员名吃掉整个状态文本。
+                    Row(Modifier.weight(1f, fill = open), horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+                        Text("${bot.name}:", Modifier.weight(1f, fill = false), style = Type.subheadline,
+                            color = color, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(activity, Modifier.weight(1f, fill = false), style = Type.subheadline,
+                            color = color, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                } else {
+                    Text(activity, Modifier.weight(1f, fill = open), style = Type.subheadline,
                         color = color, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
-            } else {
-                Text(activity, Modifier.weight(1f, fill = open), style = Type.subheadline,
-                    color = color, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                bot.startedAt?.let { Elapsed(it) }
+                if (details) Symbol("chevron.right", Modifier.rotate(turn), size = 13.dp, tint = Palette.tertiary)
             }
-            bot.startedAt?.let { Elapsed(it) }
-            if (details) Symbol("chevron.right", Modifier.rotate(turn), size = 13.dp, tint = Palette.tertiary)
+            if (pause != null) IconButton("Pause", "pause.fill", action = pause)
         }
         AnimatedVisibility(open, enter = fadeIn(Motion.fade()) + expandVertically(Motion.layoutSize),
             exit = fadeOut(Motion.fade()) + shrinkVertically(Motion.layoutSize)) {

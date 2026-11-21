@@ -131,6 +131,7 @@ impl App {
             Overlay::Group(g) => self.group_key(g, k),
             Overlay::StageGroup(g) => self.stage_group_key(g, k),
             Overlay::StageDetails(g) => self.stage_details_key(g, k),
+            Overlay::DeliveryControls { room, tasks, cursor } => self.delivery_control_key(room, tasks, cursor, k),
             Overlay::Memory(m) => self.memory_key(m, k),
             Overlay::BotChat(c) => Self::bot_chat_key(c, k),
             Overlay::DevServers(sheet) => self.dev_servers_key(sheet, k),

@@ -1,5 +1,30 @@
 use super::*;
 
+/// 任务选择可在输入模式打开，关闭后保留原草稿和输入焦点。
+#[tokio::test]
+async fn the_group_task_shortcut_keeps_the_draft() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    let mut app = test_app();
+    let group = json!({"id":"group", "name":"Crew", "kind":"group", "deliveryControls":[
+        {"deliveryId":"d", "targetBotId":"a", "status":"started", "startedAt":7, "preview":"Original task"}
+    ]});
+    app.bots.insert("group".into(), Bot::parse(&group).unwrap());
+    app.selected = Some("group".into());
+    app.drafts.insert("group".into(), Editor::with("A distinct draft"));
+    app.online = true;
+    app.chat_page = true;
+    app.typing = true;
+
+    app.on_key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL));
+    assert!(
+        matches!(app.overlays.last(), Some(Overlay::DeliveryControls { tasks, .. }) if tasks[0].delivery_id == "d")
+    );
+    app.on_key(KeyEvent::from(KeyCode::Esc));
+    assert!(app.overlays.is_empty() && app.typing);
+    assert_eq!(app.drafts["group"].text, "A distinct draft");
+}
+
 #[tokio::test]
 async fn routines_keep_the_chat_draft_until_the_user_returns_to_chat() {
     use crate::tui::manage::RoutineList;

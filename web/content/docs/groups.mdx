@@ -40,7 +40,7 @@ Choose **Stage details** from the stage group's menu. Edit and save the Markdown
 
 For files from an earlier bot's workspace, first share them in its stage group. Select them under **Shared evidence files** to pin their saved versions. The next stage receives its own copy of each selected file.
 
-Choose **Close stage** when its active queue is empty. You can keep reading its messages and handoff. **Reopen stage** lets you send work there again. When creating the next stage, select **Use accepted handoff** to carry its saved version into your first task. **Restore first draft** recovers the goal and acceptance criteria before your first send.
+Choose **Close stage** after its tasks are finished or stopped. You can keep reading its messages and handoff. **Reopen stage** lets you send work there again. When creating the next stage, select **Use accepted handoff** to carry its saved version into your first task. **Restore first draft** recovers the goal and acceptance criteria before your first send.
 
 ### View stage usage
 
@@ -70,6 +70,11 @@ When you send a message, the group runs a round of answers:
 Above the message box, each member working in this group has a separate activity label
 with its name, current activity and elapsed time. As members finish, their labels clear individually.
 
+Choose **Pause** on a task's activity row to interrupt that task while the other members keep working.
+Paused tasks stay above the message box. Choose **Continue** to put the same task back in the queue.
+When the member is free, it picks up the original request with the available conversation and workspace progress.
+In the terminal UI, use the buttons next to the task or press `Ctrl+P` and choose a task with the arrow keys.
+
 Each member's reply is the one message the room sees. Its tool calls, thoughts and approval cards for that turn appear in the group. The member's own chat doesn't show them. Open **Full conversation** to see its steps.
 
 ### @-mentions
@@ -97,10 +102,12 @@ A busy member keeps each accepted request queued and reads the room again when f
 New messages never replace accepted work. Cards show each target's state and retry attempt;
 failed or interrupted work offers a retry action in its details, which preserves the old record.
 
-Group **Stop**, removing a member or deleting the group cancels its unfinished work.
-Stopping a private chat preserves requests queued by other groups. After a restart, work
-that may already have started is marked interrupted with an uncertain outcome and waits
-for your decision to retry. Check for external effects before retrying uncertain work.
+Group **Stop** cancels all unfinished work in that group, including paused tasks.
+Removing a member cancels its unfinished work in that group. Deleting a group cancels its work.
+After a restart, paused tasks are still available to continue. Work that was running at
+the time is marked interrupted with an uncertain outcome and waits for your decision to retry.
+Check for external effects before retrying uncertain work. Stopping a private chat
+preserves requests queued by other groups.
 
 If results cannot be saved, they stay in memory and the member pauses. **Retry save** is
 available beside the affected member in the source group and in its own chat, even if a card could not be written. The host retries saving

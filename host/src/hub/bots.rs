@@ -82,7 +82,7 @@ impl Hub {
                 let _ = self.events.send(json!({"type":"bot","rev":bot["rev"],"bot":bot}));
             }
             self.delivery_entries(&cards);
-            self.stop_cancelled_deliveries(&cancelled);
+            self.stop_delivery_turns(&cancelled);
             (row.config, cfg)
         };
         crate::network::publish(self);
@@ -106,7 +106,7 @@ impl Hub {
             let (rev, cancelled, cards) = self.store.delete_bot(id)?;
             let _ = self.events.send(json!({"type":"bot","rev":rev,"bot":{"id":id,"deleted":true,"rev":rev}}));
             self.delivery_entries(&cards);
-            self.stop_cancelled_deliveries(&cancelled);
+            self.stop_delivery_turns(&cancelled);
         }
         self.team.end_turn(id);
         let _ = self.send_cmd(id, Cmd::Shutdown);

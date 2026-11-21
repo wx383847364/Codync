@@ -7,6 +7,78 @@ import { api, attach, sandbox, steerBot, typeMessage } from './sandbox.ts'
 
 type History = { entries: { kind: string; data: { final?: boolean; text?: string; mentions?: { botId: string; start: number; end: number }[] } }[] }
 
+/** 用真实群聊并行回合验证单独暂停、切换聊天和继续原任务。 */
+test('pauses just one running group delivery and resumes its original session', async () => {
+  const { browser, page } = await attach()
+  const suffix = Date.now()
+  const workspace = join(tmpdir(), `codync-group-pause-${suffix}`)
+  const names = [`PauseAlpha${suffix}`, `PauseBeta${suffix}`]
+  const ids: string[] = []
+  try {
+    for (const [index, name] of names.entries()) {
+      const cwd = join(workspace, String(index))
+      mkdirSync(cwd, { recursive: true })
+      writeFileSync(join(cwd, 'group-script.json'), JSON.stringify({ reply: `Result from ${name}` }))
+      ids.push((await api<{ bot: { id: string } }>(page, 'createBot', {
+        name, backend: 'custom', cwd, command: `python3 -u '${join(__dirname, '../../../host/tests/fixtures/team_agent.py')}'`,
+        connectors: [], skills: [], notify: false,
+      })).bot.id)
+    }
+    const { bot: original } = await api<{ bot: { id: string } }>(page, 'createBot', {
+      name: `Pause crew ${suffix}`, kind: 'group', members: ids,
+    })
+    ids.unshift(original.id)
+    const { bot: group } = await api<{ bot: { id: string; name: string } }>(page, 'createGroupSession', { botId: original.id })
+    ids.unshift(group.id)
+    const room = page.locator('.roster-row').getByText(group.name, { exact: true })
+    await room.click()
+    await typeMessage(page, `@${names[0]} BLOCK first assignment`)
+    await typeMessage(page, `@${names[1]} BLOCK second assignment`)
+    const first = page.getByRole('group', { name: names[0], exact: true })
+    const second = page.getByRole('group', { name: names[1], exact: true })
+    await expect(second.getByRole('button', { name: 'Pause', exact: true })).toBeVisible()
+    await first.getByRole('button', { name: 'Pause', exact: true }).click()
+    await expect(first.getByText(/Paused/)).toBeVisible()
+    await expect(second.getByRole('button', { name: 'Pause', exact: true })).toBeVisible()
+    writeFileSync(join(workspace, '1', 'release'), '')
+    await expect(page.getByText(`Result from ${names[1]}`, { exact: true })).toBeVisible()
+    await expect(page.getByText(`Result from ${names[0]}`, { exact: true })).toHaveCount(0)
+
+    // 切换会话后必须从 Host 快照重新取得继续按钮。
+    await page.locator('.roster-row').getByText(names[1], { exact: true }).click()
+    await room.click()
+    await first.getByRole('button', { name: 'Continue', exact: true }).click()
+    await expect(first.getByRole('button', { name: 'Pause', exact: true })).toBeVisible()
+    writeFileSync(join(workspace, '0', 'release'), '')
+    await expect(page.getByText(`Result from ${names[0]}`, { exact: true })).toBeVisible()
+    await expect(first.getByRole('button', { name: 'Continue', exact: true })).toHaveCount(0)
+
+    // 会话和任务 ID 都必须保持一致，续跑提示明确要求接着当前进度处理。
+    const requests = readFileSync(join(workspace, '0', 'prompt-requests.jsonl'), 'utf8').trim().split('\n')
+      .map((line) => JSON.parse(line) as { sessionId: string; prompt: { text: string }[] })
+    expect(requests).toHaveLength(2)
+    expect(requests[1]!.sessionId).toBe(requests[0]!.sessionId)
+    const originalText = requests[0]!.prompt[0]!.text
+    const resumedText = requests[1]!.prompt[0]!.text
+    expect(resumedText.match(/Context delivery ID: ([\w-]+)/)?.[1]).toBe(originalText.match(/Context delivery ID: ([\w-]+)/)?.[1])
+    expect(resumedText).toContain('The user resumed this paused assignment.')
+    expect(resumedText).toContain('BLOCK first assignment')
+
+    // 群里只剩暂停任务时，群级停止仍能一次结束未完成任务。
+    rmSync(join(workspace, '0', 'release'))
+    await typeMessage(page, `@${names[0]} BLOCK leave one task paused`)
+    await first.getByRole('button', { name: 'Pause', exact: true }).click()
+    await expect(first.getByRole('button', { name: 'Continue', exact: true })).toBeVisible()
+    await page.locator('.composer').getByRole('button', { name: 'Stop', exact: true }).click()
+    await expect(first.getByRole('button', { name: 'Continue', exact: true })).toHaveCount(0)
+  } finally {
+    // 失败时也清理沙箱里本测试的群、成员和夹具文件。
+    for (const id of ids) await api(page, 'deleteBot', { botId: id }).catch(() => {})
+    rmSync(workspace, { recursive: true, force: true })
+    await browser.close()
+  }
+})
+
 /** 用真实群聊验证同时显示工作的成员，且忙成员排队后仍收到原消息。 */
 test('idle group members answer a new message in order while a member finishes earlier work', async () => {
   const { browser, page } = await attach()

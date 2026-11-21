@@ -59,6 +59,7 @@ data class Bot(
     val storageError: String? = null,
     val pendingNewSession: Boolean = false,
     val startedAt: Long? = null,
+    val deliveryControls: List<GroupDeliveryControl> = emptyList(),
     val workingChat: String? = null,
     val lastMessage: String? = null,
     val lastAt: Long = 0,

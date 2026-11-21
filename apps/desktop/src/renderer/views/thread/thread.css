@@ -388,6 +388,15 @@
 .working.expanded {
   width: 100%;
 }
+.working-with-action {
+  padding-block: 6px;
+}
+.working-action-row > :first-child {
+  min-width: 0;
+}
+.working-action-row > .icon-button {
+  flex-shrink: 0;
+}
 /* The steps never widen the pill themselves, so folding narrows it while they fold away. */
 .working .reveal {
   contain: inline-size;

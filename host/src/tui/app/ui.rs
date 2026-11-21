@@ -341,6 +341,11 @@ pub enum Overlay {
     Group(GroupForm),
     StageGroup(Box<super::StageGroupForm>),
     StageDetails(Box<super::StageDetailsForm>),
+    DeliveryControls {
+        room: String,
+        tasks: Vec<crate::store::deliveries::DeliveryControl>,
+        cursor: usize,
+    },
     /// How far its list is scrolled.
     Usage(usize),
     /// Which agents' limits show: the row under the cursor, and whether a move is on its way to the host (the next waits
@@ -385,6 +390,7 @@ pub enum Click {
     Composer,
     /// The working line: unfolds or folds the turn's steps.
     Steps,
+    DeliveryControl(String, crate::store::deliveries::DeliveryControl),
     /// A bot-message row (entry id): opens the conversation.
     BotChat(String),
     /// The port in the chat's header: opens the bot's dev servers.

@@ -271,14 +271,23 @@ struct NoticeRow: View {
 struct WorkingIndicators: View {
     let bots: [Bot]
     let entries: [Entry]
-    let group: Bool
+    let chat: Bot
+    @Environment(BotStore.self) private var model
 
     /// 私聊延续原有的单标签布局。
     var body: some View {
-        if group {
+        if chat.isGroup {
+            let held = chat.deliveryControls.filter { $0.status != "started" }
             WrapLayout(spacing: 8, leading: true) {
                 // 按成员身份保留状态，每次执行独立折叠。
-                ForEach(bots) { bot in indicator(bot) }
+                ForEach(bots) { bot in
+                    let task = chat.deliveryControls.first { $0.status == "started" && $0.targetBotId == bot.id }
+                    // 已暂停的任务在代理处理取消期间可能还会收到短暂的活动更新。
+                    if task != nil || !held.contains(where: { $0.targetBotId == bot.id && (bot.startedAt ?? .max) <= $0.startedAt }) {
+                        indicator(bot, task: task)
+                    }
+                }
+                ForEach(held) { task in HeldDeliveryRow(chat: chat, task: task) }
             }
             .padding(.trailing, 40)
         } else if let bot = bots.first {
@@ -289,8 +298,11 @@ struct WorkingIndicators: View {
     }
 
     /// 每位成员的标签在新回合开始时重新折叠。
-    private func indicator(_ bot: Bot) -> some View {
-        WorkingIndicator(bot: bot, entries: entries, member: group && !bot.isGroup)
+    private func indicator(_ bot: Bot, task: GroupDeliveryControl? = nil) -> some View {
+        WorkingIndicator(bot: bot, entries: entries, member: chat.isGroup && !bot.isGroup, pause: task.map { task in
+            // 暂停操作绑定该任务回合。
+            { model.setDeliveryPaused(chat.id, task: task, paused: true) }
+        })
             .id(bot.startedAt)
     }
 }
@@ -300,6 +312,7 @@ private struct WorkingIndicator: View {
     let bot: Bot
     let entries: [Entry]
     let member: Bool
+    let pause: (() -> Void)?
     @AppStorage(ThinkingDetails.storageKey) private var details = false
     @State private var expanded = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -317,17 +330,20 @@ private struct WorkingIndicator: View {
     var body: some View {
         let shape = RoundedRectangle(cornerRadius: 18, style: .continuous)
         VStack(alignment: .leading, spacing: 0) {
-            if details {
-                Button {
-                    withAnimation(Motion.reduced(Motion.layout, reduceMotion)) { expanded.toggle() }
-                } label: {
-                    status.contentShape(Rectangle())
+            HStack(spacing: 4) {
+                if details {
+                    Button {
+                        withAnimation(Motion.reduced(Motion.layout, reduceMotion)) { expanded.toggle() }
+                    } label: {
+                        status.contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityHint(L10n.tr(open ? "Hide steps" : "Show steps"))
+                    .accessibilityValue(open ? "Expanded" : "Collapsed")
+                } else {
+                    status
                 }
-                .buttonStyle(.plain)
-                .accessibilityHint(L10n.tr(open ? "Hide steps" : "Show steps"))
-                .accessibilityValue(open ? "Expanded" : "Collapsed")
-            } else {
-                status
+                if let pause { IconButton("Pause", systemImage: "pause.fill", action: pause) }
             }
             if open {
                 WorkingSteps(steps: steps)
@@ -336,7 +352,7 @@ private struct WorkingIndicator: View {
             }
         }
         .padding(.horizontal, 16)
-        .padding(.vertical, 12)
+        .padding(.vertical, pause == nil ? 12 : 4)
         .frame(maxWidth: open ? .infinity : nil, alignment: .leading)
         .background(Palette.bubbleAgent, in: shape)
         // Folding steps never cross the pill's edge.

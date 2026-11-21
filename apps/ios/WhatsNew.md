@@ -6,6 +6,14 @@ any left). tools/asc-submit.py reads the released version's section;
 a version without one gets a generic "Bug fixes and improvements" line. Delete old sections.
 -->
 
+## 2.48.0
+
+### zh-Hant
+- 可在群組中單獨暫停及繼續指定任務，其他成員可同時繼續工作。
+
+### en-US
+- Pause and continue individual group tasks while other members keep working.
+
 ## 2.45.2
 
 ### zh-Hant

@@ -368,6 +368,13 @@ pub(super) async fn call(hub: &Arc<Hub>, caller: &Caller, method: &str, b: Value
             crate::chat::group::ensure_runner(hub, &delivery.room_id);
             json!({"delivery":delivery})
         }
+        "setDeliveryPaused" => {
+            // 群、投递和回合必须同时匹配，过期控件无法停掉后续工作。
+            let started_at = b["startedAt"].as_i64().ok_or_else(|| anyhow!("missing delivery start time"))?;
+            let paused = b["paused"].as_bool().ok_or_else(|| anyhow!("missing paused state"))?;
+            hub.set_delivery_paused(str_arg(&b, "botId")?, str_arg(&b, "deliveryId")?, started_at, paused)?;
+            json!({})
+        }
         "newSession" => {
             let mode = b["mode"].as_str().unwrap_or("after");
             anyhow::ensure!(["after", "immediate", "cancel"].contains(&mode), "invalid session switch mode");

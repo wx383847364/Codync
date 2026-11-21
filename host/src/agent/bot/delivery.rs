@@ -104,6 +104,18 @@ pub(super) struct PendingCompletion {
 }
 
 impl Actor {
+    /// 以数据库状态识别用户暂停，继续请求可能已排队，但当前回合仍是旧执行。
+    pub(super) fn delivery_held_after_pause(&self) -> bool {
+        let Some(active) = &self.active_delivery else { return false };
+        match self.hub.store.delivery(&active.delivery.id) {
+            Ok(delivery) => delivery.is_some_and(|delivery| delivery.held_after_pause()),
+            Err(error) => {
+                tracing::warn!(%error, "could not check whether the active delivery was paused");
+                false
+            }
+        }
+    }
+
     /// 新工具或审批之后出现 pass 时，不能把此前的进度提升为结果。
     pub(super) fn close_seg_for_work(&mut self) {
         self.close_seg();

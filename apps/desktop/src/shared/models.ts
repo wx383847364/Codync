@@ -127,10 +127,19 @@ export interface Bot {
   storageError?: string | null
   pendingNewSession?: boolean
   startedAt?: number | null
+  deliveryControls?: GroupDeliveryControl[]
   workingChat?: string | null
   unread: number
   lastMessage?: string | null
   lastAt: number
+}
+
+export interface GroupDeliveryControl {
+  deliveryId: string
+  targetBotId: string
+  startedAt: number
+  status: 'started' | 'paused' | 'resuming'
+  preview: string
 }
 
 /** Lenient: a host that is a little newer or older than the app still yields a usable bot. */
@@ -186,6 +195,7 @@ export function normalizeBot(raw: Partial<Bot> & { id: string }): Bot {
     status: raw.status ?? 'idle',
     activity: raw.activity ?? '',
     startedAt: raw.startedAt ?? null,
+    deliveryControls: raw.deliveryControls,
     workingChat: raw.workingChat ?? null,
     unread: raw.unread ?? 0,
     lastMessage: raw.lastMessage ?? null,

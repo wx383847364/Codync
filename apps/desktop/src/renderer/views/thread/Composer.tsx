@@ -200,7 +200,9 @@ function DestinationComposer({ botId, reply, about, cancelReply, onCall, onInter
   }
   useVoiceShortcut(dictation, draft, submit, () => field.current?.focus())
 
-  const trailing: Trailing = onInterrupt && !draft && !files.length ? 'interrupt' : working && !draft && !files.length ? 'stop' : onCall && !draft && !files.length ? 'call' : 'send'
+  // 群级停止也能结束只剩暂停任务的群，草稿仍然优先发送。
+  const canStop = working || (!!bot?.deliveryControls?.length && !store.isOffline)
+  const trailing: Trailing = onInterrupt && !draft && !files.length ? 'interrupt' : canStop && !draft && !files.length ? 'stop' : onCall && !draft && !files.length ? 'call' : 'send'
   const [symbol, label] = ({
     interrupt: ['stop.fill', 'Interrupt'],
     stop: ['stop.fill', tr('Stop')],

@@ -159,7 +159,8 @@ private enum class Trailing { Interrupt, Stop, Call, Send }
     val bare = text.text.isEmpty() && files.isEmpty()
     val trailing = when {
         onInterrupt != null && bare -> Trailing.Interrupt
-        working && bare -> Trailing.Stop
+        // 允许群级停止只剩下暂停任务的群，非空草稿仍能发送。
+        (working || (online && bot.deliveryControls.isNotEmpty())) && bare -> Trailing.Stop
         onCall != null && bare -> Trailing.Call
         else -> Trailing.Send
     }

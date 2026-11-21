@@ -44,6 +44,7 @@ quotes itself.
 | `reorderBots` | `ids` | The roster as the user dragged it, top first; groups count as rows. See [bot order](computer-order.md#bot-order). |
 | `renameSection` | `from, to` | Every row in section `from` moves to `to`, groups too; an existing name merges them, `null` removes the section. See [bot order](computer-order.md#bot-order). |
 | `stop` | `botId` | For a group: ends its room turn and stops members working in it. |
+| `setDeliveryPaused` | `botId, deliveryId, startedAt, paused` | Interrupts one running group delivery or queues that same delivery to continue. The group snapshot's `deliveryControls` supplies the task ID and current turn's start time. Stale requests leave the delivery as it is. |
 | `react` | `entryId, emoji` | Toggles the user's reaction on a chat message (`data.reactions`, oldest first, at most 8). A reacted-to message never turns unread again. The bot isn't told, except in a group, where members see reactions on the room lines they're shown. Bots react themselves with the `chat` server's `react` ([bot reactions](chat-messages.md#bot-reactions)). |
 | `respondPermission` | `entryId, optionId?` | Routed to `data.author`, so cards in a group reach the bot that asked. |
 | `markRead` | `botId` | Reads the chat. A no-op when nothing there is unread, so clients call it whenever a chat is on screen. `send` marks its chat read. |
@@ -111,14 +112,16 @@ explicitly assign the next action until they deliver the requested result or nee
 user's decision, information or approval. They then report the result or question and
 wait, without acknowledgement loops. An empty queue is idle, not proof the whole task
 was completed. Busy members and timed-out executions keep their accepted assignments.
-Pending `task` rows (`queued`, `claimed`, `started`) still count toward global 64 and
+Pending `task` rows (`queued`, `claimed`, `started`, `paused`) still count toward global 64 and
 per-sender 16 capacity, with checks and insertion in one IMMEDIATE transaction. Completed
 work releases capacity; it does not consume a lifetime reply budget.
 
 The state machine is `queued → claimed → started → completed / noReply / failed /
-interrupted / cancelled`. `started` must commit before prompt transmission. Restart
-requeues `claimed`, preserves `queued`, and marks `started` interrupted with an uncertain
-result; it never automatically replays uncertain work. Startup, idle transitions,
+interrupted / cancelled`. A user can move a `started` delivery to `paused` and then move
+the same delivery back to `queued`. A paused delivery is pending for stage actions and
+stays out of scheduling. `started` must commit before prompt transmission. Restart
+requeues `claimed`, preserves `queued` and `paused`, and marks `started` interrupted with
+an uncertain result. Startup, idle transitions,
 post-commit notification and a roughly three-second scan wake room scheduling.
 
 Final reply, conditional terminal state and derived mentions commit atomically. Cards

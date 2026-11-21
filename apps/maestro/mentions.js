@@ -11,12 +11,23 @@ const api = (method, body) => {
 
 if (typeof CLEANUP !== 'undefined') {
   for (const id of output.made || []) api('deleteBot', { botId: id })
+} else if (typeof START_TASKS !== 'undefined') {
+  // 两条独立消息各有一个等待位，真实 Host 可让两位成员同时执行。
+  const [group, alpha, beta] = output.made
+  for (const [botId, name] of [[alpha, output.alpha], [beta, output.beta]]) {
+    const mention = `@${name}`
+    api('send', { botId: group, text: `${mention} Review the assignment`, mentions: [{ botId, start: 0, end: mention.length }] })
+  }
 } else {
   const run = Math.random().toString(36).slice(2, 6)
-  const member = (name, description) =>
-    api('createBot', { name, description, backend: 'custom', command: 'unused', connectors: [], permission: 'auto' }).bot
-  const alpha = member(`Mention Alpha ${run}`, 'Reviews the code')
-  const beta = member(`Mention Beta ${run}`, 'Writes the docs')
+  const taskTest = typeof PAUSE_TEST !== 'undefined'
+  // 暂停用例复用可中断的 ACP 夹具，其他用例只需要成员元数据。
+  const member = (name, description, seconds) =>
+    api('createBot', { name, description, backend: 'custom',
+      command: taskTest ? `python3 -X utf8 -u '${STEER_AGENT}' plain ${seconds}` : 'unused',
+      connectors: [], permission: 'auto', notify: false }).bot
+  const alpha = member(`Mention Alpha ${run}`, 'Reviews the code', 24)
+  const beta = member(`Mention Beta ${run}`, 'Writes the docs', 12)
   const group = api('createBot', { name: `Mention Group ${run}`, kind: 'group', members: [alpha.id, beta.id] }).bot
   output.made = [group.id, alpha.id, beta.id]
   output.group = group.name
