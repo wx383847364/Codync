@@ -20,7 +20,7 @@ pub(super) enum Answer {
 }
 
 impl Actor {
-    /// 只有当前 ACP 会话的审批和更新能进入当前聊天。
+    /// 只处理当前会话的更新，断连时停止提供引导入口。
     pub(super) async fn on_incoming(&mut self, inc: Option<Incoming>) {
         match inc {
             None | Some(Incoming::Closed { .. }) => {
@@ -29,6 +29,7 @@ impl Actor {
                     _ => String::new(),
                 };
                 self.conn = None;
+                self.hub.set_runtime(&self.cfg.id, |state| state.guiding_delivery_id = None);
                 // The in-flight prompt request resolves with an error; finish_turn reports it with this output.
                 self.exit_tail = Some(tail);
             }

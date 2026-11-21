@@ -91,6 +91,7 @@ impl App {
         let depth = self.overlays.len();
         let keep = match top {
             Overlay::Goto(g) => self.goto_key(g, k),
+            Overlay::GroupGuidance { targets, cursor } => self.group_guidance_key(targets, cursor, k.code),
             Overlay::Help(mut e) => {
                 if k.code == KeyCode::Esc || k.code == KeyCode::Char('?') && e.text.is_empty() {
                     None

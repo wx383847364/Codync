@@ -37,6 +37,7 @@
     "event:bot.bot.fastModeIssue": "null",
     "event:bot.bot.fastModeSupport": "string",
     "event:bot.bot.groupLeaderId": "string",
+    "event:bot.bot.guidingDeliveryId": "null",
     "event:bot.bot.harnessMemory": "null",
     "event:bot.bot.harnessMemoryShared": "bool",
     "event:bot.bot.hidden": "bool",

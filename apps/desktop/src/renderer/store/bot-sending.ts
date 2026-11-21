@@ -85,6 +85,12 @@ export class BotSending extends BotSync {
   /** 存储故障从 bot 状态恢复，不依赖卡片；操作不自动重放。 */
   retryDeliverySave(botId: string) { return this.perform((c) => c.call('retryDeliverySave', { botId })) }
 
+  /** 引导消息必须附带界面显示的在途投递，防止回合切换后送错。 */
+  guideDelivery(deliveryId: string, activeDeliveryId: string) {
+    // 失败通过通用命令反馈呈现，客户端等待 host 更新投递卡。
+    return this.perform((c) => c.call('guideDelivery', { deliveryId, activeDeliveryId }))
+  }
+
   /** 主动重试创建新的投递与 attempt，旧记录保留。 */
   retryDelivery(deliveryId: string) { return this.perform((c) => c.call('retryDelivery', { deliveryId })) }
 

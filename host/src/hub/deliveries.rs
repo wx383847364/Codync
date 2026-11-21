@@ -104,6 +104,14 @@ impl Hub {
         Ok(started)
     }
 
+    /// 登记引导并同步卡片后，才把用户原文交给当前成员。
+    pub fn start_guidance(&self, id: &str, active_id: &str, bot: &str) -> Result<Entry> {
+        let _guard = self.emit_lock.locked();
+        let (source, cards) = self.store.start_guidance(id, active_id, bot)?;
+        self.delivery_entries(&cards);
+        Ok(source)
+    }
+
     /// 保存终态、结果及派生投递，失败由 actor 保留内存结果重试。
     pub fn complete_delivery(
         &self,
@@ -112,10 +120,11 @@ impl Hub {
         text: Option<&str>,
         detail: Option<&str>,
         turn: i64,
+        guidance: &[(String, crate::store::deliveries::Guidance)],
     ) -> Result<()> {
         let _guard = self.emit_lock.locked();
         let outcome = serde_json::to_value(status)?;
-        let cards = self.store.complete_delivery(id, status, text, detail, turn)?;
+        let cards = self.store.complete_delivery(id, status, text, detail, turn, guidance)?;
         self.delivery_entries(&cards);
         // 等待位超时、runner已经退出的迟到回复仍留在来源群并推送群身份。
         if let Some(entry) = cards.iter().find(|e| e.kind == "agent" && e.data["final"] == true)

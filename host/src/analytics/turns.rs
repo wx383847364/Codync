@@ -101,9 +101,10 @@ pub enum Steer {
     Failed,
 }
 
-/// `message_steered`: the agent and what became of the message.
-pub fn message_steered(hub: &Hub, agent: &str, how: Steer) {
-    let p = json!({"agent": agent, "how": how});
+/// 记录引导的入口、适配器与结果，群消息正文和投递身份不进入埋点。
+pub fn message_steered(hub: &Hub, agent: &str, how: Steer, group: bool) {
+    let source = if group { "group" } else { "private" };
+    let p = json!({"agent": agent, "how": how, "source": source});
     capture(hub, Event::MessageSteered, p.as_object().cloned().unwrap_or_default());
 }
 

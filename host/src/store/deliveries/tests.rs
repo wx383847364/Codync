@@ -148,6 +148,36 @@ fn recovery_preserves_queued_and_interrupts_started() {
     assert_eq!(s.queued_deliveries("g").unwrap().len(), 2);
 }
 
+/// 明确未注入的引导保持原排队顺序，结果未知的引导保留为手动恢复项。
+#[test]
+fn group_guidance_keeps_queue_order_and_avoids_replay_when_uncertain() {
+    let s = store();
+    for text in ["current", "@a defer", "@a uncertain", "@a normal"] {
+        s.post_group("g", &json!({"text":text, "directMentions":["a"]}), &["a".into()]).unwrap();
+    }
+    let rows = s.queued_deliveries("g").unwrap();
+    let (active, deferred, uncertain, normal) = (&rows[0].id, &rows[1].id, &rows[2].id, &rows[3].id);
+    s.claim_delivery(active, "a").unwrap();
+    s.start_delivery(active, "a").unwrap();
+    s.start_guidance(deferred, active, "a").unwrap();
+    s.start_guidance(uncertain, active, "a").unwrap();
+    assert_eq!(s.queued_deliveries("g").unwrap().len(), 1);
+    s.complete_delivery(
+        active,
+        Status::Completed,
+        Some("done"),
+        None,
+        1,
+        &[(deferred.clone(), Guidance::Deferred), (uncertain.clone(), Guidance::Uncertain)],
+    )
+    .unwrap();
+    let queued = s.queued_deliveries("g").unwrap().into_iter().map(|d| d.id).collect::<Vec<_>>();
+    assert_eq!(queued, [deferred.clone(), normal.clone()]);
+    let row = s.delivery(uncertain).unwrap().unwrap();
+    assert_eq!(row.status, Status::Interrupted);
+    assert!(row.last_error.unwrap().contains("结果不确定"));
+}
+
 /// 幂等重传优先于满额判断，同键不同正文不会读出另一项任务。
 #[test]
 fn idempotency_precedes_capacity_and_conflicts_are_explicit() {
@@ -187,7 +217,7 @@ fn claim_and_late_completion_are_conditional() {
     assert!(s.claim_delivery(&d.id, "a").unwrap().0.is_none());
     s.start_delivery(&d.id, "a").unwrap();
     s.cancel_deliveries("g", None, "stop").unwrap();
-    let entries = s.complete_delivery(&d.id, Status::Completed, Some("@b do it"), None, 1).unwrap();
+    let entries = s.complete_delivery(&d.id, Status::Completed, Some("@b do it"), None, 1, &[]).unwrap();
     assert_eq!(s.delivery(&d.id).unwrap().unwrap().status, Status::Cancelled);
     assert!(s.queued_deliveries("g").unwrap().is_empty());
     assert!(entries.iter().filter(|e| e.kind == "agent").all(|e| e.data["final"] == false));
@@ -313,7 +343,7 @@ fn delivery_crash_worker() {
         s.start_delivery(&d.id, "a").unwrap();
     }
     if phase == "completed" {
-        s.complete_delivery(&d.id, Status::Completed, Some("saved result"), None, 1).unwrap();
+        s.complete_delivery(&d.id, Status::Completed, Some("saved result"), None, 1, &[]).unwrap();
     }
     std::fs::write(std::path::Path::new(&dir).join("ready"), &d.id).unwrap();
     loop {
@@ -417,10 +447,11 @@ fn delivery_results_keep_only_the_still_open_source_call() {
         s.claim_delivery(&d.id, &d.target_bot_id).unwrap();
         s.start_delivery(&d.id, &d.target_bot_id).unwrap();
     }
-    let entries = s.complete_delivery(&deliveries[0].id, Status::Completed, Some("spoken reply"), None, 1).unwrap();
+    let entries =
+        s.complete_delivery(&deliveries[0].id, Status::Completed, Some("spoken reply"), None, 1, &[]).unwrap();
     assert_eq!(entries.iter().find(|entry| entry.kind == "agent").unwrap().data["call"], "voice-1");
     s.kv_set("call.ended.voice-1", "1").unwrap();
-    let entries = s.complete_delivery(&deliveries[1].id, Status::Completed, Some("after call"), None, 1).unwrap();
+    let entries = s.complete_delivery(&deliveries[1].id, Status::Completed, Some("after call"), None, 1, &[]).unwrap();
     assert!(entries.iter().find(|entry| entry.kind == "agent").unwrap().data["call"].is_null());
 }
 
@@ -474,6 +505,7 @@ fn mixed_group_handoffs_continue_until_the_result_is_handed_to_the_user() {
                 Some("交付：实现与复核完成，请用户确认结果。"),
                 None,
                 1,
+                &[],
             )
             .unwrap();
             break;
@@ -491,7 +523,7 @@ fn mixed_group_handoffs_continue_until_the_result_is_handed_to_the_user() {
             task.body = Some("继续修改并复核".into());
             s.enqueue_task(&task).unwrap();
         }
-        s.complete_delivery(&current.id, Status::Completed, Some(&format!("@{target} 继续修改并复核")), None, 1)
+        s.complete_delivery(&current.id, Status::Completed, Some(&format!("@{target} 继续修改并复核")), None, 1, &[])
             .unwrap();
         let queued = s.queued_deliveries("g").unwrap();
         assert_eq!(queued.len(), 1, "每次只产生一份后续派工");

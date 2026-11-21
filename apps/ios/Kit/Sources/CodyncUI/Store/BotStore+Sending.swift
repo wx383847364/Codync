@@ -30,6 +30,19 @@ extension BotStore {
         persistComposerDrafts()
     }
 
+    /// 用界面显示的回合身份请求引导，失败沿用聊天操作的错误反馈。
+    func guideDelivery(_ id: String, activeId: String) {
+        Task {
+            do {
+                // 结果通过投递卡同步，避免客户端提前显示已送达。
+                try await withLink { client in
+                    struct Body: Encodable { var deliveryId: String; var activeDeliveryId: String }
+                    let _: Empty = try await client.call("guideDelivery", Body(deliveryId: id, activeDeliveryId: activeId))
+                }
+            } catch { lastError = error.localizedDescription }
+        }
+    }
+
     /// 主动重试建立新 attempt，旧卡和旧结果始终保留。
     func retryDelivery(_ id: String) {
         Task {

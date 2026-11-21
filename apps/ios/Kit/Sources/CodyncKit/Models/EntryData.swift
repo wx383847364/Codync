@@ -221,6 +221,7 @@ public struct DeliveryRow: Codable, Hashable, Sendable {
     public var targetBotId: String
     public var status: String
     public var detail: String
+    public var canGuide: Bool? = nil
     public var groupHandoff: GroupHandoff?
 
     /// 仅展示原派工的状态和作用域，摘要通过专用入口读取。

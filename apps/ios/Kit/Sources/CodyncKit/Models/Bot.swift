@@ -86,6 +86,7 @@ public struct Bot: Codable, Identifiable, Hashable, Sendable {
     public var startedAt: Int64?
     /// Where the running turn talks: the bot's own chat, or a group.
     public var workingChat: String?
+    public var guidingDeliveryId: String?
     /// The fallback it runs on; nil on its own agent.
     public var agentStep: AgentStep?
     /// Agents of its chain resting now.
@@ -165,6 +166,7 @@ extension Bot {
         mainSessionRevision = try c.decodeIfPresent(UInt64.self, forKey: .mainSessionRevision)
         startedAt = try c.decodeIfPresent(Int64.self, forKey: .startedAt)
         workingChat = try c.decodeIfPresent(String.self, forKey: .workingChat)
+        guidingDeliveryId = try c.decodeIfPresent(String.self, forKey: .guidingDeliveryId)
         agentStep = try? c.decodeIfPresent(AgentStep.self, forKey: .agentStep)
         resting = (try? c.decodeIfPresent([AgentRest].self, forKey: .resting)) ?? []
         devServers = (try? c.decodeIfPresent([DevServer].self, forKey: .devServers)) ?? []

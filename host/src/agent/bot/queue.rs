@@ -88,8 +88,11 @@ impl Actor {
             Cmd::Routine(id) => self.enqueue(Queued::Routine(id), done_tx).await,
             Cmd::Send { lane, entry_id, text } if self.consume_handoff_command(&lane, &text, &entry_id) => {}
             Cmd::Send { lane, entry_id, text } => self.enqueue(Queued::User { lane, entry_id, text }, done_tx).await,
+            Cmd::GuideDelivery { id, active_id, reply } => {
+                let _ = reply.send(self.guide_delivery(id, &active_id));
+            }
             Cmd::Steer { entry_id } => self.steer(entry_id).await,
-            Cmd::Steered { entry_id, outcome } => self.steer_answered(&entry_id, &outcome, done_tx).await,
+            Cmd::Steered { id, outcome } => self.steer_answered(&id, &outcome, done_tx).await,
             Cmd::Unqueue { entry_id } => self.unqueue(&entry_id),
             Cmd::CancelGroup { chat, delivery_ids } => {
                 // 取消准确的维护来源，旧队列项不能在 Stop 后再启动。
@@ -227,6 +230,7 @@ impl Actor {
             return;
         }
         self.stop_requested = true;
+        self.hub.set_runtime(&self.cfg.id, |r| r.guiding_delivery_id = None);
         self.cancel_deadline.get_or_insert_with(|| Instant::now() + CANCEL_GRACE);
         self.files.cancel();
         let ids: Vec<String> = self.perms.keys().cloned().collect();

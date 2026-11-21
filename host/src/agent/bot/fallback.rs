@@ -118,10 +118,10 @@ impl Actor {
         }
     }
 
-    /// A message that joined the running turn (`steer`) goes with it to the next agent.
-    pub(super) fn relay_joined(&mut self, entry_id: &str, text: &str) {
+    /// 回退时带上已加入的原文；群消息仍由投递事务管理，私聊才沿用 entry ID。
+    pub(super) fn relay_joined(&mut self, entry_id: Option<&str>, text: &str) {
         if let Some(attempt) = &mut self.relay.attempt {
-            attempt.entries.push(entry_id.to_owned());
+            attempt.entries.extend(entry_id.map(str::to_owned));
             attempt.text = format!("{}\n\n{text}", attempt.text);
         }
     }

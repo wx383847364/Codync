@@ -61,6 +61,7 @@ data class Bot(
     val mainSessionRevision: Long? = null,
     val startedAt: Long? = null,
     val workingChat: String? = null,
+    val guidingDeliveryId: String? = null,
     val lastMessage: String? = null,
     val lastAt: Long = 0,
     val status: String = "idle",

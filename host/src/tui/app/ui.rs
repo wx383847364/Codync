@@ -332,6 +332,11 @@ pub enum PairCode {
 
 pub enum Overlay {
     Goto(Goto),
+    /// 在同一卡片可引导多位成员时，保留操作目标与各自回合快照。
+    GroupGuidance {
+        targets: Vec<(serde_json::Value, String)>,
+        cursor: usize,
+    },
     Help(Editor),
     LeadAgent(usize),
     Confirm(Confirm),

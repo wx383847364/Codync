@@ -3,6 +3,7 @@
 mod completion;
 pub(crate) mod handoff;
 pub(crate) mod member_session;
+pub use completion::Guidance;
 #[cfg(test)]
 mod tests;
 

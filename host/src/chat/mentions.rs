@@ -164,7 +164,22 @@ fn matching_end(text: &str, start: usize, handle: &str) -> Option<usize> {
 }
 
 /// 结构化片段按 ID 路由，其余正文接受唯一名称；未知 @ 是普通文本。
-pub fn targets(text: &str, mentions: &[Mention], members: &[BotConfig], quoted: Option<&str>) -> Result<Vec<String>> {
+pub fn targets(
+    text: &str,
+    mentions: &[Mention],
+    members: &[BotConfig],
+    quoted: Option<&str>,
+) -> Result<Vec<String>> {
+    Ok(route(text, mentions, members, quoted)?.0)
+}
+
+/// 同时返回派工目标和直接 @ 的成员；广播与引用只影响派工。
+pub(super) fn route(
+    text: &str,
+    mentions: &[Mention],
+    members: &[BotConfig],
+    quoted: Option<&str>,
+) -> Result<(Vec<String>, Vec<String>)> {
     let mut mask = masked(text);
     let mut targets: Vec<String> = Vec::new();
     for m in mentions {
@@ -177,6 +192,8 @@ pub fn targets(text: &str, mentions: &[Mention], members: &[BotConfig], quoted: 
             targets.push(m.bot_id.clone());
         }
     }
+    let mut broadcast = false;
+    // 广播标记独立保存，避免把广播解析成对每位成员的引导。
     for (at, _) in text.match_indices('@') {
         if mask[at] {
             continue;
@@ -186,7 +203,7 @@ pub fn targets(text: &str, mentions: &[Mention], members: &[BotConfig], quoted: 
         }
         let start = at + 1;
         if matching_end(text, start, "all").is_some() || matching_end(text, start, "everyone").is_some() {
-            targets.extend(members.iter().map(|m| m.id.clone()));
+            broadcast = true;
             continue;
         }
         let mut exact = Vec::new();
@@ -219,11 +236,13 @@ pub fn targets(text: &str, mentions: &[Mention], members: &[BotConfig], quoted: 
             targets.push((*id).clone());
         }
     }
+    let direct = members.iter().filter(|m| targets.contains(&m.id)).map(|m| m.id.clone()).collect();
     if let Some(id) = quoted.filter(|id| members.iter().any(|m| m.id == *id)) {
         targets.push(id.to_owned());
     }
+    if broadcast { targets.extend(members.iter().map(|m| m.id.clone())); }
     // 保持成员名单顺序，重复文字或结构化提及只形成一条派发。
-    Ok(members.iter().filter(|m| targets.contains(&m.id)).map(|m| m.id.clone()).collect())
+    Ok((members.iter().filter(|m| targets.contains(&m.id)).map(|m| m.id.clone()).collect(), direct))
 }
 
 #[cfg(test)]
