@@ -20,9 +20,23 @@ struct ComposerText {
         return at..<caret
     }
 
+    /// 查找光标前的斜杠词，路径中的后续斜杠作为搜索词的一部分。
+    var workspaceFileRange: Range<String.Index>? {
+        let caret: String.Index
+        if case .selection(let range) = selection?.indices {
+            guard range.isEmpty, range.upperBound <= text.endIndex else { return nil }
+            caret = range.lowerBound
+        } else { caret = text.endIndex }
+        guard caret == text.endIndex || text[caret].isWhitespace else { return nil }
+        let start = text[..<caret].lastIndex(where: \.isWhitespace).map { text.index(after: $0) } ?? text.startIndex
+        let token = text[start..<caret]
+        guard token.hasPrefix("/"), !token.hasPrefix("//"), token.utf16.count <= 256 else { return nil }
+        return start..<caret
+    }
+
     /// 只替换当前查询，保留尾文并把光标放回插入内容后。
-    mutating func insertMention(_ name: String) {
-        guard let range = mentionRange else { return }
+    mutating func insertMention(_ name: String, replacing replacementRange: Range<String.Index>? = nil) {
+        guard let range = replacementRange ?? mentionRange else { return }
         let offset = text.utf16.distance(from: text.startIndex, to: range.lowerBound)
         let token = "@\(name) "
         var replacement = text

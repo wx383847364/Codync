@@ -212,9 +212,15 @@ data class MirrorSnapshot(
     val icons: Map<String, CustomIcon> = emptyMap(),
 )
 
-/** 固定成员身份，偏移始终采用实际请求正文的 UTF-16 半开区间。 */
 @Serializable
-data class Mention(val botId: String, val start: Int, val end: Int)
+data class WorkspaceFileReference(val path: String, val workspace: String)
+
+@Serializable
+data class WorkspaceFileCandidate(val name: String, val source: String, val file: WorkspaceFileReference)
+
+/** 固定成员或工作区文件身份，偏移采用请求正文的 UTF-16 半开区间。 */
+@Serializable
+data class Mention(val botId: String? = null, val start: Int, val end: Int, val workspaceFile: WorkspaceFileReference? = null)
 
 /** 片段外的编辑平移绑定；触及片段正文时解除绑定，避免改名误投。 */
 fun editMentions(before: String, after: String, mentions: List<Mention>, replacement: IntRange? = null): List<Mention> {

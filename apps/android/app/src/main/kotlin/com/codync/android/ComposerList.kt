@@ -46,10 +46,18 @@ import com.kyant.shapes.RoundedRectangle
 }
 
 /** The `/` list: each command's icon, name and what it does; tapping one runs it (iOS `CommandList`). */
-@Composable internal fun CommandList(commands: List<SlashCommand>, pick: (SlashCommand) -> Unit, modifier: Modifier = Modifier) {
+/** 复用命令列表的行，方向键移动时把高亮文件滚入可见区。 */
+@Composable internal fun CommandList(commands: List<SlashCommand>, pick: (SlashCommand) -> Unit, modifier: Modifier = Modifier,
+    selected: Int = 0, status: String = "") {
     ComposerList(modifier) {
-        for (command in commands) ComposerListRow(command.title, command.detail, { pick(command) }, command.warning) {
-            Symbol(command.icon, size = 17.dp, tint = Palette.secondary)
+        if (status.isNotEmpty()) Text(status, Modifier.padding(horizontal = 14.dp, vertical = 10.dp), color = Palette.secondary, style = Type.subheadline)
+        for ((index, command) in commands.withIndex()) {
+            val bring = remember(command) { BringIntoViewRequester() }
+            LaunchedEffect(selected, command) { if (index == selected) bring.bringIntoView() }
+            ComposerListRow(command.title, command.detail, { pick(command) }, command.warning,
+                Modifier.bringIntoViewRequester(bring).background(if (index == selected) Palette.surface else androidx.compose.ui.graphics.Color.Transparent)) {
+                Symbol(command.icon, size = 17.dp, tint = Palette.secondary)
+            }
         }
     }
 }

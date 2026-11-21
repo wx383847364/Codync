@@ -271,5 +271,5 @@ impl Store {
 
 /// 原文的附件、引用和身份独立提供；大型元数据也能单独无损分页。
 fn material_metadata(e: &Entry) -> serde_json::Value {
-    serde_json::json!({"entryId":e.id,"seq":e.seq,"kind":e.kind,"author":e.data["author"],"attachments":e.data["attachments"],"replyTo":e.data["replyTo"],"mentions":e.data["mentions"],"deliveryId":e.data["deliveryId"]})
+    serde_json::json!({"entryId":e.id,"seq":e.seq,"kind":e.kind,"author":e.data["author"],"attachments":e.data["attachments"],"replyTo":e.data["replyTo"],"mentions":e.data["mentions"],"workspaceFilePaths":e.data["workspaceFilePaths"],"workspaceFileReferences":e.data["workspaceFileReferences"],"deliveryId":e.data["deliveryId"]})
 }

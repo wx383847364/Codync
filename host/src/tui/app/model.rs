@@ -59,6 +59,7 @@ pub enum After {
     PrivateGroupHandoff(String),
     Connectors,
     Skills,
+    WorkspaceFiles(uuid::Uuid),
     Installed,
     /// Memory, routines, marketplace, sign-in (`manage`).
     Sheet(Reply),

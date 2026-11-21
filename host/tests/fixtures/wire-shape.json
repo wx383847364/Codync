@@ -254,6 +254,7 @@
     "hello.signKey": "string",
     "hello.stageGroups": "bool",
     "hello.stageRoster": "bool",
-    "hello.version": "string"
+    "hello.version": "string",
+    "hello.workspaceFileSearch": "bool"
   }
 }

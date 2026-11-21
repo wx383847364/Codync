@@ -371,6 +371,7 @@ export interface EntryData {
   deliveryBody?: string
   deliveryRows?: DeliveryRow[]
   mentions?: import('./mentions').Mention[]
+  workspaceFileReferences?: import('./mentions').Mention[]
   /** Structured conversation data added to the existing team-tool notice. */
   botMessage?: BotMessage
   /** notice: the agent summarized its context; kept out of the chat. */
@@ -598,6 +599,7 @@ export interface Hello {
   groupSessionContexts?: boolean
   /** 主机能按附件身份校验原图尺寸，不包含正文路径读取能力。 */
   fileImageInfo?: boolean
+  workspaceFileSearch?: boolean
   iconsRevision?: number
   icons?: import('./custom-icons').CustomIcons
   hostId: string

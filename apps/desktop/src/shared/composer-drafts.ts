@@ -52,15 +52,15 @@ export class ComposerDrafts {
 
   /** 选择时先根据正文移动旧绑定，再保存新增绑定。 */
   selectMention(bot: string, text: string, mention: Mention, replacement?: { start: number; end: number }) {
-    this.set(bot, text, replacement)
-    this.bindings.set(bot, [...this.mentions(bot), mention])
-    this.save()
+    this.set(bot, text, replacement, mention)
   }
 
-  /** 普通编辑只保留没有被修改的片段身份。 */
-  set(bot: string, text: string, replacement?: { start: number; end: number }) {
+  /** 正文和更新后的引用一起写入，选中引用后也只保存一次。 */
+  set(bot: string, text: string, replacement?: { start: number; end: number }, selected?: Mention) {
     if (this.retired) return
-    this.bindings.set(bot, editMentions(this.get(bot), text, this.mentions(bot), replacement))
+    const bindings = editMentions(this.get(bot), text, this.mentions(bot), replacement)
+    if (selected) bindings.push(selected)
+    this.bindings.set(bot, bindings)
     if (text) this.values.set(bot, text)
     else this.values.delete(bot)
     this.save()
