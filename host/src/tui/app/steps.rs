@@ -1,6 +1,9 @@
 //! The working line's steps: what the running turn has done so far, unfolded for one bot and turn.
 
-use super::{App, Bot, Entry};
+use super::{After, App, Bot, Entry, Overlay};
+use crate::store::deliveries::DeliveryControl;
+use crossterm::event::{KeyCode, KeyEvent};
+use serde_json::json;
 
 /// The turn running now; a queued message already holds the next turn.
 pub(in crate::tui) fn running_turn(entries: &[&Entry]) -> Option<i64> {
@@ -14,12 +17,76 @@ pub(in crate::tui) fn working_steps<'a>(entries: &[&'a Entry]) -> Vec<&'a Entry>
 }
 
 impl App {
+    /// 键盘入口可选择任意一条任务，保存快照，避免任务列表变化后误选其他行。
+    pub(super) fn open_delivery_controls(&mut self) {
+        let Some(bot) = self.bot().filter(|bot| self.online && bot.group) else { return };
+        let room = bot.id.clone();
+        let tasks = bot
+            .delivery_controls
+            .iter()
+            .filter(|task| self.can_toggle_delivery(bot, task))
+            .cloned()
+            .collect::<Vec<_>>();
+        if !tasks.is_empty() {
+            self.overlays.push(Overlay::DeliveryControls { room, tasks, cursor: 0 });
+        }
+    }
+
+    /// 上下键选择任务，回车只提交选中的回合。
+    pub(super) fn delivery_control_key(
+        &mut self,
+        room: String,
+        tasks: Vec<DeliveryControl>,
+        mut cursor: usize,
+        key: KeyEvent,
+    ) -> Option<Overlay> {
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => return None,
+            KeyCode::Up => cursor = cursor.saturating_sub(1),
+            KeyCode::Down => cursor = (cursor + 1).min(tasks.len().saturating_sub(1)),
+            KeyCode::Enter => {
+                if let Some(task) = tasks.get(cursor) {
+                    self.toggle_delivery(&room, task);
+                }
+                return None;
+            }
+            _ => {}
+        }
+        Some(Overlay::DeliveryControls { room, tasks, cursor })
+    }
+
+    /// 阶段关闭时继续入口等重新开放，离线和版本不匹配时禁用操作。
+    pub(in crate::tui) fn can_toggle_delivery(&self, bot: &Bot, task: &DeliveryControl) -> bool {
+        self.online
+            && self.mismatch.is_none()
+            && (task.status == "started"
+                || (task.status == "paused" && !bot.stage.as_ref().is_some_and(crate::store::StageGroup::read_only)))
+    }
+
+    /// 鼠标和键盘发送相同的身份与目标状态，Host 会复核过期请求。
+    pub(super) fn toggle_delivery(&self, room: &str, task: &DeliveryControl) {
+        if self.bots.get(room).is_some_and(|bot| self.can_toggle_delivery(bot, task)) {
+            self.call(
+                "setDeliveryPaused",
+                json!({"botId":room,"deliveryId":task.delivery_id,
+                "startedAt":task.started_at,"paused":task.status == "started"}),
+                After::Nothing,
+            );
+        }
+    }
+
     /// 按群成员顺序读取本群正在执行或等待审批的成员。
     pub(in crate::tui) fn working_group_members<'a>(&'a self, group: &'a Bot) -> impl Iterator<Item = &'a Bot> {
         group.members.iter().filter_map(|id| {
             // 成员可能正在私聊或其他群工作。
             let bot = self.bots.get(id)?;
-            (bot.busy() && bot.working_chat.as_deref() == Some(&group.id)).then_some(bot)
+            // 从快照过滤已暂停、但仍在处理取消命令的旧活动。
+            let controls = group.delivery_controls.iter().filter(|task| task.target_bot_id == *id);
+            let held = controls
+                .clone()
+                .any(|task| task.status != "started" && bot.started_at.unwrap_or(i64::MAX) <= task.started_at)
+                && !controls.clone().any(|task| task.status == "started");
+            (bot.busy() && bot.working_chat.as_deref() == Some(&group.id) && !held).then_some(bot)
         })
     }
 

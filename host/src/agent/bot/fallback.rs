@@ -267,7 +267,12 @@ impl Actor {
 
     /// 尝试切换可用执行器；每次启动失败单独记录未知用量，不能漏记后再伪装成功。
     pub(super) async fn fall_back(&mut self, error: &anyhow::Error, done_tx: &mpsc::UnboundedSender<Done>) -> bool {
-        if self.stop_requested || self.routine_timed_out || self.compacting.is_some() || self.turn.is_none() {
+        if self.stop_requested
+            || self.routine_timed_out
+            || self.compacting.is_some()
+            || self.turn.is_none()
+            || self.delivery_held_after_pause()
+        {
             return false;
         }
         let (Some(mut reason), Some(attempt)) = (fallback::reason::of(error), self.relay.attempt.clone()) else {

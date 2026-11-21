@@ -423,10 +423,10 @@ extension ThreadView {
         }
         rows += items.map { item in ConversationRow(item.id, isUserMessage: item.isUserMessage) { row(item) } }
         let active = activeBots
-        if !active.isEmpty {
+        if let bot, !active.isEmpty || (!model.isOffline && !bot.deliveryControls.isEmpty) {
             // 聊天末尾保留同一活动行，成员各自开始和结束。
             rows.append(ConversationRow("working") {
-                WorkingIndicators(bots: active, entries: model.chat(botId), group: bot?.isGroup == true)
+                WorkingIndicators(bots: active, entries: model.chat(botId), chat: bot)
                     .padding(.top, 6)
             })
         }

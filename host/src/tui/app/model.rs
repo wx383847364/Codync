@@ -177,6 +177,7 @@ impl Entry {
             "queued" => "等待执行",
             "claimed" => "准备执行",
             "started" => "执行中",
+            "paused" => "已暂停",
             "completed" => "已完成",
             "failed" => "失败",
             "interrupted" => "已中断",

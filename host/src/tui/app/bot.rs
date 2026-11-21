@@ -90,6 +90,7 @@ pub struct Bot {
     /// Where the running turn talks: a chat (`None` = its own).
     pub working_chat: Option<String>,
     pub guiding_delivery_id: Option<String>,
+    pub delivery_controls: Vec<crate::store::deliveries::DeliveryControl>,
 }
 
 /// An agent of a bot's chain that rests (`agent::fallback::resting`) until `until` (epoch ms).
@@ -250,6 +251,7 @@ impl Bot {
             stage: serde_json::from_value(v["stage"].clone()).unwrap_or_default(),
             working_chat: v["workingChat"].as_str().map(str::to_owned),
             guiding_delivery_id: v["guidingDeliveryId"].as_str().map(str::to_owned),
+            delivery_controls: serde_json::from_value(v["deliveryControls"].clone()).unwrap_or_default(),
         })
     }
 

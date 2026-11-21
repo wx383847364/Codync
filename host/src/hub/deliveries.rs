@@ -96,11 +96,17 @@ impl Hub {
         Ok(d)
     }
 
-    /// 提交 started 并发布卡片后才允许 actor 发送 prompt。
+    /// 提交 started 并发布任务行后才允许 actor 发送 prompt。
     pub fn start_delivery(&self, id: &str, bot: &str) -> Result<bool> {
-        let _guard = self.emit_lock.locked();
-        let (started, cards) = self.store.start_delivery(id, bot)?;
-        self.delivery_entries(&cards);
+        let (started, cards) = {
+            let _guard = self.emit_lock.locked();
+            let (started, cards) = self.store.start_delivery(id, bot)?;
+            self.delivery_entries(&cards);
+            (started, cards)
+        };
+        if started && let Some(card) = cards.first() {
+            self.emit_bot(&card.bot_id);
+        }
         Ok(started)
     }
 
@@ -110,6 +116,49 @@ impl Hub {
         let (source, cards) = self.store.start_guidance(id, active_id, bot)?;
         self.delivery_entries(&cards);
         Ok(source)
+    }
+
+    /// 提交后精准中断当前任务，继续只唤醒原房间的调度器。
+    pub(crate) fn set_delivery_paused(
+        self: &std::sync::Arc<Self>,
+        room: &str,
+        id: &str,
+        started_at: i64,
+        paused: bool,
+    ) -> Result<()> {
+        let changed = {
+            let _guard = self.emit_lock.locked();
+            self.store.set_delivery_paused(room, id, started_at, paused).map(|changed| {
+                // 在发布锁内先发送中断，再允许同 ID 的继续请求入队。
+                if let Some((delivery, card)) = &changed {
+                    self.delivery_entries(std::slice::from_ref(card));
+                    if paused {
+                        self.stop_delivery_turns(std::slice::from_ref(delivery));
+                    }
+                    if let Some(bot) = self.bot_value(room) {
+                        let _ = self.events.send(json!({"type":"bot","rev":bot["rev"],"bot":bot}));
+                    }
+                }
+                changed.is_some()
+            })
+        };
+        let mut properties = json!({"action":if paused {"pause"} else {"resume"},"outcome": match &changed {
+            Ok(true) => "applied", Ok(false) => "stale", Err(_) => "error",
+        }});
+        if let Err(error) = &changed {
+            // 只记录粗粒度原因，投递身份和底层错误文案留在本机。
+            properties["category"] =
+                if error.downcast_ref::<rusqlite::Error>().is_some() { "database" } else { "rejected" }.into();
+        }
+        crate::analytics::capture(
+            self,
+            crate::analytics::Event::GroupDeliveryControl,
+            properties.as_object().cloned().unwrap_or_default(),
+        );
+        if changed? && !paused {
+            crate::chat::group::ensure_runner(self, room);
+        }
+        Ok(())
     }
 
     /// 保存终态、结果及派生投递，失败由 actor 保留内存结果重试。
@@ -125,6 +174,10 @@ impl Hub {
         let _guard = self.emit_lock.locked();
         let outcome = serde_json::to_value(status)?;
         let cards = self.store.complete_delivery(id, status, text, detail, turn, guidance)?;
+        // 暂停后退出的旧回合没有提交新的终态，继续后的真正结果才计作完成。
+        if cards.is_empty() {
+            return Ok(());
+        }
         self.delivery_entries(&cards);
         // 等待位超时、runner已经退出的迟到回复仍留在来源群并推送群身份。
         if let Some(entry) = cards.iter().find(|e| e.kind == "agent" && e.data["final"] == true)
@@ -159,15 +212,21 @@ impl Hub {
 
     /// 持久取消和发布成功后调用方才能停止执行。
     pub fn cancel_deliveries(&self, room: &str, target: Option<&str>, reason: &str) -> Result<()> {
-        let _guard = self.emit_lock.locked();
-        let (cancelled, cards) = self.store.cancel_deliveries(room, target, reason)?;
-        self.delivery_entries(&cards);
-        self.stop_cancelled_deliveries(&cancelled);
+        let refresh = {
+            let _guard = self.emit_lock.locked();
+            let (cancelled, cards) = self.store.cancel_deliveries(room, target, reason)?;
+            self.delivery_entries(&cards);
+            self.stop_delivery_turns(&cancelled);
+            !cancelled.is_empty()
+        };
+        if refresh {
+            self.emit_bot(room);
+        }
         Ok(())
     }
 
-    /// 取消通知携带已提交的稳定ID，接收者无需读库，也不会停掉之后的新投递。
-    pub(super) fn stop_cancelled_deliveries(&self, deliveries: &[Delivery]) {
+    /// 中断通知使用已提交的稳定 ID，接收者只停止匹配的执行或上下文维护。
+    pub(super) fn stop_delivery_turns(&self, deliveries: &[Delivery]) {
         for delivery in deliveries {
             let _ = self.send_cmd(
                 &delivery.target_bot_id,

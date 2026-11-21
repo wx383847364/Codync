@@ -136,6 +136,7 @@ export interface Bot {
   pendingNewSession?: boolean
   mainSessionRevision?: number
   startedAt?: number | null
+  deliveryControls?: GroupDeliveryControl[]
   workingChat?: string | null
   guidingDeliveryId?: string | null
   unread: number
@@ -144,6 +145,15 @@ export interface Bot {
 }
 
 /** 兼容不同版本的 Host，并保留主会话版本供详情刷新。 */
+export interface GroupDeliveryControl {
+  deliveryId: string
+  targetBotId: string
+  startedAt: number
+  status: 'started' | 'paused' | 'resuming'
+  preview: string
+}
+
+/** Lenient: a host that is a little newer or older than the app still yields a usable bot. */
 export function normalizeBot(raw: Partial<Bot> & { id: string }): Bot {
   const createdAt = raw.createdAt ?? 0
   return {
@@ -197,6 +207,7 @@ export function normalizeBot(raw: Partial<Bot> & { id: string }): Bot {
     activity: raw.activity ?? '',
     mainSessionRevision: raw.mainSessionRevision,
     startedAt: raw.startedAt ?? null,
+    deliveryControls: raw.deliveryControls,
     workingChat: raw.workingChat ?? null,
     guidingDeliveryId: raw.guidingDeliveryId ?? null,
     storageError: raw.storageError ?? null,

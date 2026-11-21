@@ -135,6 +135,11 @@ impl Store {
         let mut c = self.db.locked();
         let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let d = get(&tx, id)?.ok_or_else(|| anyhow::anyhow!("unknown delivery"))?;
+        // 暂停后的旧回合可能在继续请求之后才退出。它的片段已保存在执行记录中，
+        // 不能写入共享的最终结果 ID，也不能触发派工；同一成员会等它退出才重新领取。
+        if d.held_after_pause() {
+            return Ok(vec![]);
+        }
         let changed = tx.execute("UPDATE deliveries SET status=?2,finished_at=?3,last_error=?4 WHERE id=?1 AND status IN ('claimed','started')",
             params![id,wire(&status),now_ms(),detail])?;
         let deleted: bool =

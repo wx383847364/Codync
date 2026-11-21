@@ -31,6 +31,13 @@ const BOT_COLS: &str = "id, config, rev, deleted, session_id, read_rev, config_r
 const SAVE_BOT: &str = "INSERT INTO bots(id, rev, config) VALUES(?1, ?2, ?3)
      ON CONFLICT(id) DO UPDATE SET rev = ?2, config = ?3 WHERE deleted = 0";
 
+/// 在调用方事务中刷新机器人同步版本。
+pub(super) fn touch_bot(c: &rusqlite::Connection, id: &str) -> Result<i64> {
+    let rev = next_rev(c)?;
+    c.execute("UPDATE bots SET rev = ?2 WHERE id = ?1", params![id, rev])?;
+    Ok(rev)
+}
+
 impl Store {
     /// 阶段变更与本群进行中的投递共用写事务，关闭与并发入队只能有一个先提交。
     pub(crate) fn update_stage(
@@ -44,7 +51,7 @@ impl Store {
         let mut config: BotConfig = serde_json::from_str(&config)?;
         let stage = config.stage.as_mut().context("not a stage group")?;
         let pending = tx.query_row(
-            "SELECT EXISTS(SELECT 1 FROM deliveries WHERE room_id=? AND status IN ('queued','claimed','started'))",
+            "SELECT EXISTS(SELECT 1 FROM deliveries WHERE room_id=? AND status IN ('queued','claimed','started','paused'))",
             [id],
             |r| r.get(0),
         )?;
@@ -123,11 +130,9 @@ impl Store {
         Ok(())
     }
 
+    /// 发布 bot 实时状态前更新同步版本。
     pub fn touch_bot(&self, id: &str) -> Result<i64> {
-        let c = self.db.locked();
-        let rev = next_rev(&c)?;
-        c.execute("UPDATE bots SET rev = ?2 WHERE id = ?1", params![id, rev])?;
-        Ok(rev)
+        touch_bot(&self.db.locked(), id)
     }
 
     /// 删除标记、相关投递取消和存活群卡片在同一事务提交，返回提交后需要发布的变化。
@@ -270,7 +275,7 @@ fn stage_work(c: &rusqlite::Connection, id: &str) -> Result<Value> {
         .collect::<rusqlite::Result<serde_json::Map<_, _>>>()?;
     let pending = c.prepare("SELECT d.id,COALESCE(json_extract(b.config,'$.name'),d.target_bot_id),d.status
         FROM deliveries d LEFT JOIN bots b ON b.id=d.target_bot_id
-        WHERE d.room_id=? AND d.status IN ('queued','claimed','started') ORDER BY d.room_seq LIMIT 32")?
+        WHERE d.room_id=? AND d.status IN ('queued','claimed','started','paused') ORDER BY d.room_seq LIMIT 32")?
         .query_map([id], |r| Ok(serde_json::json!({"id":r.get::<_, String>(0)?,"name":r.get::<_, String>(1)?,"status":r.get::<_, String>(2)?})))?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(serde_json::json!({"counts":counts,"pending":pending}))

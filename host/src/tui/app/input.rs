@@ -70,6 +70,7 @@ impl App {
         }
     }
 
+    /// 群任务快捷键在聊天浏览和输入时可用，打开任务列表时保留草稿。
     pub fn on_key(&mut self, k: KeyEvent) {
         if self.shell.is_some() {
             self.shell_key(k);
@@ -86,6 +87,10 @@ impl App {
         }
         if !self.overlays.is_empty() {
             self.overlay_key(k);
+            return;
+        }
+        if ctrl && k.code == KeyCode::Char('p') && self.chat_visible() && self.bot().is_some_and(|bot| bot.group) {
+            self.open_delivery_controls();
             return;
         }
         if self.typing {
@@ -375,7 +380,7 @@ impl App {
             KeyCode::Char('N') => self.open_network(),
             KeyCode::Char('s') => {
                 if let Some(b) = self.bot() {
-                    if matches!(b.status, Status::Working | Status::NeedsInput) {
+                    if matches!(b.status, Status::Working | Status::NeedsInput) || !b.delivery_controls.is_empty() {
                         let id = b.id.clone();
                         self.call("stop", json!({"botId": id}), After::Nothing);
                         self.flash("Stopping…");
@@ -463,6 +468,7 @@ impl App {
                     }
                     Some(Click::Composer) => self.start_typing(),
                     Some(Click::Steps) => self.toggle_steps(),
+                    Some(Click::DeliveryControl(room, task)) => self.toggle_delivery(&room, &task),
                     Some(Click::BotChat(entry)) => self.open_bot_chat(&entry),
                     Some(Click::DevServers) => self.open_dev_servers(),
                     Some(Click::GroupContexts) => self.open_group_contexts(),

@@ -1,0 +1,65 @@
+# 手机先与测试沙箱配对。传入 HOST_PORT、HOST_TOKEN 及 steer_agent.py 的绝对路径 STEER_AGENT。
+appId: com.pokai.Codync.ios.dev
+tags:
+  - group-task-pause
+onFlowComplete:
+  - runScript:
+      file: mentions.js
+      env:
+        CLEANUP: "true"
+---
+- runScript:
+    file: mentions.js
+    env:
+      PAUSE_TEST: "true"
+- runFlow:
+    when:
+      platform: iOS
+    commands:
+      - launchApp:
+          appId: com.pokai.Codync.ios.dev
+          arguments:
+            "-reviewInvitationOff": true
+- runFlow:
+    when:
+      platform: Android
+    commands:
+      - launchApp:
+          appId: com.pokai.Codync.android.dev
+- extendedWaitUntil:
+    visible: "(${output.group}|Continue without an account)"
+    timeout: 60000
+- runFlow:
+    when:
+      visible: "Continue without an account"
+    commands:
+      - tapOn: "Continue without an account"
+- tapOn: ${output.group}
+- runScript:
+    file: mentions.js
+    env:
+      START_TASKS: "true"
+- extendedWaitUntil:
+    visible:
+      text: "Pause"
+      index: 1
+    timeout: 10000
+- tapOn:
+    text: "Pause"
+    index: 0
+- assertVisible: "${output.alpha} · Paused.*"
+- assertVisible: "Pause"
+- extendedWaitUntil:
+    visible: "WorkingDone"
+    timeout: 20000
+- assertVisible: "${output.alpha} · Paused.*"
+- tapOn: "Continue"
+- extendedWaitUntil:
+    visible: "Pause"
+    timeout: 10000
+- assertNotVisible: "${output.alpha} · Paused.*"
+- extendedWaitUntil:
+    visible:
+      text: "WorkingDone"
+      index: 1
+    timeout: 32000

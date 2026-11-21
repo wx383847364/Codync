@@ -60,6 +60,7 @@ data class Bot(
     val pendingNewSession: Boolean = false,
     val mainSessionRevision: Long? = null,
     val startedAt: Long? = null,
+    val deliveryControls: List<GroupDeliveryControl> = emptyList(),
     val workingChat: String? = null,
     val guidingDeliveryId: String? = null,
     val lastMessage: String? = null,

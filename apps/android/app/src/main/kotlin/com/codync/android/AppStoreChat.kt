@@ -204,6 +204,15 @@ internal fun AppStore.steer(entry: Entry) = command("steer", body("botId" to ent
 /** 群引导携带界面看到的回合身份，投递卡由 host 更新。 */
 internal fun AppStore.guideDelivery(deliveryId: String, activeDeliveryId: String) =
     command("guideDelivery", body("deliveryId" to deliveryId, "activeDeliveryId" to activeDeliveryId), "guide:" + deliveryId)
+/** 操作群内固定的任务回合，由已有命令处理展示错误和同步结果。 */
+internal fun AppStore.setDeliveryPaused(botId: String, task: GroupDeliveryControl, paused: Boolean) =
+    command("setDeliveryPaused", buildJsonObject {
+        // 发送回合时间，避免延迟请求作用到继续后的执行。
+        put("botId", botId)
+        put("deliveryId", task.deliveryId)
+        put("startedAt", task.startedAt)
+        put("paused", paused)
+    }, "delivery:" + task.deliveryId)
 
 /** A queued message never goes out: gone at once, back if the computer refuses (its error shows). */
 internal fun AppStore.unqueue(entry: Entry) {

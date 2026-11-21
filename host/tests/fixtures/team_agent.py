@@ -266,6 +266,17 @@ def prompt(request):
         while "BLOCK" in text and not pathlib.Path("release").exists() and not cancel.wait(0.01):
             pass
         if cancel.is_set():
+            # 测试专用：模拟代理在处理取消时迟到的权限请求，并保持回合打开供工具 API 校验。
+            if pathlib.Path("permission-after-cancel").exists():
+                send({"id": "permission", "method": "session/request_permission", "params": {
+                    "sessionId": prompt_session.id,
+                    "toolCall": {"toolCallId": "late-permission", "title": "Late permission"},
+                    "options": [{"optionId": "allow", "name": "Allow", "kind": "allow_once"}],
+                }})
+                assert permission.wait(5), "late permission was not denied"
+                pathlib.Path("cancel-permission.json").write_text(json.dumps(permission_reply))
+                while not pathlib.Path("cancel-release").exists():
+                    time.sleep(0.01)
             send({"id": request["id"], "result": {"stopReason": "cancelled"}})
             return
         # 群内真实MCP接力：配置只决定夹具行为，不替代host的来源上下文。

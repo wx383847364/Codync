@@ -1,6 +1,36 @@
 import CodyncKit
 import SwiftUI
 
+/// 暂停后保留任务身份和摘要，用户仍能在原群继续。
+struct HeldDeliveryRow: View {
+    let chat: Bot
+    let task: GroupDeliveryControl
+    @Environment(BotStore.self) private var model
+
+    /// 等待重新执行时显示状态，收到新的开始事件后由活动标签接管。
+    var body: some View {
+        let paused = task.status == "paused"
+        let status = L10n.tr(paused ? "Paused" : "Continuing…")
+        let name = model.bots[task.targetBotId]?.name ?? L10n.tr("Bot")
+        HStack(spacing: 8) {
+            Image(systemName: paused ? "pause.fill" : "clock")
+                .font(.footnote).accessibilityHidden(true)
+            Text("\(name) · \(status)" + (task.preview.isEmpty ? "" : " · \(task.preview)"))
+                .font(.subheadline).lineLimit(1)
+            if paused {
+                IconButton("Continue", systemImage: "play.fill") {
+                    // 继续同一个派工，Host 负责安排空闲时执行。
+                    model.setDeliveryPaused(chat.id, task: task, paused: false)
+                }
+                .disabled(chat.stage?.closedAt != nil || chat.stage?.archivedAt != nil)
+            }
+        }
+        .padding(.horizontal, 16).padding(.vertical, paused ? 4 : 12)
+        .foregroundStyle(Palette.secondary)
+        .background(Palette.bubbleAgent, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+    }
+}
+
 /// 折叠时可直接引导单一成员，多位成员的操作在详情中逐一列出。
 struct DeliveryNoticeRow: View {
     let entry: Entry

@@ -247,6 +247,10 @@ fun editMentions(before: String, after: String, mentions: List<Mention>, replace
     } }
 }
 
+/** Host 提供的单任务状态和当前可操作的回合。 */
+@Serializable
+data class GroupDeliveryControl(val deliveryId: String, val targetBotId: String, val startedAt: Long, val status: String, val preview: String)
+
 /** 聚合卡内的目标行，当前显示名从成员列表读取。 */
 @Serializable
 data class DeliveryRow(val deliveryId: String, val targetBotId: String, val status: String, val detail: String = "",
@@ -259,6 +263,7 @@ data class DeliveryRow(val deliveryId: String, val targetBotId: String, val stat
         "queued" -> "等待执行"
         "claimed" -> "准备执行"
         "started" -> "执行中"
+        "paused" -> "已暂停"
         "completed" -> "已完成"
         "failed" -> "失败"
         "interrupted" -> "已中断"

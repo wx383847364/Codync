@@ -94,6 +94,12 @@ export class BotSending extends BotSync {
   /** 主动重试创建新的投递与 attempt，旧记录保留。 */
   retryDelivery(deliveryId: string) { return this.perform((c) => c.call('retryDelivery', { deliveryId })) }
 
+  /** 按原任务和当前回合发送操作，状态由 Host 同步。 */
+  setDeliveryPaused(botId: string, deliveryId: string, startedAt: number, paused: boolean) {
+    // 复用统一的连接选择和错误展示。
+    return this.perform((c) => c.call('setDeliveryPaused', { botId, deliveryId, startedAt, paused }))
+  }
+
   /** 会话切换由 host 等执行与落盘边界，客户端只发送选择。 */
   switchSession(botId: string, mode: string) { return this.perform((c) => c.call('newSession', { botId, mode })) }
 
