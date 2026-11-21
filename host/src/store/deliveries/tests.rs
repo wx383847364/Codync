@@ -121,8 +121,8 @@ fn stage_returns_only_requested_final_results_once() {
         } else {
             format!("delivery-result-{}", delivery.id)
         };
-        s.complete_delivery(&delivery.id, status, text, None, 1).unwrap();
-        s.complete_delivery(&delivery.id, status, text, None, 1).unwrap();
+        s.complete_delivery(&delivery.id, status, text, None, 1, &[]).unwrap();
+        s.complete_delivery(&delivery.id, status, text, None, 1, &[]).unwrap();
         let queued = s.queued_deliveries("g").unwrap();
         assert_eq!(queued.len(), expected);
         if let Some(next) = queued.first() {
@@ -245,7 +245,7 @@ fn pausing_and_resuming_keeps_the_delivery_and_rejects_stale_actions() {
     assert!(s.set_delivery_paused("g", &first.id, started_at, true).unwrap().is_some());
     assert!(s.set_delivery_paused("g", &first.id, started_at, true).unwrap().is_none());
     assert_eq!(s.delivery(&second.id).unwrap().unwrap().status, Status::Started);
-    s.complete_delivery(&second.id, Status::Completed, Some("other result"), None, 2).unwrap();
+    s.complete_delivery(&second.id, Status::Completed, Some("other result"), None, 2, &[]).unwrap();
 
     s.recover_deliveries().unwrap();
     let controls = s.group_delivery_controls("g").unwrap();
@@ -257,7 +257,7 @@ fn pausing_and_resuming_keeps_the_delivery_and_rejects_stale_actions() {
     assert!(s.queued_deliveries("g").unwrap().is_empty());
     assert!(s.set_delivery_paused("g", &first.id, started_at, false).unwrap().is_some());
     assert!(s.set_delivery_paused("g", &first.id, started_at, false).unwrap().is_none());
-    assert!(s.complete_delivery(&first.id, Status::Completed, Some("@c late result"), None, 1).unwrap().is_empty());
+    assert!(s.complete_delivery(&first.id, Status::Completed, Some("@c late result"), None, 1, &[]).unwrap().is_empty());
     let queued = s.queued_deliveries("g").unwrap();
     assert_eq!(queued.len(), 1);
     assert_eq!((&queued[0].id, queued[0].room_seq, queued[0].attempt), (&first.id, first.room_seq, first.attempt));
@@ -266,7 +266,7 @@ fn pausing_and_resuming_keeps_the_delivery_and_rejects_stale_actions() {
     assert!(s.delivery(&first.id).unwrap().unwrap().started_at.unwrap() > started_at);
     assert!(s.set_delivery_paused("g", &first.id, started_at, true).unwrap().is_none());
     assert_eq!(s.delivery(&first.id).unwrap().unwrap().status, Status::Started);
-    let entries = s.complete_delivery(&first.id, Status::Completed, Some("resumed result"), None, 3).unwrap();
+    let entries = s.complete_delivery(&first.id, Status::Completed, Some("resumed result"), None, 3, &[]).unwrap();
     assert!(entries.iter().any(|entry| entry.data["text"] == "resumed result" && entry.data["final"] == true));
     assert!(s.group_delivery_controls("g").unwrap().is_empty());
 }

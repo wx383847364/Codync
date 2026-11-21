@@ -1,7 +1,7 @@
 //! 投递 turn 的执行和结果保存。房间等待超时不丢弃在途结果。
 
 use super::{Actor, Done, SegKind};
-use crate::store::deliveries::{Delivery, Guidance, handoff::Phase};
+use crate::store::deliveries::{Delivery, Guidance, Status, handoff::Phase};
 use crate::store::{Lane, group_session_slot};
 use anyhow::{Result, ensure};
 use std::collections::HashMap;

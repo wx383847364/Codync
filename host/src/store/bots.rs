@@ -318,7 +318,7 @@ mod tests {
         let failed = s.queued_deliveries("g").unwrap().remove(0);
         s.claim_delivery(&failed.id, "a").unwrap();
         s.start_delivery(&failed.id, "a").unwrap();
-        s.complete_delivery(&failed.id, Status::Failed, None, Some("test failure"), 1).unwrap();
+        s.complete_delivery(&failed.id, Status::Failed, None, Some("test failure"), 1, &[]).unwrap();
         let close = || {
             s.update_stage("g", |stage, pending| {
                 anyhow::ensure!(!pending, "pending work");
@@ -342,7 +342,7 @@ mod tests {
         }
         assert!(s.post_group("g", &json!({"text":"closed"}), &[]).is_err());
         assert!(s.retry_delivery(&failed.id).is_err());
-        s.complete_delivery(&failed.id, Status::Completed, Some("@B late"), None, 2).unwrap();
+        s.complete_delivery(&failed.id, Status::Completed, Some("@B late"), None, 2, &[]).unwrap();
         assert!(s.queued_deliveries("g").unwrap().is_empty());
         s.update_stage("g", |stage, _| {
             stage.closed_at = None;

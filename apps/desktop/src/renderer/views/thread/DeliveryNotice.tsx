@@ -13,6 +13,7 @@ import { deliveryStatus, deliverySummary } from './delivery-status'
 /** 折叠时可直接引导单一成员，多位成员的操作在详情中逐一列出。 */
 export function DeliveryNotice({ entry }: { entry: Entry }) {
   const store = useStore()
+  const tr = useTr()
   const [expanded, setExpanded] = useState(false)
   const rows = entry.data.deliveryRows ?? []
   /** 只显示同群中已声明支持引导的当前回合，提交时仍由 host 复核。 */
@@ -48,8 +49,7 @@ export function DeliveryNotice({ entry }: { entry: Entry }) {
                 ? <Button kind="secondary" onClick={() => store.guideDelivery(row.deliveryId, id)}>引导</Button>
                 : ['failed', 'interrupted', 'noReply'].includes(row.status)
                   ? <Button kind="secondary" onClick={() => store.retryDelivery(row.deliveryId)}>重新尝试</Button> : null}
-              {!store.hello?.groupSessionContexts && rows.filter(row => row.groupHandoff).map(row => <GroupHandoffRow row={row} key={row.deliveryId} />)}
-  </HStack>
+            </HStack>
           })}
         </VStack>
       </Disclosure>
@@ -63,6 +63,7 @@ export function DeliveryNotice({ entry }: { entry: Entry }) {
           }
           else setExpanded(true)
         }}>{eligible.length === 1 ? '引导' : '引导…'}</Button> : null}
+    {!store.hello?.groupSessionContexts && rows.filter(row => row.groupHandoff).map(row => <GroupHandoffRow row={row} key={row.deliveryId} />)}
   </HStack>
 }
 
