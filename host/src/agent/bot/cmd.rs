@@ -18,9 +18,15 @@ pub enum Cmd {
     Steer {
         entry_id: String,
     },
+    /// 把群消息加入点击时显示的成员回合。
+    GuideDelivery {
+        id: String,
+        active_id: String,
+        reply: tokio::sync::oneshot::Sender<Result<()>>,
+    },
     /// What the agent made of a steered message (`_session/steering`).
     Steered {
-        entry_id: String,
+        id: String,
         outcome: Result<Value>,
     },
     /// The user took back a queued message of theirs (`unqueue`).

@@ -1,6 +1,7 @@
 //! 群投递的持久状态与原子领取；actor 只能领取房间 runner 指定的 ID。
 
 mod completion;
+pub use completion::Guidance;
 #[cfg(test)]
 mod tests;
 

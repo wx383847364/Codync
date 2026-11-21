@@ -98,6 +98,43 @@ test('idle group members answer a new message in order while a member finishes e
   }
 })
 
+/** 从折叠卡直接引导同群成员，确认回复来自原回合并且消息只显示一次。 */
+test('steer an @ mention into a working group member', async () => {
+  const { browser, page } = await attach()
+  const name = `Guide${Date.now()}`
+  const text = `@${name} focus on the failing test`
+  let member: string | undefined
+  let group: string | undefined
+  try {
+    member = (await steerBot(page, name, 30)).id
+    const room = `Guidance room ${name}`
+    group = (await api<{ bot: { id: string } }>(page, 'createBot', { name: room, kind: 'group', members: [member] })).bot.id
+    await page.locator('.roster-row', { hasText: room }).click()
+    await typeMessage(page, `@${name} review the build`)
+    await expect(page.locator('.group-working-member')).toContainText(name)
+    await typeMessage(page, text)
+    const action = page.getByRole('button', { name: '引导', exact: true })
+    await expect(action).toBeVisible()
+    const evidence = join(tmpdir(), 'codync-group-steering-e2e')
+    mkdirSync(evidence, { recursive: true })
+    await page.screenshot({ path: join(evidence, 'queued-guidance.png') })
+    await action.click()
+    // 只在对话正文中验证回复，侧栏预览也会显示同一段正文。
+    const transcript = page.locator('.transcript')
+    await expect(transcript.getByText('Got: User guidance for the current task in this group:')).toBeVisible()
+    await expect(action).toHaveCount(0)
+    await expect(transcript.getByText(text, { exact: true })).toHaveCount(1)
+    const state = (await api<History>(page, 'history', { botId: group })).entries
+    expect(state.filter((entry) => entry.kind === 'agent' && entry.data.final)).toHaveLength(1)
+    await page.screenshot({ path: join(evidence, 'guided-reply.png') })
+  } finally {
+    // 清除这次运行创建的群和成员，保持共用测试沙箱可继续使用。
+    if (group) await api(page, 'deleteBot', { botId: group }).catch(() => {})
+    if (member) await api(page, 'deleteBot', { botId: member }).catch(() => {})
+    await browser.close()
+  }
+})
+
 /** 超过旧轮次、发言与深度上限后交付给用户，状态仍折叠且不重复来源正文。 */
 test('relay compacts bounded background past fixed limits while preserving originals and open work', async () => {
   const { browser, page } = await attach()

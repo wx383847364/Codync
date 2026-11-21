@@ -54,6 +54,8 @@ pub struct Runtime {
     pub message: Option<String>,
     /// The ACP session the running turn prompts. A memory write made there is one that session already knows.
     pub session: Option<String>,
+    /// 可接收引导的群投递 ID，用来拒绝来自旧界面的点击。
+    pub guiding_delivery_id: Option<String>,
     pub pending_new_session: bool,
     pub storage_error: Option<String>,
     pub fast_mode: crate::agent::config::FastModeSupport,
@@ -282,6 +284,7 @@ impl Hub {
             || before.activity != after.activity
             || before.lane != after.lane
             || before.fast_mode != after.fast_mode
+            || before.guiding_delivery_id != after.guiding_delivery_id
             || before.pending_new_session != after.pending_new_session
             || before.agent_step != after.agent_step
         {

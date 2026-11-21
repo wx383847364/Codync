@@ -29,13 +29,14 @@ pub fn post(hub: &Arc<Hub>, cfg: &BotConfig, mut data: Value) -> Result<Entry> {
             .collect::<Vec<_>>();
         let mentions: Vec<crate::chat::mentions::Mention> =
             data.get("mentions").cloned().map(serde_json::from_value).transpose()?.unwrap_or_default();
-        let targets = crate::chat::mentions::targets(
+        let (targets, direct) = crate::chat::mentions::route(
             data["text"].as_str().unwrap_or_default(),
             &mentions,
             &members,
             data["replyTo"]["author"].as_str(),
             true,
         )?;
+        data["directMentions"] = serde_json::json!(direct);
         data["resolvedMentions"] = serde_json::json!(targets);
         hub.post_group(&cfg.id, &data, &targets)?
     } else {

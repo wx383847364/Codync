@@ -39,6 +39,31 @@ pub(super) fn overlay(buf: &mut Buffer, area: Rect, app: &mut App, top: &Overlay
             let items = app.goto_items(g);
             goto(buf, area, app, g, &items);
         }
+        Overlay::GroupGuidance { targets, cursor } => {
+            // 复用终端弹层和选中行样式，只显示可引导的成员。
+            let t = theme();
+            let r = centered(area, 48, u(targets.len().saturating_add(5)).min(24));
+            let inner = frame_box(buf, r, t.text, t.panel, Some(("引导成员", t.text)));
+            let rows = usize::from(inner.height.saturating_sub(2));
+            let offset = cursor.saturating_sub(rows.saturating_sub(1));
+            for (row, (_, name)) in targets.iter().skip(offset).take(rows).enumerate() {
+                let y = inner.y + u(row);
+                let selected = row + offset == *cursor;
+                let style = if selected { t.bold.patch(t.sel) } else { t.text.patch(t.panel) };
+                if selected {
+                    restyle(buf, Rect::new(inner.x, y, inner.width, 1), t.sel);
+                }
+                put(buf, inner.x, y, inner.width, name, style);
+            }
+            put(
+                buf,
+                inner.x,
+                inner.bottom().saturating_sub(1),
+                inner.width,
+                "↑↓ 选择  ↵ 引导  esc 取消",
+                t.dim.patch(t.panel),
+            );
+        }
         Overlay::Help(filter) => help(buf, area, filter),
         Overlay::LeadAgent(scroll) => super::lead_agent::lead_agent(buf, area, *scroll),
         Overlay::Confirm(c) => {

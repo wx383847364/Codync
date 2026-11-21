@@ -38,6 +38,7 @@ quotes itself.
 | `deleteBot` | `botId` | A group's bots stay. A deleted bot leaves its groups. |
 | `reorderBots` | `ids` | The roster as the user dragged it, top first; groups count as rows. See [bot order](computer-order.md#bot-order). |
 | `renameSection` | `from, to` | Every row in section `from` moves to `to`, groups too; an existing name merges them, `null` removes the section. See [bot order](computer-order.md#bot-order). |
+| `guideDelivery` | `deliveryId, activeDeliveryId` | Joins a directly mentioned member's live group turn. The host checks the displayed active delivery ID, room, membership and adapter support. |
 | `stop` | `botId` | For a group: ends its room turn and stops members working in it. |
 | `react` | `entryId, emoji` | Toggles the user's reaction on a chat message (`data.reactions`, oldest first, at most 8). A reacted-to message never turns unread again. The bot isn't told, except in a group, where members see reactions on the room lines they're shown. Bots react themselves with the `chat` server's `react` ([bot reactions](chat-messages.md#bot-reactions)). |
 | `respondPermission` | `entryId, optionId?` | Routed to `data.author`, so cards in a group reach the bot that asked. |
@@ -67,6 +68,15 @@ the runner can deliver a newer message to its idle recipients in order. The busy
 delivery stays queued under its original source. Timeout only releases that batch's slot;
 the execution continues and its state is kept. Late completion uses a conditional update
 and cannot revive cancelled work.
+
+The original user entry records direct targets in `data.directMentions`. The card's
+`deliveryRows[].canGuide` marks a queued original direct mention. A working member with
+ACP steering publishes `guidingDeliveryId` in its bot snapshot. The client sends that
+displayed ID with `guideDelivery` for the selected row. The host reserves the queued row as
+`started` before transmitting the guidance and saves its outcome with the active delivery.
+An adapter that returns `promptRequired` leaves the row queued at its original position.
+An uncertain receipt leaves it interrupted and eligible for manual retry. A confirmed
+injection joins the same reply and is never replayed by the scheduler.
 Every turn protects the complete original user task, current source (or exact tool body),
 attachments, structured mention IDs and UTF-16 ranges, direct quotes, later user messages,
 and saved open plans. Entries are deduplicated by ID, never by matching text. Later user
@@ -117,7 +127,7 @@ post-commit notification and a roughly three-second scan wake room scheduling.
 Final reply, conditional terminal state and derived mentions commit atomically. Cards
 aggregate a source event and attempt, with one row per target; retries create a new
 delivery and attempt linked to the original. Each card starts as one Chinese status line;
-expand it for target status, delivery attempt and retry actions. Neither the collapsed
+expand it for target status, delivery attempt, guidance and retry actions. Neither the collapsed
 nor expanded card repeats the source message. Historical all-cancelled relay limits still show their original reason;
 mixed outcomes keep counts so active work is not mistaken for stopped work. The terminal
 uses its existing selected-message `o` key to expand or collapse these details.

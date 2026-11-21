@@ -221,6 +221,7 @@ public struct DeliveryRow: Codable, Hashable, Sendable {
     public var targetBotId: String
     public var status: String
     public var detail: String
+    public var canGuide: Bool? = nil
 
     /// 内部状态统一显示为中文；未知状态不暴露协议字段。
     public var statusText: String {

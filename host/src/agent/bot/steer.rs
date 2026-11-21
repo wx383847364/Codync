@@ -1,22 +1,25 @@
 //! The user's queued messages before their turn comes: handled now (`steer`) or taken back (`unqueue`).
 
 use super::{Actor, Cmd, Done, Queued};
+use crate::agent::acp::Acp;
 use crate::analytics::{self, Steer, TurnSource};
 use crate::chat::team::RequestStatus;
 use crate::chat::uploads;
-use crate::store::Lane;
-use anyhow::{Result, anyhow};
+use crate::hub::BotStatus;
+use crate::store::{Lane, deliveries::Guidance};
+use anyhow::{Result, anyhow, ensure};
 use serde_json::{Value, json};
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
 
 /// How long the agent may take to say whether a steered message joined its turn.
 const STEER_ANSWER: Duration = Duration::from_secs(15);
 
-/// A queued message handed to the agent to join its running turn, until the agent answers.
-pub(super) struct InFlight {
-    /// The user took it back meanwhile (`unqueue`): it goes unless the agent took it.
-    taken_back: bool,
+/// 等待同一个 ACP 引导回执的私聊消息或群投递。
+pub(super) enum InFlight {
+    User { taken_back: bool },
+    Group { source_id: String, prompt: String },
 }
 
 /// What the agent's answer to a steer made of the message.
@@ -44,8 +47,7 @@ impl Actor {
             && self.source() == TurnSource::User
     }
 
-    /// `steer`: the agent takes the message into its running turn when it can (`_session/steering`). Otherwise the
-    /// user's turn stops for it, or, behind other work, it goes first in line.
+    /// 私聊引导优先注入本回合，适配器不支持时沿用原来的中断或提到队首。
     pub(super) async fn steer(&mut self, entry_id: String) {
         // Already with the agent.
         if self.steers_in_flight.contains_key(&entry_id) {
@@ -54,8 +56,10 @@ impl Actor {
         let Some(at) = self.queued_at(&entry_id) else { return };
         let Some(Queued::User { lane, text, .. }) = self.queue.get(at) else { return };
         let own = self.answers_user_in(lane);
-        let text = text.clone();
-        if own && self.hand_to_agent(entry_id, &text) {
+        if own && let Some(session) = self.steering_session() {
+            let text = text.clone();
+            self.close_seg();
+            self.hand_to_agent(entry_id, &text, InFlight::User { taken_back: false }, session);
             return;
         }
         self.move_first(at);
@@ -65,32 +69,67 @@ impl Actor {
         } else {
             Steer::MovedUp
         };
-        analytics::message_steered(&self.hub, &self.cfg.backend, how);
+        analytics::message_steered(&self.hub, &self.cfg.backend, how, false);
     }
 
-    /// Hands the message to the agent to join its running turn (`steered` gets the answer); false when it can't steer.
-    fn hand_to_agent(&mut self, entry_id: String, text: &str) -> bool {
-        let (Some(conn), Some(sid)) = (self.conn.as_ref().filter(|c| c.sessions.steering), self.turn_session.clone())
-        else {
-            return false;
+    /// 只引导点击时的本群回合；没有可接收的回合时，原排队记录保持有效。
+    pub(super) fn guide_delivery(&mut self, id: String, active_id: &str) -> Result<()> {
+        if matches!(self.steers_in_flight.get(&id), Some(InFlight::Group { .. })) {
+            return Ok(());
+        }
+        let Some(active) = self.active_delivery.as_ref().filter(|d| d.delivery.id == active_id) else {
+            anyhow::bail!("成员的当前回合已结束或已切换");
         };
-        let (acp, hub, bot) = (conn.acp.clone(), self.hub.clone(), self.cfg.id.clone());
+        let state = self.hub.runtime(&self.cfg.id);
+        ensure!(
+            !self.stop_requested
+                && self.held_done.is_none()
+                && state.status == BotStatus::Working
+                && state.guiding_delivery_id.as_deref() == Some(active_id),
+            "成员当前无法接收引导，消息仍在排队"
+        );
+        // ACP 断开可能先于回合结束消息到达，持久占用前必须拿到可用会话。
+        let session = self.steering_session().ok_or_else(|| anyhow!("成员当前无法接收引导，消息仍在排队"))?;
+        let room = self
+            .hub
+            .store
+            .bot(&active.delivery.room_id)?
+            .filter(|row| !row.deleted)
+            .ok_or_else(|| anyhow!("群聊已删除"))?;
+        let source = self.hub.start_guidance(&id, active_id, &self.cfg.id)?;
+        let text = crate::chat::prompt::of_entry_in(&self.hub, &self.cfg, &room.config, &source.data);
+        let prompt = format!("User guidance for the current task in this group:\n{text}");
+        if let Some(active) = self.active_delivery.as_mut() {
+            // 先登记未知结果，断开或退出时也不会将可能已经送达的消息再执行一次。
+            active.guidance.push((id.clone(), Guidance::Uncertain));
+        }
+        // 引导的回执可能晚于最后一段输出，继续让原回合组装完整回复。
+        self.hand_to_agent(id, &prompt, InFlight::Group { source_id: source.id, prompt: prompt.clone() }, session);
+        Ok(())
+    }
+
+    /// 取得声明支持引导的 ACP 连接和当前会话。
+    fn steering_session(&self) -> Option<(Arc<Acp>, String)> {
+        let conn = self.conn.as_ref().filter(|conn| conn.sessions.steering)?;
+        Some((conn.acp.clone(), self.turn_session.clone()?))
+    }
+
+    /// 发送引导并持有回合完成通知，直到 ACP 回执到达。
+    fn hand_to_agent(&mut self, id: String, text: &str, in_flight: InFlight, (acp, sid): (Arc<Acp>, String)) {
+        let (hub, bot) = (self.hub.clone(), self.cfg.id.clone());
         let params = json!({
             "sessionId": sid,
             "prompt": [{"type": "text", "text": text}],
             // A turn that just ended doesn't take it: it stays queued for the next one.
             "_meta": {"steering": {"idleBehavior": "promptRequired"}},
         });
-        // What the agent writes from here may answer it: a reply of its own, after the message in the chat.
-        self.close_seg();
-        self.steers_in_flight.insert(entry_id.clone(), InFlight { taken_back: false });
+        self.steers_in_flight.insert(id.clone(), in_flight);
         tokio::spawn(async move {
             let answer = tokio::time::timeout(STEER_ANSWER, acp.request("_session/steering", params)).await;
             let outcome = answer.unwrap_or_else(|_| Err(anyhow!("the agent didn't answer the steer")));
             // Refused only once the bot was deleted meanwhile: no one is left to tell.
-            let _ = hub.send_cmd(&bot, Cmd::Steered { entry_id, outcome });
+            let _ = hub.send_cmd(&bot, Cmd::Steered { id, outcome });
         });
-        true
     }
 
     /// Moves what waits at `at` first in line; a compaction that is due still goes before it.
@@ -121,9 +160,9 @@ impl Actor {
         }
     }
 
-    /// The agent ended the running turn. Its answer to a steer travels apart from this, and a message it took belongs
-    /// to this turn, so the end waits for every answer (at most `STEER_ANSWER`).
+    /// 回合结束和引导回执独立到达，完成事务等全部回执，期间停止发布引导入口。
     pub(super) async fn turn_ended(&mut self, done: Done, done_tx: &mpsc::UnboundedSender<Done>) {
+        self.hub.set_runtime(&self.cfg.id, |r| r.guiding_delivery_id = None);
         if self.steers_in_flight.is_empty() {
             self.on_turn_done(done, done_tx).await;
         } else {
@@ -131,7 +170,7 @@ impl Actor {
         }
     }
 
-    /// The agent's answer to a steer; the last one lets a held turn end (`turn_ended`).
+    /// 最后一条 ACP 回执到达后，提交此前等待的回合结果。
     pub(super) async fn steer_answered(
         &mut self,
         entry_id: &str,
@@ -146,19 +185,26 @@ impl Actor {
         }
     }
 
-    /// A message the agent took is the running turn's, sent; one it left for later goes next; any other stays queued,
-    /// unless the user took it back meanwhile.
+    /// ACP 回执决定消息加入当前回合、恢复排队或保留待核查状态。
     fn steered(&mut self, entry_id: &str, outcome: &Result<Value>) {
         let Some(steer) = self.steers_in_flight.remove(entry_id) else { return };
         if let Err(error) = outcome {
-            tracing::warn!(bot = %self.cfg.id, error = format!("{error:#}"), "couldn't steer; the message waits");
+            tracing::warn!(bot = %self.cfg.id, error = format!("{error:#}"), "couldn't confirm steering");
         }
         let how = steer_outcome(outcome);
-        analytics::message_steered(&self.hub, &self.cfg.backend, how);
+        let group = matches!(steer, InFlight::Group { .. });
+        analytics::message_steered(&self.hub, &self.cfg.backend, how, group);
+        let taken_back = match steer {
+            InFlight::User { taken_back } => taken_back,
+            InFlight::Group { source_id, prompt } => {
+                self.guidance_answered(entry_id, source_id, &prompt, how);
+                return;
+            }
+        };
         // A Stop meanwhile dropped it from the queue (and marked it cancelled).
         let Some(at) = self.queued_at(entry_id) else { return };
         if how != Steer::Joined {
-            if steer.taken_back {
+            if taken_back {
                 self.unqueue(entry_id);
             } else if how == Steer::Next {
                 self.move_first(at);
@@ -177,17 +223,34 @@ impl Actor {
             turn_text.push_str("\n\n");
             turn_text.push_str(&text);
         }
-        self.relay_joined(entry_id, &text);
+        self.relay_joined(Some(entry_id), &text);
         // `send --wait` learns a started message's turn from the bot's next event, and a status and activity that stay
         // the same send none.
         self.hub.emit_bot(&self.cfg.id);
     }
 
-    /// `unqueue`: the message never goes out, the chat no longer shows it, and its files leave the bot's folder.
+    /// 将回执保留到完成事务；只有明确拒绝加入的消息才可以恢复排队。
+    fn guidance_answered(&mut self, id: &str, source_id: String, prompt: &str, how: Steer) {
+        let Some(active) = self.active_delivery.as_mut() else { return };
+        if let Some((_, status)) = active.guidance.iter_mut().find(|(guide, _)| guide == id) {
+            *status = match how {
+                Steer::Joined => Guidance::Joined,
+                Steer::Next => Guidance::Deferred,
+                _ => Guidance::Uncertain,
+            };
+        }
+        if how == Steer::Joined {
+            active.shown_entries.push(source_id);
+            self.joined = true;
+            self.relay_joined(None, prompt);
+        }
+    }
+
+    /// 撤回尚未发送的私聊消息并删除它的附件；ACP 回执未到时延后判断。
     pub(super) fn unqueue(&mut self, entry_id: &str) {
         // Already with the agent, which may take it: `steered` decides.
-        if let Some(steer) = self.steers_in_flight.get_mut(entry_id) {
-            steer.taken_back = true;
+        if let Some(InFlight::User { taken_back }) = self.steers_in_flight.get_mut(entry_id) {
+            *taken_back = true;
             return;
         }
         let Some(at) = self.queued_at(entry_id) else { return };

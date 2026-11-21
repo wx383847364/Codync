@@ -85,6 +85,7 @@ pub struct Bot {
     pub members: Vec<String>,
     /// Where the running turn talks: a chat (`None` = its own).
     pub working_chat: Option<String>,
+    pub guiding_delivery_id: Option<String>,
 }
 
 /// An agent of a bot's chain that rests (`agent::fallback::resting`) until `until` (epoch ms).
@@ -230,6 +231,7 @@ impl Bot {
             group: v["kind"] == "group",
             members: strs(&v["members"]),
             working_chat: v["workingChat"].as_str().map(str::to_owned),
+            guiding_delivery_id: v["guidingDeliveryId"].as_str().map(str::to_owned),
         })
     }
 

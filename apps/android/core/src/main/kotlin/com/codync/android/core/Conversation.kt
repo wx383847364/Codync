@@ -249,7 +249,7 @@ fun editMentions(before: String, after: String, mentions: List<Mention>, replace
 
 /** 聚合卡内的目标行，当前显示名从成员列表读取。 */
 @Serializable
-data class DeliveryRow(val deliveryId: String, val targetBotId: String, val status: String, val detail: String = "") {
+data class DeliveryRow(val deliveryId: String, val targetBotId: String, val status: String, val detail: String = "", val canGuide: Boolean = false) {
     /** 状态使用中文展示，未知协议值保留稳定兜底。 */
     val statusText: String get() = when (status) {
         "queued" -> "等待执行"

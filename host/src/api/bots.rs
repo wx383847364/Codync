@@ -301,6 +301,10 @@ pub(super) async fn call(hub: &Arc<Hub>, caller: &Caller, method: &str, b: Value
             hub.send_cmd(str_arg(&b, "botId")?, Cmd::RetryDeliverySave)?;
             json!({})
         }
+        "guideDelivery" => {
+            crate::chat::group::guide(hub, str_arg(&b, "deliveryId")?, str_arg(&b, "activeDeliveryId")?).await?;
+            json!({})
+        }
         "retryDelivery" => {
             let delivery = hub.retry_delivery(str_arg(&b, "deliveryId")?)?;
             crate::chat::group::ensure_runner(hub, &delivery.room_id);

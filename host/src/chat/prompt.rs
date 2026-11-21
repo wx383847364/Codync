@@ -18,9 +18,14 @@ pub fn of_message(store: &Store, skills: &[String], root: &Path, text: &str, att
 
 /// What a user message in `bot`'s own chat (its saved `data`) asks the agent.
 pub fn of_entry(hub: &Hub, bot: &BotConfig, data: &Value) -> String {
+    of_entry_in(hub, bot, bot, data)
+}
+
+/// 保留接收者的技能与引用视角，从来源聊天读取附件。
+pub fn of_entry_in(hub: &Hub, bot: &BotConfig, chat: &BotConfig, data: &Value) -> String {
     let text = data["text"].as_str().unwrap_or_default();
     let attachments = data["attachments"].as_array().map_or(&[][..], Vec::as_slice);
-    let asked = of_message(&hub.store, &bot.skills, &uploads::root(bot), text, attachments);
+    let asked = of_message(&hub.store, &bot.skills, &uploads::root(chat), text, attachments);
     match replies::note(hub, &bot.id, &data["replyTo"]) {
         Some(note) => format!("{note}\n{asked}"),
         None => asked,

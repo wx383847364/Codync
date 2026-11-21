@@ -2,7 +2,7 @@
 
 use super::{Actor, Done, SegKind};
 use crate::store::Lane;
-use crate::store::deliveries::{Delivery, Status};
+use crate::store::deliveries::{Delivery, Guidance, Status};
 use anyhow::{Result, ensure};
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -20,6 +20,8 @@ pub(super) struct ActiveDelivery {
     pending_tools: HashMap<String, String>,
     /// 当前 prompt 确实展示的消息 ID；序号上界不能代表全部历史已读。
     pub shown_entries: Vec<String>,
+    /// 引导来源的独立终态和原投递在同一事务提交。
+    pub guidance: Vec<(String, Guidance)>,
     pub reply: oneshot::Sender<bool>,
 }
 
@@ -184,6 +186,7 @@ impl Actor {
                     output_crossed_work: false,
                     pending_tools: HashMap::new(),
                     shown_entries: Vec::new(),
+                    guidance: Vec::new(),
                 });
                 match prepared {
                     Ok(prepared) => {
@@ -297,6 +300,7 @@ impl Actor {
             pending.text.as_deref(),
             pending.detail.as_deref(),
             pending.turn,
+            &pending.active.guidance,
         ) {
             Ok(()) => {
                 let pending = self.pending_completion.take().expect("completion retained until commit");

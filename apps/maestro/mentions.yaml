@@ -41,3 +41,12 @@ onFlowComplete:
 - tapOn: ${output.beta}
 - assertNotVisible: "Reviews the code"
 - assertVisible: "@${output.beta}.*"
+- inputText: " focus on the failing test"
+- tapOn: "Send"
+- extendedWaitUntil:
+    visible: "引导"
+    timeout: 15000
+- tapOn: "引导"
+- extendedWaitUntil:
+    visible: "(?s).*Got: User guidance for the current task in this group:.*"
+    timeout: 15000

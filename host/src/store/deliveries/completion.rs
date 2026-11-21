@@ -1,6 +1,6 @@
 //! 结果、终态、派生投递与聚合卡片的同事务保存。
 
-use super::{COLS, Delivery, Status, get, insert, row, wire};
+use super::{COLS, Delivery, Status, eligible, get, insert, row, wire};
 use crate::{
     LockExt,
     store::{BotConfig, Entry, EntryKind, Store, now_ms},
@@ -8,6 +8,14 @@ use crate::{
 use anyhow::Result;
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use serde_json::{Value, json};
+
+/// 同一执行接收引导后的结果，随原执行一起落库。
+#[derive(Clone, Copy)]
+pub enum Guidance {
+    Joined,
+    Deferred,
+    Uncertain,
+}
 
 /// 在调用方事务内保存 entry；确定 ID 允许完成保存重试而不重复结果。
 pub(super) fn entry(c: &Connection, id: &str, room: &str, kind: EntryKind, turn: i64, data: &Value) -> Result<Entry> {
@@ -32,6 +40,15 @@ pub(super) fn card(c: &Connection, d: &Delivery) -> Result<Entry> {
     let id = card_key(d);
     let mut st = c.prepare(&format!("SELECT {COLS} FROM deliveries WHERE room_id=?1 AND attempt=?2 AND (source_entry_id=?3 OR (source_entry_id IS NULL AND source_execution_id=?3) OR id=?3) ORDER BY room_seq"))?;
     let deliveries = st.query_map(params![d.room_id, d.attempt, source], row)?.collect::<rusqlite::Result<Vec<_>>>()?;
+    let source_data = d
+        .source_entry_id
+        .as_deref()
+        .map(|id| c.query_row("SELECT data FROM entries WHERE id=?", [id], |r| r.get::<_, String>(0)).optional())
+        .transpose()?
+        .flatten()
+        .map(|data| serde_json::from_str::<Value>(&data))
+        .transpose()?
+        .unwrap_or_default();
     let mut lines = Vec::new();
     let mut items = Vec::new();
     for delivery in &deliveries {
@@ -47,18 +64,10 @@ pub(super) fn card(c: &Connection, d: &Delivery) -> Result<Entry> {
             wire(&delivery.status),
             detail
         ));
-        items.push(json!({"deliveryId":delivery.id,"targetBotId":delivery.target_bot_id,"status":delivery.status,"detail":detail}));
+        items.push(json!({"deliveryId":delivery.id,"targetBotId":delivery.target_bot_id,"status":delivery.status,"detail":detail,
+            "canGuide": delivery.status == Status::Queued && direct_user_mention(delivery, &source_data)}));
     }
-    let body = if let Some(source) = &d.source_entry_id {
-        c.query_row("SELECT json_extract(data,'$.text') FROM entries WHERE id=?", [source], |r| {
-            r.get::<_, Option<String>>(0)
-        })
-        .optional()?
-        .flatten()
-        .unwrap_or_default()
-    } else {
-        d.body.clone().unwrap_or_default()
-    };
+    let body = source_data["text"].as_str().or(d.body.as_deref()).unwrap_or_default();
     let turn = c.query_row("SELECT COALESCE(MAX(turn),0) FROM entries WHERE bot_id=?", [&d.room_id], |r| r.get(0))?;
     entry(
         c,
@@ -71,7 +80,49 @@ pub(super) fn card(c: &Connection, d: &Delivery) -> Result<Entry> {
     )
 }
 
+/// 仅允许原始用户消息中明确 @ 的投递加入当前执行。
+fn direct_user_mention(delivery: &Delivery, source: &Value) -> bool {
+    delivery.source_kind == "user"
+        && delivery.attempt == 1
+        && source["directMentions"].as_array().is_some_and(|ids| ids.iter().any(|id| *id == delivery.target_bot_id))
+}
+
 impl Store {
+    /// 在发送 ACP 之前持久登记引导；Stop 或重启后按既有 started 边界处理。
+    pub fn start_guidance(&self, id: &str, active_id: &str, bot: &str) -> Result<(Entry, Vec<Entry>)> {
+        let mut c = self.db.locked();
+        let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let delivery = get(&tx, id)?
+            .filter(|d| d.target_bot_id == bot && d.status == Status::Queued)
+            .ok_or_else(|| anyhow::anyhow!("这条消息已不在等待执行"))?;
+        anyhow::ensure!(
+            get(&tx, active_id)?.is_some_and(|d| d.target_bot_id == bot
+                && d.room_id == delivery.room_id
+                && d.status == Status::Started)
+                && eligible(&tx, &delivery.room_id, bot, None)?,
+            "成员的当前回合已结束或已切换"
+        );
+        let source = tx
+            .query_row(
+                &format!(
+                    "SELECT {} FROM entries WHERE id=? AND bot_id=? AND kind='user'",
+                    super::super::entries::ENTRY_COLS
+                ),
+                params![delivery.source_entry_id, delivery.room_id],
+                super::super::entries::row_entry,
+            )
+            .optional()?
+            .ok_or_else(|| anyhow::anyhow!("原始消息已不可读"))?;
+        anyhow::ensure!(direct_user_mention(&delivery, &source.data), "引导需要直接 @ 这位成员");
+        tx.execute(
+            "UPDATE deliveries SET status='started',started_at=?2,last_error='引导当前对话' WHERE id=?1",
+            params![id, now_ms()],
+        )?;
+        let cards = vec![card(&tx, &delivery)?];
+        tx.commit()?;
+        Ok((source, cards))
+    }
+
     /// 结果、带条件终态和后续 @ 同事务保存；迟到结果只留记录，不复活已取消执行。
     pub fn complete_delivery(
         &self,
@@ -80,6 +131,7 @@ impl Store {
         text: Option<&str>,
         detail: Option<&str>,
         turn: i64,
+        guidance: &[(String, Guidance)],
     ) -> Result<Vec<Entry>> {
         let mut c = self.db.locked();
         let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -165,7 +217,26 @@ impl Store {
                 }
             }
         }
-        entries.push(card(&tx, &d)?);
+        // 引导与原执行共用结果，但每条来源消息保留自己的投递记录。
+        let mut changed_rows = vec![d];
+        for (id, outcome) in guidance {
+            let (next, detail) = match outcome {
+                Guidance::Joined => (status, "已引导当前对话"),
+                Guidance::Deferred => (Status::Queued, "等待下一回合"),
+                Guidance::Uncertain => (Status::Interrupted, "引导结果不确定，请检查后重试"),
+            };
+            let queued = next == Status::Queued;
+            let count = tx.execute(
+                "UPDATE deliveries SET status=?2,finished_at=?3,started_at=CASE WHEN ?4 THEN NULL ELSE started_at END,last_error=?5 WHERE id=?1 AND status='started'",
+                params![id, wire(&next), (!queued).then(now_ms), queued, detail],
+            )?;
+            if count == 1
+                && let Some(delivery) = get(&tx, id)?
+            {
+                changed_rows.push(delivery);
+            }
+        }
+        entries.extend(cards(&tx, changed_rows)?);
         tx.commit()?;
         Ok(entries)
     }

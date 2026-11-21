@@ -183,6 +183,7 @@ impl Actor {
             r.started_at = Some(now_ms());
             r.lane = Some(lane.clone());
             r.message = message;
+            r.guiding_delivery_id = None;
         });
 
         // Memory files changed since (in an editor, say) reach the opening or the next notice.
@@ -262,6 +263,12 @@ impl Actor {
         }
         // Written before this returns, so a Stop right after is sent after the prompt.
         let answer = acp.send("session/prompt", params).await?;
+        // 只有 prompt 已送达且适配器支持回合内注入，客户端才提供引导按钮。
+        if let Some(active) = self.active_delivery.as_ref()
+            && self.conn.as_ref().is_some_and(|conn| conn.sessions.steering)
+        {
+            self.hub.set_runtime(&self.cfg.id, |r| r.guiding_delivery_id = Some(active.delivery.id.clone()));
+        }
         if !self.turn_memory_revision.is_empty()
             && let Err(error) = memory::mark_announced(&self.hub.store, &self.cfg.id, &sid, &self.turn_memory_revision)
         {

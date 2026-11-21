@@ -20,6 +20,7 @@ pub(super) enum Answer {
 }
 
 impl Actor {
+    /// 串行处理 ACP 消息，连接关闭时立即停止提供群引导入口。
     pub(super) async fn on_incoming(&mut self, inc: Option<Incoming>) {
         match inc {
             None | Some(Incoming::Closed { .. }) => {
@@ -28,6 +29,7 @@ impl Actor {
                     _ => String::new(),
                 };
                 self.conn = None;
+                self.hub.set_runtime(&self.cfg.id, |state| state.guiding_delivery_id = None);
                 // The in-flight prompt request resolves with an error; finish_turn reports it with this output.
                 self.exit_tail = Some(tail);
             }

@@ -31,7 +31,7 @@ In the editor you can rename the group, add or remove members, and fill in **Wha
 When you send a message, the group runs a round of answers:
 
 1. **Who is asked.** Selected or uniquely named members, plus the author you reply to. Without a target, or with `@all` / `@everyone`, everyone is asked.
-2. **One at a time per message.** Available members take turns so each can see prior replies. If a member is still working on an earlier message, even in this group, the other recipients can answer first. The busy member keeps each request queued and receives its original message when free.
+2. **One at a time per message.** The queue dispatches available members in order so each can see prior replies. If a member is still working on an earlier message, even in this group, the other recipients can answer first. The busy member keeps each request queued and receives its original message when free.
 3. **Passing.** A member with nothing to add can pass without a message. A pass at the end keeps a result the member already gave in that turn, provided it did not continue tool work. Tool-assigned work that passes without a result shows that it provided no result.
 4. **Continue until handoff.** Members keep doing authorized work and assigning the next action until they deliver the result to you or need your decision, information or approval. Group work has no fixed round, reply-count or handoff-depth cutoff. After ten minutes, the next recipient of the same message can take a turn while the earlier work continues. Busy members keep their accepted work queued. You can still stop the group yourself.
 
@@ -62,6 +62,15 @@ show or hide its details. Historical cards cancelled by an older relay limit kee
 this leaves the replies already sent in the chat.
 
 A busy member keeps each accepted request queued and reads the room again when free.
+If you directly @ a member working in this group, choose **引导** (Steer) beside the queued
+delivery to send that message into the member’s current turn. When more than one member can
+take guidance, open the delivery details and choose the member. In the terminal, select the
+delivery card and press **S**. If several members can take guidance, select one with the
+arrow keys and press Enter.
+
+The button appears when the agent supports in-turn guidance. If the agent says the turn has
+already ended, the message returns to its place in the queue. An uncertain delivery shows an
+interruption with a manual retry, so you can check what the member received first.
 New messages never replace accepted work. Cards show each target's state and retry attempt;
 failed or interrupted work offers a retry action in its details, which preserves the old record.
 

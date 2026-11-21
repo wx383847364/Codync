@@ -84,6 +84,7 @@ export interface Bot {
   pendingNewSession?: boolean
   startedAt?: number | null
   workingChat?: string | null
+  guidingDeliveryId?: string | null
   unread: number
   lastMessage?: string | null
   lastAt: number
@@ -141,6 +142,8 @@ export function normalizeBot(raw: Partial<Bot> & { id: string }): Bot {
     activity: raw.activity ?? '',
     startedAt: raw.startedAt ?? null,
     workingChat: raw.workingChat ?? null,
+    guidingDeliveryId: raw.guidingDeliveryId ?? null,
+    storageError: raw.storageError ?? null,
     unread: raw.unread ?? 0,
     lastMessage: raw.lastMessage ?? null,
     lastAt: raw.lastAt ?? createdAt,
@@ -288,7 +291,7 @@ export interface AgentSwitch {
   carried: string | null
 }
 
-export interface DeliveryRow { deliveryId: string; targetBotId: string; status: string; detail: string }
+export interface DeliveryRow { deliveryId: string; targetBotId: string; status: string; detail: string; canGuide?: boolean }
 
 export interface EntryData {
   deliveryAttempt?: number
