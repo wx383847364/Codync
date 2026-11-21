@@ -30,6 +30,16 @@ fn observed_events_carry_no_content() {
     assert!(props("memoryFile", &json!({"name": "notes.md"})).is_none());
 }
 
+/// 搜索词和文件引用路径不会出现在使用数据中。
+#[test]
+fn workspace_files_analytics_only_reports_the_outcome_and_count() {
+    let (event, properties) = observe(&Caller::Local, "searchWorkspaceFiles", &json!({"query":"private.md"})).unwrap();
+    let properties = answered(event, properties, &json!({"items":[{"name":"private.md"}]})).unwrap();
+    assert_eq!(Value::Object(properties), json!({"client":"local","outcome":"found"}));
+    let (_, sent) = props("send", &json!({"mentions":[{"workspaceFile":{"path":"private.md"}}]})).unwrap();
+    assert_eq!(sent, json!({"client":"local","reply":false,"attachments":0,"workspaceFileReferences":1}));
+}
+
 #[test]
 fn handoff_and_credentials_name_a_fixed_action() {
     assert_eq!(

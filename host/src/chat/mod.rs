@@ -24,3 +24,4 @@ pub mod replies;
 pub mod skills;
 pub mod team;
 pub mod uploads;
+pub mod workspace_files;

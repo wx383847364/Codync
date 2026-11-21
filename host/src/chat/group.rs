@@ -105,6 +105,14 @@ pub fn stop(hub: &Hub, group: &str) -> Result<()> {
     hub.cancel_deliveries(group, None, "群聊已停止")
 }
 
+/// 将显式引导交给指定成员串行校验；actor 保留当前回合的唯一所有权。
+pub async fn guide(hub: &Hub, id: &str, active_id: &str) -> Result<()> {
+    let delivery = hub.store.delivery(id)?.ok_or_else(|| anyhow::anyhow!("未知的群投递"))?;
+    let (reply, answer) = oneshot::channel();
+    hub.send_cmd(&delivery.target_bot_id, Cmd::GuideDelivery { id: id.into(), active_id: active_id.into(), reply })?;
+    answer.await?
+}
+
 /// 消息入库后唤醒唯一房间 runner；新消息不取消已接受投递。
 pub fn start(hub: &Arc<Hub>, group: &BotConfig, _lane: Lane) {
     ensure_runner(hub, &group.id);

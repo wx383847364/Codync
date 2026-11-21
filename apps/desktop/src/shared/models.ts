@@ -136,13 +136,24 @@ export interface Bot {
   pendingNewSession?: boolean
   mainSessionRevision?: number
   startedAt?: number | null
+  deliveryControls?: GroupDeliveryControl[]
   workingChat?: string | null
+  guidingDeliveryId?: string | null
   unread: number
   lastMessage?: string | null
   lastAt: number
 }
 
 /** 兼容不同版本的 Host，并保留主会话版本供详情刷新。 */
+export interface GroupDeliveryControl {
+  deliveryId: string
+  targetBotId: string
+  startedAt: number
+  status: 'started' | 'paused' | 'resuming'
+  preview: string
+}
+
+/** Lenient: a host that is a little newer or older than the app still yields a usable bot. */
 export function normalizeBot(raw: Partial<Bot> & { id: string }): Bot {
   const createdAt = raw.createdAt ?? 0
   return {
@@ -196,7 +207,10 @@ export function normalizeBot(raw: Partial<Bot> & { id: string }): Bot {
     activity: raw.activity ?? '',
     mainSessionRevision: raw.mainSessionRevision,
     startedAt: raw.startedAt ?? null,
+    deliveryControls: raw.deliveryControls,
     workingChat: raw.workingChat ?? null,
+    guidingDeliveryId: raw.guidingDeliveryId ?? null,
+    storageError: raw.storageError ?? null,
     unread: raw.unread ?? 0,
     lastMessage: raw.lastMessage ?? null,
     lastAt: raw.lastAt ?? createdAt,
@@ -346,6 +360,7 @@ export interface AgentSwitch {
 
 export interface DeliveryRow {
   deliveryId: string; targetBotId: string; status: string; detail: string
+  canGuide?: boolean
   groupHandoff?: { phase: string; shared: boolean } | null
 }
 
@@ -356,6 +371,7 @@ export interface EntryData {
   deliveryBody?: string
   deliveryRows?: DeliveryRow[]
   mentions?: import('./mentions').Mention[]
+  workspaceFileReferences?: import('./mentions').Mention[]
   /** Structured conversation data added to the existing team-tool notice. */
   botMessage?: BotMessage
   /** notice: the agent summarized its context; kept out of the chat. */
@@ -583,6 +599,7 @@ export interface Hello {
   groupSessionContexts?: boolean
   /** 主机能按附件身份校验原图尺寸，不包含正文路径读取能力。 */
   fileImageInfo?: boolean
+  workspaceFileSearch?: boolean
   iconsRevision?: number
   icons?: import('./custom-icons').CustomIcons
   hostId: string

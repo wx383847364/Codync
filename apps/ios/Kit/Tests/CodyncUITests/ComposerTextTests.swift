@@ -57,3 +57,18 @@ func replacingComposerTextDiscardsPreviousSelection(_ replacement: String) {
     #expect(Mention.edited(from: "@Alice tail", to: "@Alice𠀀 tail", mentions: [mention]).isEmpty)
     #expect(Mention.edited(from: "@Alice tail", to: "@Alice𠀀 tail", mentions: [mention], replacement: 6..<6).isEmpty)
 }
+
+/// 替换中间的斜杠搜索词时保留尾文，中文文件名与光标都可继续编辑。
+@MainActor @Test func workspaceReferenceReplacesTheQueryAtTheCaret() {
+    var input = ComposerText(text: "😀 /docs/架构 tail")
+    input.selection = TextSelection(insertionPoint: String.Index(utf16Offset: 11, in: input.text))
+    guard let range = input.workspaceFileRange else {
+        Issue.record("Expected the slash query at the caret")
+        return
+    }
+    #expect(input.text[range] == "/docs/架构")
+    input.insertMention("架构 说明.md", replacing: range)
+    #expect(input.text == "😀 @架构 说明.md  tail")
+    input.replace(with: "/foo\n")
+    #expect(input.workspaceFileRange == nil)
+}

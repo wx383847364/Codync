@@ -6,7 +6,7 @@ use anyhow::{Result, anyhow, ensure};
 use rusqlite::{Connection, OptionalExtension, params};
 use std::collections::HashSet;
 
-const UNRESOLVED: &str = "status IN ('queued','claimed','started') OR ((status IN ('failed','interrupted') OR (kind='task' AND status='noReply')) AND NOT EXISTS(SELECT 1 FROM deliveries child WHERE child.parent_id=deliveries.id))";
+const UNRESOLVED: &str = "status IN ('queued','claimed','started','paused') OR ((status IN ('failed','interrupted') OR (kind='task' AND status='noReply')) AND NOT EXISTS(SELECT 1 FROM deliveries child WHERE child.parent_id=deliveries.id))";
 const VISIBLE: &str = "COALESCE(json_extract(data,'$.removed'),0)=0 AND (kind='user' OR (kind='agent' AND json_extract(data,'$.final')=1))";
 
 pub(crate) struct Snapshot {
@@ -271,5 +271,5 @@ impl Store {
 
 /// 原文的附件、引用和身份独立提供；大型元数据也能单独无损分页。
 fn material_metadata(e: &Entry) -> serde_json::Value {
-    serde_json::json!({"entryId":e.id,"seq":e.seq,"kind":e.kind,"author":e.data["author"],"attachments":e.data["attachments"],"replyTo":e.data["replyTo"],"mentions":e.data["mentions"],"deliveryId":e.data["deliveryId"]})
+    serde_json::json!({"entryId":e.id,"seq":e.seq,"kind":e.kind,"author":e.data["author"],"attachments":e.data["attachments"],"replyTo":e.data["replyTo"],"mentions":e.data["mentions"],"workspaceFilePaths":e.data["workspaceFilePaths"],"workspaceFileReferences":e.data["workspaceFileReferences"],"deliveryId":e.data["deliveryId"]})
 }

@@ -55,7 +55,7 @@ fn str_arg<'a>(b: &'a Value, k: &str) -> Result<&'a str> {
     b[k].as_str().ok_or_else(|| anyhow!("`{k}` is required"))
 }
 
-/// Runs one API method for `caller` (permissions per spec §6.6).
+/// 校验调用者权限与活跃工具来源后路由 API。
 pub async fn dispatch(hub: &Arc<Hub>, caller: &Caller, method: &str, b: Value) -> Result<Value> {
     devices::permit(caller, method)?;
     // MCP 桥的 botId 由宿主绑定；整理期间拒绝工作工具。
@@ -64,7 +64,7 @@ pub async fn dispatch(hub: &Arc<Hub>, caller: &Caller, method: &str, b: Value) -
         anyhow::bail!("tools are unavailable during context maintenance");
     }
     // 只有代理的内置工具桥携带会话归属。移动端通话等 API 仍按自己的目标鉴权。
-    if matches!(
+    let scoped_tool = matches!(
         method,
         "chatCall"
             | "teamCall"
@@ -74,9 +74,19 @@ pub async fn dispatch(hub: &Arc<Hub>, caller: &Caller, method: &str, b: Value) -
             | "computerCall"
             | "routineCall"
             | "composioCall"
-    ) && let Some(bot) = b["botId"].as_str()
-    {
-        hub.team.scoped_delivery(bot, b["groupSession"].as_str())?;
+    );
+    if let Some(bot) = b["botId"].as_str().filter(|_| scoped_tool || connector_call) {
+        let active = if scoped_tool {
+            hub.team.scoped_delivery(bot, b["groupSession"].as_str())?
+        } else {
+            hub.team.delivery(bot)
+        };
+        // 工具调用可在 ACP 处理取消期间到达，持久状态先于内存回合失效。
+        if let Some((_, id)) = active
+            && hub.store.delivery(&id)?.is_some_and(|delivery| delivery.held_after_pause())
+        {
+            anyhow::bail!("tools are unavailable while this group delivery is paused");
+        }
     }
     if method == "connectorRuntime" && b["checkOnly"] == true {
         // 本地代理逐次检查执行窗口，不读取凭据或解锁保险库。

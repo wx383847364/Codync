@@ -56,6 +56,8 @@ pub struct Runtime {
     pub message: Option<String>,
     /// The ACP session the running turn prompts. A memory write made there is one that session already knows.
     pub session: Option<String>,
+    /// 可接收引导的群投递 ID，用来拒绝来自旧界面的点击。
+    pub guiding_delivery_id: Option<String>,
     pub pending_new_session: bool,
     /// 主会话提交后变更的版本，只用于客户端使旧用量失效。
     pub main_session_revision: u64,
@@ -287,6 +289,7 @@ impl Hub {
             || before.activity != after.activity
             || before.lane != after.lane
             || before.fast_mode != after.fast_mode
+            || before.guiding_delivery_id != after.guiding_delivery_id
             || before.pending_new_session != after.pending_new_session
             || before.main_session_revision != after.main_session_revision
             || before.agent_step != after.agent_step
@@ -383,6 +386,19 @@ impl Hub {
                 None
             }
         }
+    }
+
+    /// 在同一写入锁内按 nonce 接受私聊消息，重复请求只返回原消息。
+    pub fn add_user_entry(&self, lane: &Lane, turn: i64, data: &Value) -> Result<(Entry, bool)> {
+        let _guard = self.emit_lock.locked();
+        if let Some(nonce) = data["clientNonce"].as_str().filter(|nonce| !nonce.is_empty())
+            && let Some(entry) = self.store.find_by_nonce(&lane.chat, nonce)
+        {
+            return Ok((entry, false));
+        }
+        let entry = self.store.insert_entry(lane, EntryKind::User, turn, data)?;
+        let _ = self.events.send(json!({"type":"entry","rev":entry.rev,"entry":entry}));
+        Ok((entry, true))
     }
 
     pub fn add_entry_once(

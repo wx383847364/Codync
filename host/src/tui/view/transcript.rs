@@ -68,6 +68,7 @@ pub(super) fn build_chat(app: &App, b: &Bot, width: usize) -> Built {
     let info = turn_info(&entries);
     if entries.is_empty() {
         intro(&mut out, app, b, width);
+        super::activity::held_deliveries(&mut out, app, b, width);
         return out;
     }
     if !app.history_complete(&b.id) {
@@ -126,6 +127,7 @@ pub(super) fn build_chat(app: &App, b: &Bot, width: usize) -> Built {
         };
         out.lines.push(Line::from(line));
     }
+    super::activity::held_deliveries(&mut out, app, b, width);
     out
 }
 
@@ -318,7 +320,17 @@ fn entry_lines(
             }
             // 派工卡只显示一行摘要；正文属于原消息，不进入折叠详情。
             let text = if e.data["deliveryRows"].is_array() {
-                format!("{} · o {}详情", e.notice_text(), if app.unfolded.contains(&e.id) { "收起" } else { "展开" })
+                let mut targets = app.group_guidance(&b.id, e);
+                let guide = match (targets.next(), targets.next()) {
+                    (Some(_), Some(_)) => " · S 选择引导成员".to_owned(),
+                    (Some((_, _, name)), None) => format!(" · S 引导 {name}"),
+                    _ => String::new(),
+                };
+                format!(
+                    "{}{guide} · o {}详情",
+                    e.notice_text(),
+                    if app.unfolded.contains(&e.id) { "收起" } else { "展开" }
+                )
             } else if let Some(status) = e.data["connectionRequest"]["status"].as_str() {
                 let hint = if e.data["connectionRequest"]["kind"] == "agent" { "C signs in" } else { "C connects" };
                 format!(

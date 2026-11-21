@@ -1,6 +1,48 @@
 use super::*;
 use crate::store::deliveries::Status;
 use futures::StreamExt;
+use serde_json::Value;
+
+/// 持久暂停后，退出中的旧回合不能再获得权限或调用 Host 工具。
+#[tokio::test]
+async fn a_paused_delivery_rejects_late_permissions_and_tool_calls() {
+    let room = Room::new();
+    room.hub.update_bot(&json!({"id":"a","permission":"auto"})).unwrap();
+    std::fs::write(room.dir.join("a/permission-after-cancel"), "").unwrap();
+    let source = room.send("@a BLOCK until paused", None).await;
+    let id = delivery_in_state(&room, &source.id, "started").await;
+    let started_at = room.hub.store.delivery(&id).unwrap().unwrap().started_at.unwrap();
+    room.hub.set_delivery_paused(&room.group, &id, started_at, true).unwrap();
+    let receipt = room.dir.join("a/cancel-permission.json");
+    let answer: Value = tokio::time::timeout(WAIT, async {
+        loop {
+            // 夹具的写入可能还没完成，等它给出完整 JSON。
+            if let Ok(text) = std::fs::read_to_string(&receipt)
+                && let Ok(answer) = serde_json::from_str(&text)
+            {
+                break answer;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(answer["outcome"]["outcome"], "cancelled");
+    assert!(room.hub.team.delivery("a").is_some());
+    let error = crate::api::dispatch(
+        &room.hub,
+        &Caller::Local,
+        "teamCall",
+        json!({"botId":"a", "name":"list_bots", "arguments":{}}),
+    )
+    .await
+    .unwrap_err();
+    assert!(error.to_string().contains("delivery is paused"));
+    std::fs::write(room.dir.join("a/cancel-release"), "").unwrap();
+    room.settle().await;
+    assert_eq!(room.hub.store.delivery(&id).unwrap().unwrap().status, Status::Paused);
+    room.shutdown().await;
+}
 
 /// 最后一段 pass 不得覆盖工具结束后已写出的结果，也不能把后续工具前的进度当结果。
 #[tokio::test]

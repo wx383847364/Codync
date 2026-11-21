@@ -40,7 +40,10 @@ impl Fixture {
         let first = self.hub.store.queued_deliveries("g").unwrap().remove(0);
         self.hub.store.claim_delivery(&first.id, "a").unwrap();
         self.hub.store.start_delivery(&first.id, "a").unwrap();
-        self.hub.store.complete_delivery(&first.id, Status::Completed, Some("@b 请复核全部要求"), None, 1).unwrap();
+        self.hub
+            .store
+            .complete_delivery(&first.id, Status::Completed, Some("@b 请复核全部要求"), None, 1, &[])
+            .unwrap();
         let next = self.hub.store.queued_deliveries("g").unwrap().remove(0);
         (root, next)
     }
@@ -437,7 +440,7 @@ async fn discovery_pages_all_rows_within_budget_even_when_a_delivery_cursor_comp
                 let delivery = f.hub.store.delivery(id).unwrap().unwrap();
                 f.hub.store.claim_delivery(id, &delivery.target_bot_id).unwrap();
                 f.hub.store.start_delivery(id, &delivery.target_bot_id).unwrap();
-                f.hub.store.complete_delivery(id, Status::Completed, Some("已完成，不派生任务"), None, 1).unwrap();
+                f.hub.store.complete_delivery(id, Status::Completed, Some("已完成，不派生任务"), None, 1, &[]).unwrap();
                 expected.retain(|candidate| candidate != id);
             }
             from = page["next"].clone();
