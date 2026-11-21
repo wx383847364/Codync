@@ -68,6 +68,8 @@ pub enum Event {
     ImageViewed,
     /// 草稿图片预览使用或解码失败，不包含附件内容。
     AttachmentPreview,
+    /// 搜索结果与失败类别，绝不记录搜索词或文件路径。
+    WorkspaceFilesSearched,
     FileLinkAction,
     BotCreated,
     BotUpdated,
@@ -84,6 +86,7 @@ pub enum Event {
     TurnFinished,
     GroupDeliveryAccepted,
     GroupDeliveryFinished,
+    GroupDeliveryControl,
     GroupDeliveryStorage,
     GroupContextPrepared,
     GroupContextCompacted,
@@ -175,6 +178,7 @@ impl Event {
             Self::FileShared => "file_shared",
             Self::ImageViewed => "image_viewed",
             Self::AttachmentPreview => "attachment_preview",
+            Self::WorkspaceFilesSearched => "workspace_files_searched",
             Self::FileLinkAction => "file_link_action",
             Self::BotCreated => "bot_created",
             Self::BotUpdated => "bot_updated",
@@ -189,6 +193,7 @@ impl Event {
             Self::TurnFinished => "turn_finished",
             Self::GroupDeliveryAccepted => "group_delivery_accepted",
             Self::GroupDeliveryFinished => "group_delivery_finished",
+            Self::GroupDeliveryControl => "group_delivery_control",
             Self::GroupDeliveryStorage => "group_delivery_storage",
             Self::GroupContextPrepared => "group_context_prepared",
             Self::GroupContextCompacted => "group_context_compacted",

@@ -3,9 +3,10 @@
 // (host/src/market/skills.rs `expand_command`). A group lists its members' commands: Fast mode
 // for all of them, and every skill one of them has. docs/features/marketplace.md, "Commands".
 import { fastModeDetail, fastModeShown, fastModeState, groupFastMode, type FastModeState } from '../../../shared/fast-mode.ts'
+import type { WorkspaceFileCandidate } from '../../../shared/mentions.ts'
 import type { Bot } from '../../../shared/models.ts'
 
-export type SlashAction = { kind: 'fast' } | { kind: 'session'; mode: string } | { kind: 'skill'; id: string }
+export type SlashAction = { kind: 'fast' } | { kind: 'session'; mode: string } | { kind: 'skill'; id: string } | { kind: 'file'; candidate: WorkspaceFileCandidate }
 
 export interface SlashCommand {
   /** What follows the `/`. */
@@ -20,6 +21,28 @@ export interface SlashCommand {
 /** The command name being typed after a leading `/`, before any space; otherwise null. */
 export function slashQuery(draft: string): string | null {
   return /^\/\S*$/.test(draft) ? draft.slice(1) : null
+}
+
+/** 光标前的斜杠词可以是路径，普通 URL 和词内斜杠不打开搜索。 */
+export function workspaceFileQuery(draft: string, start: number, end: number) {
+  if (start !== end || start <= 0 || start > draft.length || /\s/u.test(draft[start - 1]!)) return null
+  if (start < draft.length && !/\s/u.test(draft[start]!)) return null
+  const token = draft.slice(0, start).match(/(?:^|\s)(\/[^\s]*)$/u)?.[1]
+  return token && !token.startsWith('//') && token.length <= 256
+    ? { query: token.slice(1), start: start - token.length, end: start }
+    : null
+}
+
+/** 文件候选沿用命令列表，显示原始文件名及来源目录。 */
+export function workspaceFileCommand(candidate: WorkspaceFileCandidate): SlashCommand {
+  return {
+    name: `${candidate.file.workspace}/${candidate.file.path}`,
+    icon: 'doc',
+    title: candidate.name,
+    detail: [candidate.source, candidate.file.path].filter(Boolean).join(' · '),
+    warning: false,
+    action: { kind: 'file', candidate },
+  }
 }
 
 /** The bot's built-in commands; a group's Fast mode is its members' (`groupFastMode`). */

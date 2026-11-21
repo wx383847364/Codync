@@ -212,9 +212,15 @@ data class MirrorSnapshot(
     val icons: Map<String, CustomIcon> = emptyMap(),
 )
 
-/** 固定成员身份，偏移始终采用实际请求正文的 UTF-16 半开区间。 */
 @Serializable
-data class Mention(val botId: String, val start: Int, val end: Int)
+data class WorkspaceFileReference(val path: String, val workspace: String)
+
+@Serializable
+data class WorkspaceFileCandidate(val name: String, val source: String, val file: WorkspaceFileReference)
+
+/** 固定成员或工作区文件身份，偏移采用请求正文的 UTF-16 半开区间。 */
+@Serializable
+data class Mention(val botId: String? = null, val start: Int, val end: Int, val workspaceFile: WorkspaceFileReference? = null)
 
 /** 片段外的编辑平移绑定；触及片段正文时解除绑定，避免改名误投。 */
 fun editMentions(before: String, after: String, mentions: List<Mention>, replacement: IntRange? = null): List<Mention> {
@@ -247,10 +253,14 @@ fun editMentions(before: String, after: String, mentions: List<Mention>, replace
     } }
 }
 
+/** Host 提供的单任务状态和当前可操作的回合。 */
+@Serializable
+data class GroupDeliveryControl(val deliveryId: String, val targetBotId: String, val startedAt: Long, val status: String, val preview: String)
+
 /** 聚合卡内的目标行，当前显示名从成员列表读取。 */
 @Serializable
 data class DeliveryRow(val deliveryId: String, val targetBotId: String, val status: String, val detail: String = "",
-    val groupHandoff: GroupHandoff? = null) {
+    val groupHandoff: GroupHandoff? = null, val canGuide: Boolean = false) {
     /** 群卡的交接只携带状态和作用域。 */
     @Serializable data class GroupHandoff(val phase: String, val shared: Boolean)
 
@@ -259,6 +269,7 @@ data class DeliveryRow(val deliveryId: String, val targetBotId: String, val stat
         "queued" -> "等待执行"
         "claimed" -> "准备执行"
         "started" -> "执行中"
+        "paused" -> "已暂停"
         "completed" -> "已完成"
         "failed" -> "失败"
         "interrupted" -> "已中断"

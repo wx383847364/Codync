@@ -8,7 +8,7 @@ mod common;
 
 use common::host::Host;
 use common::steer::{entries, entry, gone, idle, queue_behind_a_turn, status, turn_running};
-use common::{eventually, python_missing};
+use common::{bot as snapshot_bot, eventually, python_missing};
 use serde_json::{Value, json};
 use std::time::Duration;
 
@@ -38,6 +38,114 @@ async fn a_steered_message_joins_the_running_turn() {
     let reply = entries(&host, &bot).await.into_iter().rev().find(|e| e["data"]["final"] == true).unwrap();
     assert!(reply["data"]["text"].as_str().unwrap().contains("Got: "), "{reply}");
     assert!(reply["seq"].as_i64() > second["seq"].as_i64(), "the reply comes after the message it answers");
+}
+
+/// 验证引导只进入点击时的同群回合，收到回执后不会再开一轮。
+#[tokio::test]
+async fn group_guidance_joins_only_the_selected_running_delivery() {
+    if python_missing() {
+        return;
+    }
+    let host = Host::start().await;
+    let bot = host.fixture_bot("Builder", "steer_agent.py", "late 30").await;
+    let room = host.call("createBot", json!({"name":"Build room","kind":"group","members":[bot]})).await;
+    let room = room["bot"]["id"].as_str().unwrap();
+    // 相同成员组合会复用已有群，需要额外成员建立真正独立的群。
+    let observer = host.bot("Observer", "auto").await;
+    let other = host.call("createBot", json!({"name":"Other room","kind":"group","members":[bot,observer]})).await;
+    let other = other["bot"]["id"].as_str().unwrap();
+    assert_ne!(room, other);
+    host.call("send", json!({"botId":room,"text":"@Builder first task"})).await;
+    eventually("the running member accepts guidance", Duration::from_secs(15), async || {
+        snapshot_bot(&host.snapshot().await, &bot)["guidingDeliveryId"].is_string()
+    })
+    .await;
+    let active = snapshot_bot(&host.snapshot().await, &bot)["guidingDeliveryId"].clone();
+
+    // 普通广播可排队，但即使直接调用 API，也不能把它当成对成员的引导。
+    let row_for = async |room: &str, message: &str| {
+        let sent = host.call("send", json!({"botId":room,"text":message})).await;
+        let id = format!("delivery-card-{}-1", sent["entry"]["id"].as_str().unwrap());
+        entry(&host, room, &id).await["data"]["deliveryRows"][0].clone()
+    };
+    let broadcast = row_for(room, "broadcast follow-up").await;
+    assert_eq!(broadcast["canGuide"], false);
+    let other_row = row_for(other, "@Builder other room follow-up").await;
+    let guidance = row_for(room, "@Builder revise the current task").await;
+    assert_eq!(guidance["canGuide"], true);
+    for (delivery, active) in [
+        (&broadcast["deliveryId"], &active),
+        (&other_row["deliveryId"], &active),
+        (&guidance["deliveryId"], &json!("stale-delivery")),
+    ] {
+        host.refused("guideDelivery", json!({"deliveryId":delivery,"activeDeliveryId":active})).await;
+    }
+    assert_eq!(host.requests(&bot, "_session/steering"), Vec::<Value>::new());
+
+    host.call("guideDelivery", json!({"deliveryId":guidance["deliveryId"],"activeDeliveryId":active})).await;
+    // 回执延后到 prompt 结束后，仍必须由原回合保存两条投递。
+    eventually("both deliveries finished with one reply", Duration::from_secs(15), async || {
+        let history = entries(&host, room).await;
+        let joined = history.iter().any(|e| {
+            e["data"]["deliveryRows"][0]["deliveryId"] == guidance["deliveryId"]
+                && e["data"]["deliveryRows"][0]["status"] == "completed"
+        });
+        joined
+            && history.iter().any(|e| {
+                e["data"]["deliveryId"] == active
+                    && e["data"]["final"] == true
+                    && e["data"]["text"].as_str().is_some_and(|text| text.contains("revise the current task"))
+            })
+    })
+    .await;
+    let steered = host.requests(&bot, "_session/steering");
+    assert_eq!(steered.len(), 1);
+    assert!(steered[0]["params"]["prompt"][0]["text"].as_str().unwrap().contains("revise the current task"));
+    assert_eq!(host.requests(&bot, "session/cancel"), Vec::<Value>::new());
+    // 其余来源仍可各自运行，唯一的引导消息不会再次变成一次普通 prompt。
+    for request in host.requests(&bot, "session/prompt") {
+        let text = request["params"]["prompt"][0]["text"].as_str().unwrap();
+        assert!(!text.contains("Request (complete original):\nUser: @Builder revise the current task"));
+    }
+}
+
+/// 适配器要求新回合时，原回复的首尾片段仍完整，后续消息继续排队。
+#[tokio::test]
+async fn deferred_group_guidance_preserves_the_original_stream() {
+    if python_missing() {
+        return;
+    }
+    let host = Host::start().await;
+    let bot = host.fixture_bot("Waiter", "steer_agent.py", "next 6").await;
+    let room = host.call("createBot", json!({"name":"Wait room","kind":"group","members":[bot]})).await;
+    let room = room["bot"]["id"].as_str().unwrap();
+    host.call("send", json!({"botId":room,"text":"@Waiter first task"})).await;
+    eventually("the first reply has started streaming", Duration::from_secs(15), async || {
+        entries(&host, room).await.iter().any(|e| e["data"]["text"] == "Working")
+    })
+    .await;
+    let active = snapshot_bot(&host.snapshot().await, &bot)["guidingDeliveryId"].clone();
+    let sent = host.call("send", json!({"botId":room,"text":"@Waiter follow-up"})).await;
+    let id = format!("delivery-card-{}-1", sent["entry"]["id"].as_str().unwrap());
+    let queued = entry(&host, room, &id).await["data"]["deliveryRows"][0]["deliveryId"].clone();
+    host.call("guideDelivery", json!({"deliveryId":queued,"activeDeliveryId":active})).await;
+    eventually("the deferred guidance gets its own prompt", Duration::from_secs(15), async || {
+        host.requests(&bot, "session/prompt").len() == 2
+    })
+    .await;
+    let reply = entries(&host, room)
+        .await
+        .into_iter()
+        .find(|e| e["data"]["deliveryId"] == active && e["data"]["final"] == true)
+        .unwrap();
+    assert_eq!(reply["data"]["text"], "WorkingDone");
+    assert_eq!(host.requests(&bot, "session/cancel"), Vec::<Value>::new());
+    assert!(
+        host.requests(&bot, "session/prompt")[1]["params"]["prompt"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("Request (complete original):\nUser: @Waiter follow-up")
+    );
 }
 
 #[tokio::test]

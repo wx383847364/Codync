@@ -3,6 +3,9 @@
 mod completion;
 pub(crate) mod handoff;
 pub(crate) mod member_session;
+pub use completion::Guidance;
+mod pause;
+pub(crate) use pause::DeliveryControl;
 #[cfg(test)]
 mod tests;
 
@@ -29,6 +32,7 @@ pub enum Status {
     Queued,
     Claimed,
     Started,
+    Paused,
     Completed,
     NoReply,
     Failed,
@@ -182,9 +186,9 @@ fn insert(c: &Connection, delivery: &Delivery) -> Result<Delivery> {
 
 /// 删除群或成员时在调用方事务内取消投递，并刷新仍存在群的状态卡。
 pub(super) fn cancel_for_deletion(c: &Connection, id: &str) -> Result<(Vec<Delivery>, Vec<Entry>)> {
-    let changed=c.prepare(&format!("SELECT {COLS} FROM deliveries WHERE (room_id=?1 OR target_bot_id=?1 OR source_bot_id=?1) AND status IN ('queued','claimed','started')"))?
+    let changed=c.prepare(&format!("SELECT {COLS} FROM deliveries WHERE (room_id=?1 OR target_bot_id=?1 OR source_bot_id=?1) AND status IN ('queued','claimed','started','paused')"))?
         .query_map([id],row)?.collect::<rusqlite::Result<Vec<_>>>()?;
-    c.execute("UPDATE deliveries SET status='cancelled',finished_at=?2,last_error='群或成员已删除' WHERE (room_id=?1 OR target_bot_id=?1 OR source_bot_id=?1) AND status IN ('queued','claimed','started')",params![id,now_ms()])?;
+    c.execute("UPDATE deliveries SET status='cancelled',finished_at=?2,last_error='群或成员已删除' WHERE (room_id=?1 OR target_bot_id=?1 OR source_bot_id=?1) AND status IN ('queued','claimed','started','paused')",params![id,now_ms()])?;
     let mut live = Vec::new();
     let mut cards = Vec::new();
     for delivery in &changed {
@@ -237,10 +241,10 @@ pub(super) fn cancel_in_transaction(
     target: Option<&str>,
     reason: &str,
 ) -> Result<(Vec<Delivery>, Vec<Entry>)> {
-    let mut changed = c.prepare(&format!("SELECT {COLS} FROM deliveries WHERE room_id=?1 AND (?2 IS NULL OR target_bot_id=?2 OR source_bot_id=?2) AND status IN ('queued','claimed','started')"))?
+    let mut changed = c.prepare(&format!("SELECT {COLS} FROM deliveries WHERE room_id=?1 AND (?2 IS NULL OR target_bot_id=?2 OR source_bot_id=?2) AND status IN ('queued','claimed','started','paused')"))?
         .query_map(params![room,target],row)?.collect::<rusqlite::Result<Vec<_>>>()?;
     let at = now_ms();
-    c.execute("UPDATE deliveries SET status='cancelled',last_error=?3,finished_at=?4 WHERE room_id=?1 AND (?2 IS NULL OR target_bot_id=?2 OR source_bot_id=?2) AND status IN ('queued','claimed','started')",params![room,target,reason,at])?;
+    c.execute("UPDATE deliveries SET status='cancelled',last_error=?3,finished_at=?4 WHERE room_id=?1 AND (?2 IS NULL OR target_bot_id=?2 OR source_bot_id=?2) AND status IN ('queued','claimed','started','paused')",params![room,target,reason,at])?;
     // 返回已提交语义的快照，调用方只在成功提交后通知这些稳定身份。
     for delivery in &mut changed {
         delivery.status = Status::Cancelled;
@@ -398,7 +402,7 @@ impl Store {
                 "来源投递已结束"
             );
         }
-        let (global, sender): (i64,i64) = tx.query_row("SELECT COUNT(*),COALESCE(SUM(source_bot_id=?1),0) FROM deliveries WHERE kind='task' AND status IN ('queued','claimed','started')",
+        let (global, sender): (i64,i64) = tx.query_row("SELECT COUNT(*),COALESCE(SUM(source_bot_id=?1),0) FROM deliveries WHERE kind='task' AND status IN ('queued','claimed','started','paused')",
             [&request.source_bot_id], |r| Ok((r.get(0)?,r.get(1)?)))?;
         ensure!(global < 64 && sender < 16, "群派工容量已满 (全局 64，每成员 16)");
         let delivery = insert(&tx, request)?;
@@ -479,7 +483,8 @@ impl Store {
         if d.status == Status::Started && d.target_bot_id == bot {
             return Ok((true, vec![]));
         }
-        let changed = tx.execute("UPDATE deliveries SET status='started',started_at=?3 WHERE id=?1 AND target_bot_id=?2 AND status='claimed'",params![id,bot,now_ms()])?;
+        // 时间同时标识回合。即使系统时钟倒退，旧设备的暂停请求也不能命中新回合。
+        let changed = tx.execute("UPDATE deliveries SET status='started',started_at=MAX(?3,COALESCE(started_at+1,?3)) WHERE id=?1 AND target_bot_id=?2 AND status='claimed'",params![id,bot,now_ms()])?;
         let card = completion::card(&tx, &d)?;
         tx.commit()?;
         Ok((changed == 1, vec![card]))
@@ -510,6 +515,12 @@ impl Store {
         for delivery in changed.iter().filter(|d| d.status == Status::Started) {
             handoff::discard(&tx, delivery)?;
         }
+        // 让断线增量追赶刷新原来的任务动作和成员活动，不能只更新转录卡片。
+        let bots =
+            changed.iter().flat_map(|d| [&d.room_id, &d.target_bot_id]).collect::<std::collections::BTreeSet<_>>();
+        for id in bots {
+            super::bots::touch_bot(&tx, id)?;
+        }
         completion::cards(&tx, changed)?;
         tx.commit()?;
         Ok(())
@@ -535,7 +546,7 @@ impl Store {
             return Ok((existing, card));
         }
         if d.kind == Kind::Task {
-            let (global,sender):(i64,i64)=tx.query_row("SELECT COUNT(*),COALESCE(SUM(source_bot_id=?1),0) FROM deliveries WHERE kind='task' AND status IN ('queued','claimed','started')",[&d.source_bot_id],|r|Ok((r.get(0)?,r.get(1)?)))?;
+            let (global,sender):(i64,i64)=tx.query_row("SELECT COUNT(*),COALESCE(SUM(source_bot_id=?1),0) FROM deliveries WHERE kind='task' AND status IN ('queued','claimed','started','paused')",[&d.source_bot_id],|r|Ok((r.get(0)?,r.get(1)?)))?;
             ensure!(global < 64 && sender < 16, "群派工容量已满 (全局 64，每成员 16)");
         }
         d.parent_id = Some(d.id.clone());

@@ -26,7 +26,7 @@ import org.junit.Test
 class WorkingIndicatorTest {
     @get:Rule val compose = createComposeRule()
 
-    /** 传入当前聊天 ID，展开和收合时检查该聊天的工具步骤。 */
+    /** 在 Bot 自己的会话中展开与折叠执行步骤。 */
     @Test fun stepsUnfoldFromTheActivity() {
         compose.mainClock.autoAdvance = false
         val step = Entry("tool", 0, "bot", 1, "tool", 1, buildJsonObject { put("title", "npm test"); put("status", "in_progress") })
@@ -41,8 +41,7 @@ class WorkingIndicatorTest {
         compose.onNodeWithText("npm test").assertDoesNotExist()
     }
 
-    /** Claude's thinking text arrives as its thinking ends, so the activity unfolds before the turn has steps. */
-    /** 在当前聊天尚无步骤时检查活动入口。 */
+    /** 私聊还没有执行步骤时，也能展开思考活动。 */
     @Test fun activityUnfoldsBeforeTheTurnHasSteps() {
         compose.mainClock.autoAdvance = false
         compose.setContent { Hosted { WorkingIndicator(Bot("bot", "Bot", status = "working", activity = "Thinking…"), emptyList(), details = true, chatId = "bot") } }
@@ -52,8 +51,7 @@ class WorkingIndicatorTest {
         compose.onNodeWithText("Nothing yet.").assertIsDisplayed()
     }
 
-    /** Thinking details are off by default: the activity is a plain status line. */
-    /** 当前聊天关闭思考详情时只显示状态。 */
+    /** 隐藏思考详情时，状态行保持只读。 */
     @Test fun withoutThinkingDetailsTheActivityDoesNotUnfold() {
         compose.mainClock.autoAdvance = false
         val step = Entry("tool", 0, "bot", 1, "tool", 1, buildJsonObject { put("title", "npm test"); put("status", "in_progress") })
@@ -63,7 +61,7 @@ class WorkingIndicatorTest {
         compose.onNodeWithText("npm test").assertDoesNotExist()
     }
 
-    /** 以当前聊天 ID 渲染状态，检查更新时历史位置保持稳定。 */
+    /** 执行状态变化不应移动用户正在查看的历史位置。 */
     @Test fun activityUpdatesWithoutMovingHistory() {
         // The live orb runs a frame loop; advance motion explicitly instead of waiting for it to stop.
         compose.mainClock.autoAdvance = false

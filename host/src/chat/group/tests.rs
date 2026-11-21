@@ -18,7 +18,7 @@ fn mentions_return_only_explicit_recipients() {
     assert_eq!(ids("@all go"), ["a", "b", "c"]);
     assert_eq!(crate::chat::mentions::targets("why?", &[], &members, Some("b")).unwrap(), ["b"]);
     // 成员在校验后被移除时必须拒绝结构化提及，避免改发给负责人。
-    let stale = crate::chat::mentions::Mention { bot_id: "gone".into(), start: 0, end: 5 };
+    let stale = crate::chat::mentions::Mention { bot_id: Some("gone".into()), start: 0, end: 5, workspace_file: None };
     assert!(crate::chat::mentions::targets("@gone", &[stale], &members, None).is_err());
 }
 

@@ -243,6 +243,7 @@ public struct Hello: Codable, Sendable {
     public var stageRoster: Bool?
     public var botSessionUsage: Bool?
     public var groupSessionContexts: Bool?
+    public var workspaceFileSearch: Bool? = nil
     public var icons: [String: CustomIcon]?
     public var iconsRevision: Int64?
     public var hostId: String

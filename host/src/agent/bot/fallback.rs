@@ -118,10 +118,10 @@ impl Actor {
         }
     }
 
-    /// A message that joined the running turn (`steer`) goes with it to the next agent.
-    pub(super) fn relay_joined(&mut self, entry_id: &str, text: &str) {
+    /// 回退时带上已加入的原文；群消息仍由投递事务管理，私聊才沿用 entry ID。
+    pub(super) fn relay_joined(&mut self, entry_id: Option<&str>, text: &str) {
         if let Some(attempt) = &mut self.relay.attempt {
-            attempt.entries.push(entry_id.to_owned());
+            attempt.entries.extend(entry_id.map(str::to_owned));
             attempt.text = format!("{}\n\n{text}", attempt.text);
         }
     }
@@ -267,7 +267,12 @@ impl Actor {
 
     /// 尝试切换可用执行器；每次启动失败单独记录未知用量，不能漏记后再伪装成功。
     pub(super) async fn fall_back(&mut self, error: &anyhow::Error, done_tx: &mpsc::UnboundedSender<Done>) -> bool {
-        if self.stop_requested || self.routine_timed_out || self.compacting.is_some() || self.turn.is_none() {
+        if self.stop_requested
+            || self.routine_timed_out
+            || self.compacting.is_some()
+            || self.turn.is_none()
+            || self.delivery_held_after_pause()
+        {
             return false;
         }
         let (Some(mut reason), Some(attempt)) = (fallback::reason::of(error), self.relay.attempt.clone()) else {

@@ -16,6 +16,7 @@
     "event:bot.bot.createdBy": "string",
     "event:bot.bot.cwd": "string",
     "event:bot.bot.deleted": "bool",
+    "event:bot.bot.deliveryControls": "array",
     "event:bot.bot.description": "string",
     "event:bot.bot.devServers": "array",
     "event:bot.bot.devServers[]": "object",
@@ -37,6 +38,7 @@
     "event:bot.bot.fastModeIssue": "null",
     "event:bot.bot.fastModeSupport": "string",
     "event:bot.bot.groupLeaderId": "string",
+    "event:bot.bot.guidingDeliveryId": "null",
     "event:bot.bot.harnessMemory": "null",
     "event:bot.bot.harnessMemoryShared": "bool",
     "event:bot.bot.hidden": "bool",
@@ -252,6 +254,7 @@
     "hello.signKey": "string",
     "hello.stageGroups": "bool",
     "hello.stageRoster": "bool",
-    "hello.version": "string"
+    "hello.version": "string",
+    "hello.workspaceFileSearch": "bool"
   }
 }

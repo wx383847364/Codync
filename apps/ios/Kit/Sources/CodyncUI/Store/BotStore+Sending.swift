@@ -10,7 +10,7 @@ extension BotStore {
     }
 
     /// 每次编辑一起更新正文与绑定，碰到片段即解除其旧身份。
-    func setComposerDraft(_ text: String, for botId: String, replacing: Range<Int>? = nil) {
+    func setComposerDraft(_ text: String, for botId: String, replacing: Range<Int>? = nil, selecting: Mention? = nil) {
         guard !retired else { return }
         if text.isEmpty {
             composerPasted[botId] = nil
@@ -18,16 +18,40 @@ extension BotStore {
             composerPasted[botId, default: []].append(pasted)
         }
         composerMentions[botId] = Mention.edited(from: composerDrafts[botId] ?? "", to: text, mentions: composerMentions[botId] ?? [], replacement: replacing)
+        if let selecting {
+            composerMentions[botId, default: []].removeAll { $0.start < selecting.end && $0.end > selecting.start }
+            composerMentions[botId, default: []].append(selecting)
+        }
         composerDrafts[botId] = text.isEmpty ? nil : text
         persistComposerDrafts()
     }
 
-    /// 选择成员时把原文与身份一起存入草稿，后续改名不会重新解释这段正文。
-    func bindComposerMention(_ mention: Mention, text: String, for key: String) {
-        setComposerDraft(text, for: key)
-        composerMentions[key, default: []].removeAll { $0.start < mention.end && $0.end > mention.start }
-        composerMentions[key, default: []].append(mention)
-        persistComposerDrafts()
+    /// 选择后把原文与身份一起存入草稿，传入真实替换范围以保留尾文的绑定。
+    func bindComposerMention(_ mention: Mention, text: String, for key: String, replacing: Range<Int>? = nil) {
+        setComposerDraft(text, for: key, replacing: replacing, selecting: mention)
+    }
+
+    /// 通过当前 Host 搜索文件，避免在手机本地按远端路径读取。
+    func searchWorkspaceFiles(botId: String, query: String) async throws -> [WorkspaceFileCandidate] {
+        struct Body: Encodable { var botId: String; var query: String }
+        struct Response: Decodable { var items: [WorkspaceFileCandidate] }
+        return try await withLink { client in
+            let response: Response = try await client.call("searchWorkspaceFiles", Body(botId: botId, query: query))
+            return response.items
+        }
+    }
+
+    /// 用界面显示的回合身份请求引导，失败沿用聊天操作的错误反馈。
+    func guideDelivery(_ id: String, activeId: String) {
+        Task {
+            do {
+                // 结果通过投递卡同步，避免客户端提前显示已送达。
+                try await withLink { client in
+                    struct Body: Encodable { var deliveryId: String; var activeDeliveryId: String }
+                    let _: Empty = try await client.call("guideDelivery", Body(deliveryId: id, activeDeliveryId: activeId))
+                }
+            } catch { lastError = error.localizedDescription }
+        }
     }
 
     /// 主动重试建立新 attempt，旧卡和旧结果始终保留。
@@ -37,6 +61,24 @@ extension BotStore {
                 try await withLink { client in
                     struct Body: Encodable {var deliveryId: String}
                     let _: Empty = try await client.call("retryDelivery", Body(deliveryId: id))
+                }
+            } catch { lastError = error.localizedDescription }
+        }
+    }
+
+    /// 操作固定群内的一个任务回合，错误交给聊天已有提示。
+    func setDeliveryPaused(_ botId: String, task: GroupDeliveryControl, paused: Bool) {
+        struct Body: Encodable {
+            let botId: String
+            let deliveryId: String
+            let startedAt: Int64
+            let paused: Bool
+        }
+        // 等待 Host 的实时事件后更新按钮，避免另一设备的操作被本地覆盖。
+        Task {
+            do {
+                try await withLink { client in
+                    let _: Empty = try await client.call("setDeliveryPaused", Body(botId: botId, deliveryId: task.id, startedAt: task.startedAt, paused: paused))
                 }
             } catch { lastError = error.localizedDescription }
         }
@@ -351,13 +393,13 @@ extension BotStore {
         // The same clientNonce: if the computer got it after all, it won't run twice (the host
         // skips a nonce it has). Every seal still takes a fresh ephemeral key (§6.4).
         let sending = send(text, to: entry.botId, replyTo: entry.data.replyTo, nonce: entry.data.clientNonce ?? UUID().uuidString,
-                           files: files, pasted: entry.data.pasted ?? [], call: entry.data.call, mentions: entry.data.mentions ?? [])
+                           files: files, pasted: entry.data.pasted ?? [], call: entry.data.call, mentions: (entry.data.mentions ?? []) + (entry.data.workspaceFileReferences ?? []))
         if entry.data.status == "held", bots[entry.botId]?.stage != nil {
             // 暂存阶段请求遭到拒绝时恢复可编辑正文和选人身份，保留更新的输入。
             Task {
                 if await sending?.value == .failed, composerDraft(for: entry.botId).isEmpty {
                     composerDrafts[entry.botId] = text
-                    composerMentions[entry.botId] = entry.data.mentions
+                    composerMentions[entry.botId] = (entry.data.mentions ?? []) + (entry.data.workspaceFileReferences ?? [])
                     persistComposerDrafts()
                 }
             }

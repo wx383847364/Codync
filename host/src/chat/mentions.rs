@@ -8,9 +8,12 @@ use std::ops::Range;
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct Mention {
-    pub bot_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bot_id: Option<String>,
     pub start: usize,
     pub end: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_file: Option<super::workspace_files::Reference>,
 }
 
 /// UTF-16 边界转为字节边界；代理对内部不是合法边界。
@@ -42,7 +45,12 @@ pub fn checked(text: &str, mentions: &[Mention], members: &[String]) -> Result<V
             text[start..end].starts_with('@') && start >= leading && end <= trimmed_end,
             "提及范围失效，请重新选择成员"
         );
-        ensure!(members.contains(&m.bot_id), "提及成员已不在群内，请重新选择成员");
+        // 只接受一种身份。文件没有 botId，旧 Host 会拒绝请求而非降级成成员提及。
+        match (&m.bot_id, &m.workspace_file) {
+            (Some(id), None) => ensure!(members.contains(id), "提及成员已不在群内，请重新选择成员"),
+            (None, Some(_)) => {}
+            _ => bail!("Invalid mention identity. Choose it again."),
+        }
         previous = m.end;
         m.start -= shift;
         m.end -= shift;
@@ -165,18 +173,35 @@ fn matching_end(text: &str, start: usize, handle: &str) -> Option<usize> {
 
 /// 结构化片段按 ID 路由，其余正文接受唯一名称；未知 @ 是普通文本。
 pub fn targets(text: &str, mentions: &[Mention], members: &[BotConfig], quoted: Option<&str>) -> Result<Vec<String>> {
+    Ok(route(text, mentions, members, quoted)?.0)
+}
+
+/// 同时返回派工目标和直接 @ 的成员；广播与引用只影响派工。
+pub(super) fn route(
+    text: &str,
+    mentions: &[Mention],
+    members: &[BotConfig],
+    quoted: Option<&str>,
+) -> Result<(Vec<String>, Vec<String>)> {
     let mut mask = masked(text);
     let mut targets: Vec<String> = Vec::new();
     for m in mentions {
         // 成员可能在输入校验后离群，显式提及失效时不能改发给默认接收人。
-        ensure!(members.iter().any(|member| member.id == m.bot_id), "提及成员已不在群内，请重新选择成员");
+        if let Some(id) = &m.bot_id {
+            ensure!(members.iter().any(|member| &member.id == id), "提及成员已不在群内，请重新选择成员");
+        }
         let range: Range<usize> = byte_offset(text, m.start).ok_or_else(|| anyhow::anyhow!("invalid mention"))?
             ..byte_offset(text, m.end).ok_or_else(|| anyhow::anyhow!("invalid mention"))?;
         mask[range].fill(true);
-        if !targets.contains(&m.bot_id) {
-            targets.push(m.bot_id.clone());
+        // 文件引用占据文本范围，但不会把文件来源 Bot 加到派工目标。
+        if let Some(id) = &m.bot_id
+            && !targets.contains(id)
+        {
+            targets.push(id.clone());
         }
     }
+    let mut broadcast = false;
+    // 广播标记独立保存，避免把广播解析成对每位成员的引导。
     for (at, _) in text.match_indices('@') {
         if mask[at] {
             continue;
@@ -186,7 +211,7 @@ pub fn targets(text: &str, mentions: &[Mention], members: &[BotConfig], quoted: 
         }
         let start = at + 1;
         if matching_end(text, start, "all").is_some() || matching_end(text, start, "everyone").is_some() {
-            targets.extend(members.iter().map(|m| m.id.clone()));
+            broadcast = true;
             continue;
         }
         let mut exact = Vec::new();
@@ -219,11 +244,15 @@ pub fn targets(text: &str, mentions: &[Mention], members: &[BotConfig], quoted: 
             targets.push((*id).clone());
         }
     }
+    let direct = members.iter().filter(|m| targets.contains(&m.id)).map(|m| m.id.clone()).collect();
     if let Some(id) = quoted.filter(|id| members.iter().any(|m| m.id == *id)) {
         targets.push(id.to_owned());
     }
+    if broadcast {
+        targets.extend(members.iter().map(|m| m.id.clone()));
+    }
     // 保持成员名单顺序，重复文字或结构化提及只形成一条派发。
-    Ok(members.iter().filter(|m| targets.contains(&m.id)).map(|m| m.id.clone()).collect())
+    Ok((members.iter().filter(|m| targets.contains(&m.id)).map(|m| m.id.clone()).collect(), direct))
 }
 
 #[cfg(test)]
@@ -244,11 +273,14 @@ mod tests {
     /// UTF-16 校验拒绝切断代理对，并与正文裁剪同步换算。
     #[test]
     fn unicode_ranges_survive_trim_and_rename() {
-        let m = Mention { bot_id: "a".into(), start: 4, end: 7 };
+        let m = Mention { bot_id: Some("a".into()), start: 4, end: 7, workspace_file: None };
         let normalized = checked("  😀@旧名  ", &[m], &["a".into()]).unwrap();
         assert_eq!(normalized[0].start, 2);
         assert_eq!(normalized[0].end, 5);
         assert_eq!(byte_offset("😀", 1), None);
-        assert!(checked("@A", &[Mention { bot_id: "gone".into(), start: 0, end: 2 }], &[]).is_err());
+        assert!(
+            checked("@A", &[Mention { bot_id: Some("gone".into()), start: 0, end: 2, workspace_file: None }], &[])
+                .is_err()
+        );
     }
 }

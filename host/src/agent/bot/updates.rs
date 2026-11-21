@@ -20,7 +20,7 @@ pub(super) enum Answer {
 }
 
 impl Actor {
-    /// 只有当前 ACP 会话的审批和更新能进入当前聊天。
+    /// 只处理当前会话的更新，断连时停止提供引导入口。
     pub(super) async fn on_incoming(&mut self, inc: Option<Incoming>) {
         match inc {
             None | Some(Incoming::Closed { .. }) => {
@@ -29,6 +29,7 @@ impl Actor {
                     _ => String::new(),
                 };
                 self.conn = None;
+                self.hub.set_runtime(&self.cfg.id, |state| state.guiding_delivery_id = None);
                 // The in-flight prompt request resolves with an error; finish_turn reports it with this output.
                 self.exit_tail = Some(tail);
             }
@@ -191,8 +192,8 @@ impl Actor {
 
     /// 处理当前回合的权限请求，继续工具工作时清除尾部 pass 的回退正文。
     pub(super) async fn on_permission(&mut self, rpc_id: Value, params: Value) {
-        // 原生整理不执行工作；意外工具权限请求一律拒绝而不生成群审批卡。
-        if self.group_compaction.is_some() {
+        // 取消宽限期仍可能收到新请求。整理、暂停和已发出取消的回合都不能再获得权限。
+        if self.group_compaction.is_some() || self.stop_requested || self.delivery_held_after_pause() {
             if let Some(conn) = &self.conn {
                 let _ = conn.acp.respond(rpc_id, acp::permission_answer(None)).await;
             }
@@ -249,18 +250,22 @@ impl Actor {
         let Some(conn) = &self.conn else { return };
         let own = params["sessionId"].as_str().is_some_and(|sid| conn.loaded.contains_key(sid));
         let options = params["options"].as_array().cloned().unwrap_or_default();
-        let pick =
-            (self.group_compaction.is_none() && self.cfg.permission == Permission::Auto && own && !self.stop_requested)
-                .then(|| auto_pick(&options))
-                .flatten();
+        let pick = (self.group_compaction.is_none()
+            && self.cfg.permission == Permission::Auto
+            && own
+            && !self.stop_requested
+            && !self.delivery_held_after_pause())
+        .then(|| auto_pick(&options))
+        .flatten();
         tracing::info!(bot = %self.id(), approved = pick.is_some(), title = params["toolCall"]["title"].as_str(), "permission asked outside a turn");
         let _ = conn.acp.respond(rpc_id, acp::permission_answer(pick)).await;
     }
 
-    /// `Cmd::Approve`: Allow or Deny on a card, with what the tool will do in its details.
+    /// 给仍在运行的回合创建宿主工具审批，暂停或停止后的迟到请求直接拒绝。
     pub(super) fn ask_approval(&mut self, title: &str, detail: &str, reply: oneshot::Sender<bool>) {
-        if self.turn.is_none() {
-            return; // dropping `reply` refuses: no turn waits on it
+        if self.turn.is_none() || self.stop_requested || self.delivery_held_after_pause() {
+            let _ = reply.send(false);
+            return;
         }
         let data = json!({
             "title": title, "toolKind": "other", "command": Value::Null, "detail": detail, "diffs": [],
@@ -307,8 +312,10 @@ impl Actor {
         }
     }
 
+    /// 已暂停或停止的回合只接受取消，避免客户端迟到的批准复活工具。
     pub(super) async fn answer_permission(&mut self, entry_id: &str, option_id: Option<String>) {
         let Some(answer) = self.perms.remove(entry_id) else { return };
+        let option_id = option_id.filter(|_| !self.stop_requested && !self.delivery_held_after_pause());
         let mut status = if option_id.is_some() { "answered" } else { "cancelled" };
         match answer {
             Answer::Agent(rpc_id) => {
@@ -381,6 +388,10 @@ impl Actor {
         if self.turn.is_none() {
             anyhow::bail!("no turn is running");
         }
+        anyhow::ensure!(
+            !self.stop_requested && !self.delivery_held_after_pause(),
+            "the user paused or stopped this task"
+        );
         let target = if let Some(active) = &self.active_delivery {
             // 完整原始用户消息即使不在24条窗口内，仍是本次回答和默认回应的来源。
             let source =

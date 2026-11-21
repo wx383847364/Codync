@@ -11,7 +11,7 @@ use super::{
 };
 
 impl App {
-    /// 粘贴到当前输入字段，阶段只读状态不接受新的草稿输入。
+    /// 粘贴更新可编辑草稿，并刷新当前聊天的斜杠候选。
     pub fn on_paste(&mut self, s: &str) {
         if let Some(sh) = self.shell.as_ref().filter(|s| s.exited.is_none()) {
             let _ = sh.input.send(s.as_bytes().to_vec());
@@ -32,6 +32,7 @@ impl App {
             } else {
                 self.drafts.entry(key.clone()).or_default().insert(&s);
                 self.pasted.entry(key).or_default().push(s);
+                self.slash_typed();
             }
         }
     }
@@ -70,6 +71,7 @@ impl App {
         }
     }
 
+    /// 群任务快捷键在聊天浏览和输入时可用，打开任务列表时保留草稿。
     pub fn on_key(&mut self, k: KeyEvent) {
         if self.shell.is_some() {
             self.shell_key(k);
@@ -86,6 +88,10 @@ impl App {
         }
         if !self.overlays.is_empty() {
             self.overlay_key(k);
+            return;
+        }
+        if ctrl && k.code == KeyCode::Char('p') && self.chat_visible() && self.bot().is_some_and(|bot| bot.group) {
+            self.open_delivery_controls();
             return;
         }
         if self.typing {
@@ -123,6 +129,8 @@ impl App {
         match k.code {
             KeyCode::Esc => self.typing = false,
             KeyCode::Enter if newline => draft.insert("\n"),
+            // 长按确认只选中一次，候选关闭后的重复事件不会发送消息。
+            KeyCode::Enter if k.kind == crossterm::event::KeyEventKind::Repeat => {}
             KeyCode::Char('j') if ctrl => draft.insert("\n"),
             KeyCode::Enter => {
                 let text = draft.text.clone();
@@ -375,7 +383,7 @@ impl App {
             KeyCode::Char('N') => self.open_network(),
             KeyCode::Char('s') => {
                 if let Some(b) = self.bot() {
-                    if matches!(b.status, Status::Working | Status::NeedsInput) {
+                    if matches!(b.status, Status::Working | Status::NeedsInput) || !b.delivery_controls.is_empty() {
                         let id = b.id.clone();
                         self.call("stop", json!({"botId": id}), After::Nothing);
                         self.flash("Stopping…");
@@ -463,6 +471,7 @@ impl App {
                     }
                     Some(Click::Composer) => self.start_typing(),
                     Some(Click::Steps) => self.toggle_steps(),
+                    Some(Click::DeliveryControl(room, task)) => self.toggle_delivery(&room, &task),
                     Some(Click::BotChat(entry)) => self.open_bot_chat(&entry),
                     Some(Click::DevServers) => self.open_dev_servers(),
                     Some(Click::GroupContexts) => self.open_group_contexts(),

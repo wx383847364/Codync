@@ -173,6 +173,9 @@ Store privacy label declares *Product Interaction* and *Coarse Location*, linked
 for tracking (the same two in `apps/ios/Resources/PrivacyInfo.xcprivacy`).
 
 Group delivery events: `group_delivery_accepted` (`kind`, `source`, target count or
-`keyed`), `group_delivery_finished` (`outcome`), `group_delivery_storage` (`outcome`,
-`category`), and `group_mention_rejected` (`category`). These never include message
+`keyed`), `group_delivery_finished` (`outcome`), `group_delivery_control` (`action`,
+`outcome`, and a coarse `category` on errors), `group_delivery_storage` (`outcome`,
+`category`), and `group_mention_rejected` (`category`).. The existing
+`message_steered` event reports the adapter, outcome and `source` (`private` or `group`).
+These never include message
 text, prompts, names, bot/delivery IDs, keys or file content.

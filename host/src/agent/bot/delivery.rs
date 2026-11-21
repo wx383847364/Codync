@@ -1,7 +1,7 @@
 //! 投递 turn 的执行和结果保存。房间等待超时不丢弃在途结果。
 
 use super::{Actor, Done, SegKind};
-use crate::store::deliveries::{Delivery, Status, handoff::Phase};
+use crate::store::deliveries::{Delivery, Guidance, Status, handoff::Phase};
 use crate::store::{Lane, group_session_slot};
 use anyhow::{Result, ensure};
 use std::collections::HashMap;
@@ -24,6 +24,8 @@ pub(super) struct ActiveDelivery {
     pending_tools: HashMap<String, String>,
     /// 当前 prompt 确实展示的消息 ID；序号上界不能代表全部历史已读。
     pub shown_entries: Vec<String>,
+    /// 引导来源的独立终态和原投递在同一事务提交。
+    pub guidance: Vec<(String, Guidance)>,
     pub reply: oneshot::Sender<bool>,
 }
 
@@ -107,6 +109,18 @@ pub(super) struct PendingCompletion {
 }
 
 impl Actor {
+    /// 以数据库状态识别用户暂停，继续请求可能已排队，但当前回合仍是旧执行。
+    pub(super) fn delivery_held_after_pause(&self) -> bool {
+        let Some(active) = &self.active_delivery else { return false };
+        match self.hub.store.delivery(&active.delivery.id) {
+            Ok(delivery) => delivery.is_some_and(|delivery| delivery.held_after_pause()),
+            Err(error) => {
+                tracing::warn!(%error, "could not check whether the active delivery was paused");
+                false
+            }
+        }
+    }
+
     /// 新工具或审批之后出现 pass 时，不能把此前的进度提升为结果。
     pub(super) fn close_seg_for_work(&mut self) {
         self.close_seg();
@@ -289,6 +303,7 @@ impl Actor {
                     output_crossed_work: false,
                     pending_tools: HashMap::new(),
                     shown_entries: Vec::new(),
+                    guidance: Vec::new(),
                 });
                 match prepared {
                     Ok(prepared) => {
@@ -409,6 +424,7 @@ impl Actor {
             pending.text.as_deref(),
             pending.detail.as_deref(),
             pending.turn,
+            &pending.active.guidance,
         ) {
             Ok(()) => {
                 let pending = self.pending_completion.take().expect("completion retained until commit");

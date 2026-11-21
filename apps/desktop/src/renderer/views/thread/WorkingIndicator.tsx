@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import { needsInput, type Bot, type Entry } from '@shared/models'
 import { Reveal } from '../../components/Controls'
 import { Icon } from '../../components/Icon'
@@ -12,7 +12,7 @@ import { TraceRow } from './TraceView'
 import { workingSteps } from './trace-turns'
 
 /** 展示当前活动和用时，开启思考详情时可展开这次执行的步骤。 */
-export function WorkingIndicator({ bot, entries, group }: { bot: Bot; entries: Entry[]; group: boolean }) {
+export function WorkingIndicator({ bot, entries, group, action }: { bot: Bot; entries: Entry[]; group: boolean; action?: ReactNode }) {
   const tr = useTr()
   const [details] = usePref(prefs.thinkingDetails)
   const waiting = needsInput(bot)
@@ -40,14 +40,16 @@ export function WorkingIndicator({ bot, entries, group }: { bot: Bot; entries: E
   )
   return (
     <VStack align="flex-start" className={group ? 'group-working-member' : 'agent-inset'}>
-      <div className={open ? 'working expanded' : 'working'}>
-        {details ? (
-          <button className="working-toggle" onClick={() => setExpanded((x) => !x)} aria-expanded={open} title={tr(open ? 'Hide steps' : 'Show steps')}>
-            {status}
-          </button>
-        ) : (
-          status
-        )}
+      <div className={`working${open ? ' expanded' : ''}${action ? ' working-with-action' : ''}`} role={action ? 'group' : undefined} aria-label={action ? bot.name : undefined}>
+        <HStack className="working-action-row" gap={action ? 4 : 0} align="center">
+          {details ? (
+            // 展开步骤和暂停执行是两个独立控件。
+            <button className="working-toggle" onClick={() => setExpanded((x) => !x)} aria-expanded={open} title={tr(open ? 'Hide steps' : 'Show steps')}>
+              {status}
+            </button>
+          ) : status}
+          {action}
+        </HStack>
         <Reveal show={open}>
           <WorkingSteps entries={entries} member={member ? bot : undefined} />
         </Reveal>

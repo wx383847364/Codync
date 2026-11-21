@@ -148,6 +148,13 @@ def prompt(request):
         log.write(json.dumps(text) + "\n")
     with open("prompt-requests.jsonl", "a") as log:
         log.write(json.dumps(request["params"]) + "\n")
+    # 文件引用 E2E 直接读取 Host 提交的路径，并把选中的文件内容回给真实客户端。
+    if re.search(r"(?m)^READ_WORKSPACE_FILE ", text):
+        attached = re.search(r"(?m)^\[Attached files — read them from these paths\]\n- (.+)$", text)
+        reply = pathlib.Path(attached[1]).read_text(encoding="utf-8") if attached else "Workspace file path missing"
+        update({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": reply}})
+        send({"id": request["id"], "result": {"stopReason": "end_turn"}})
+        return
     # 原生维护必须先分流，不能把 /compact 算成普通群接力或用户回复。
     if text.startswith("/compact") and pathlib.Path("group-compact.json").exists():
         compact(request)
@@ -266,6 +273,17 @@ def prompt(request):
         while "BLOCK" in text and not pathlib.Path("release").exists() and not cancel.wait(0.01):
             pass
         if cancel.is_set():
+            # 测试专用：模拟代理在处理取消时迟到的权限请求，并保持回合打开供工具 API 校验。
+            if pathlib.Path("permission-after-cancel").exists():
+                send({"id": "permission", "method": "session/request_permission", "params": {
+                    "sessionId": prompt_session.id,
+                    "toolCall": {"toolCallId": "late-permission", "title": "Late permission"},
+                    "options": [{"optionId": "allow", "name": "Allow", "kind": "allow_once"}],
+                }})
+                assert permission.wait(5), "late permission was not denied"
+                pathlib.Path("cancel-permission.json").write_text(json.dumps(permission_reply))
+                while not pathlib.Path("cancel-release").exists():
+                    time.sleep(0.01)
             send({"id": request["id"], "result": {"stopReason": "cancelled"}})
             return
         # 群内真实MCP接力：配置只决定夹具行为，不替代host的来源上下文。

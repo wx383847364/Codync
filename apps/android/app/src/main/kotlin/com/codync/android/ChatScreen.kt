@@ -244,9 +244,15 @@ private fun AppState.chatEntries(bot: Bot) = entries.filter { it.botId == bot.id
         // 私聊与其他群的执行状态不进入本群。
         it.isWorking(bot.id)
     } else emptyList()
+    val controls = if (state.connection is LinkState.Ready) bot.deliveryControls else emptyList()
+    val held = controls.filter { it.status != "started" }
     val active = when {
         state.connection !is LinkState.Ready -> emptyList()
-        members.isNotEmpty() -> members
+        members.isNotEmpty() -> members.filter { member ->
+            // 取消尚未结束时用任务的暂停状态替换旧活动。
+            controls.any { it.status == "started" && it.targetBotId == member.id } ||
+                held.none { it.targetBotId == member.id && (member.startedAt ?: Long.MAX_VALUE) <= it.startedAt }
+        }
         // 只显示没有来源 lane 的调度汇总，忽略刚结束成员的旧投影。
         bot.isWorking(bot.id) && (!group || bot.workingChat == null) -> listOf(bot)
         else -> emptyList()
@@ -254,7 +260,8 @@ private fun AppState.chatEntries(bot: Bot) = entries.filter { it.botId == bot.id
     val more = bot.id !in state.historyComplete
     val details by ThinkingDetails.enabled.collectAsStateWithLifecycle()
     // Pull to refresh reconnects, like Reconnect in the roster's computer menu, until the link is back.
-    ConversationList(items.lastOrNull()?.id, entries.lastOrNull()?.rev, active.isNotEmpty(), padding, store::refreshConnection, indicatorTop) {
+    val showActivity = active.isNotEmpty() || held.isNotEmpty()
+    ConversationList(items.lastOrNull()?.id, entries.lastOrNull()?.rev, showActivity, padding, store::refreshConnection, indicatorTop) {
         if (more) item("earlier") {
             Box(Modifier.fillMaxWidth().padding(vertical = 14.dp).clearAndSetSemantics { contentDescription = "Loading earlier messages" },
                 contentAlignment = Alignment.Center) { Spinner(14.dp) }
@@ -287,14 +294,20 @@ private fun AppState.chatEntries(bot: Bot) = entries.filter { it.botId == bot.id
                 is ChatItem.Exchanges -> BotMessageRow(item.group, state) { openPeer(item.group.peerId) }
             }
         }
-        if (active.isNotEmpty()) item("working") {
+        if (showActivity) item("working") {
             // 群标签按成员顺序排列，宽度不足时换行；私聊仍显示单个标签。
             FlowRow(Modifier.fillMaxWidth().padding(top = 6.dp, end = 40.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 for (actor in active) key(actor.id) {
                     // 展开时才扫描记录，折叠标签只读取状态和用时。
-                    WorkingIndicator(actor, state.entries, details, chatId = bot.id)
+                    val task = controls.firstOrNull { it.status == "started" && it.targetBotId == actor.id }
+                    val pause = task?.let { run ->
+                        // 暂停只发送当前任务身份，不改变群里其他运行行。
+                        { store.setDeliveryPaused(bot.id, run, paused = true) }
+                    }
+                    WorkingIndicator(actor, state.entries, details, chatId = bot.id, pause = pause)
                 }
+                for (task in held) key(task.deliveryId) { HeldDeliveryRow(bot, task, state, store) }
             }
         }
     }

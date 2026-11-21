@@ -121,8 +121,8 @@ fn stage_returns_only_requested_final_results_once() {
         } else {
             format!("delivery-result-{}", delivery.id)
         };
-        s.complete_delivery(&delivery.id, status, text, None, 1).unwrap();
-        s.complete_delivery(&delivery.id, status, text, None, 1).unwrap();
+        s.complete_delivery(&delivery.id, status, text, None, 1, &[]).unwrap();
+        s.complete_delivery(&delivery.id, status, text, None, 1, &[]).unwrap();
         let queued = s.queued_deliveries("g").unwrap();
         assert_eq!(queued.len(), expected);
         if let Some(next) = queued.first() {
@@ -142,10 +142,44 @@ fn recovery_preserves_queued_and_interrupts_started() {
     s.claim_delivery(&rows[0].id, "a").unwrap();
     s.claim_delivery(&rows[1].id, "b").unwrap();
     s.start_delivery(&rows[1].id, "b").unwrap();
+    let cursor = s.current_rev();
     s.recover_deliveries().unwrap();
     assert_eq!(s.delivery(&rows[0].id).unwrap().unwrap().status, Status::Queued);
     assert_eq!(s.delivery(&rows[1].id).unwrap().unwrap().status, Status::Interrupted);
     assert_eq!(s.queued_deliveries("g").unwrap().len(), 2);
+    // 恢复会在追赶游标之后发布群和原执行成员，清除旧操作按钮及活动。
+    assert!(s.bot("g").unwrap().unwrap().rev > cursor);
+    assert!(s.bot("b").unwrap().unwrap().rev > cursor);
+}
+
+/// 明确未注入的引导保持原排队顺序，结果未知的引导保留为手动恢复项。
+#[test]
+fn group_guidance_keeps_queue_order_and_avoids_replay_when_uncertain() {
+    let s = store();
+    for text in ["current", "@a defer", "@a uncertain", "@a normal"] {
+        s.post_group("g", &json!({"text":text, "directMentions":["a"]}), &["a".into()]).unwrap();
+    }
+    let rows = s.queued_deliveries("g").unwrap();
+    let (active, deferred, uncertain, normal) = (&rows[0].id, &rows[1].id, &rows[2].id, &rows[3].id);
+    s.claim_delivery(active, "a").unwrap();
+    s.start_delivery(active, "a").unwrap();
+    s.start_guidance(deferred, active, "a").unwrap();
+    s.start_guidance(uncertain, active, "a").unwrap();
+    assert_eq!(s.queued_deliveries("g").unwrap().len(), 1);
+    s.complete_delivery(
+        active,
+        Status::Completed,
+        Some("done"),
+        None,
+        1,
+        &[(deferred.clone(), Guidance::Deferred), (uncertain.clone(), Guidance::Uncertain)],
+    )
+    .unwrap();
+    let queued = s.queued_deliveries("g").unwrap().into_iter().map(|d| d.id).collect::<Vec<_>>();
+    assert_eq!(queued, [deferred.clone(), normal.clone()]);
+    let row = s.delivery(uncertain).unwrap().unwrap();
+    assert_eq!(row.status, Status::Interrupted);
+    assert!(row.last_error.unwrap().contains("结果不确定"));
 }
 
 /// 幂等重传优先于满额判断，同键不同正文不会读出另一项任务。
@@ -187,10 +221,90 @@ fn claim_and_late_completion_are_conditional() {
     assert!(s.claim_delivery(&d.id, "a").unwrap().0.is_none());
     s.start_delivery(&d.id, "a").unwrap();
     s.cancel_deliveries("g", None, "stop").unwrap();
-    let entries = s.complete_delivery(&d.id, Status::Completed, Some("@b do it"), None, 1).unwrap();
+    let entries = s.complete_delivery(&d.id, Status::Completed, Some("@b do it"), None, 1, &[]).unwrap();
     assert_eq!(s.delivery(&d.id).unwrap().unwrap().status, Status::Cancelled);
     assert!(s.queued_deliveries("g").unwrap().is_empty());
     assert!(entries.iter().filter(|e| e.kind == "agent").all(|e| e.data["final"] == false));
+}
+
+/// 暂停当前回合后，引导必须退出执行态且不能自动重复已接受的输入。
+#[test]
+fn pausing_settles_guidance_without_replaying_accepted_messages() {
+    for (outcome, expected) in [
+        (Guidance::Joined, Status::Interrupted),
+        (Guidance::Deferred, Status::Queued),
+        (Guidance::Uncertain, Status::Interrupted),
+    ] {
+        let s = store();
+        s.post_group("g", &json!({"text":"@a original"}), &["a".into()]).unwrap();
+        let original = s.queued_deliveries("g").unwrap().remove(0);
+        s.claim_delivery(&original.id, "a").unwrap();
+        s.start_delivery(&original.id, "a").unwrap();
+        s.post_group("g", &json!({"text":"@a guidance","directMentions":["a"]}), &["a".into()]).unwrap();
+        let guide = s.queued_deliveries("g").unwrap().remove(0);
+        s.start_guidance(&guide.id, &original.id, "a").unwrap();
+        // 引导共用原任务的执行，既不显示第二个暂停按钮，也拒绝伪造的独立暂停。
+        let controls = s.group_delivery_controls("g").unwrap();
+        assert_eq!(controls.len(), 1);
+        assert_eq!(controls[0].delivery_id, original.id);
+        let guide_started = s.delivery(&guide.id).unwrap().unwrap().started_at.unwrap();
+        assert!(s.set_delivery_paused("g", &guide.id, guide_started, true).unwrap().is_none());
+        let started = s.delivery(&original.id).unwrap().unwrap().started_at.unwrap();
+        s.set_delivery_paused("g", &original.id, started, true).unwrap();
+        let updates = s
+            .complete_delivery(&original.id, Status::Interrupted, None, None, 1, &[(guide.id.clone(), outcome)])
+            .unwrap();
+        assert!(!updates.is_empty());
+        assert_eq!(s.delivery(&original.id).unwrap().unwrap().status, Status::Paused);
+        assert_eq!(s.delivery(&guide.id).unwrap().unwrap().status, expected);
+        assert!(updates.iter().all(|entry| entry.data["final"] != true));
+    }
+}
+
+/// 暂停可跨恢复保留，快速继续、迟到回合与重传都不能改变其他任务。
+#[test]
+fn pausing_and_resuming_keeps_the_delivery_and_rejects_stale_actions() {
+    let s = store();
+    for (target, text) in [("a", "original task"), ("b", "independent task")] {
+        s.post_group("g", &json!({"text":text}), &[target.into()]).unwrap();
+    }
+    let rows = s.queued_deliveries("g").unwrap();
+    let (first, second) = (&rows[0], &rows[1]);
+    for row in &rows {
+        assert!(s.claim_delivery(&row.id, &row.target_bot_id).unwrap().0.is_some());
+        assert!(s.start_delivery(&row.id, &row.target_bot_id).unwrap().0);
+    }
+    let started_at = s.delivery(&first.id).unwrap().unwrap().started_at.unwrap();
+    assert!(s.set_delivery_paused("another group", &first.id, started_at, true).is_err());
+    assert!(s.set_delivery_paused("g", &first.id, started_at, true).unwrap().is_some());
+    assert!(s.set_delivery_paused("g", &first.id, started_at, true).unwrap().is_none());
+    assert_eq!(s.delivery(&second.id).unwrap().unwrap().status, Status::Started);
+    s.complete_delivery(&second.id, Status::Completed, Some("other result"), None, 2, &[]).unwrap();
+
+    s.recover_deliveries().unwrap();
+    let controls = s.group_delivery_controls("g").unwrap();
+    assert_eq!(controls.len(), 1);
+    assert_eq!(
+        (&*controls[0].delivery_id, &*controls[0].status, &*controls[0].preview),
+        (&*first.id, "paused", "original task")
+    );
+    assert!(s.queued_deliveries("g").unwrap().is_empty());
+    assert!(s.set_delivery_paused("g", &first.id, started_at, false).unwrap().is_some());
+    assert!(s.set_delivery_paused("g", &first.id, started_at, false).unwrap().is_none());
+    assert!(
+        s.complete_delivery(&first.id, Status::Completed, Some("@c late result"), None, 1, &[]).unwrap().is_empty()
+    );
+    let queued = s.queued_deliveries("g").unwrap();
+    assert_eq!(queued.len(), 1);
+    assert_eq!((&queued[0].id, queued[0].room_seq, queued[0].attempt), (&first.id, first.room_seq, first.attempt));
+    s.claim_delivery(&first.id, "a").unwrap();
+    assert!(s.start_delivery(&first.id, "a").unwrap().0);
+    assert!(s.delivery(&first.id).unwrap().unwrap().started_at.unwrap() > started_at);
+    assert!(s.set_delivery_paused("g", &first.id, started_at, true).unwrap().is_none());
+    assert_eq!(s.delivery(&first.id).unwrap().unwrap().status, Status::Started);
+    let entries = s.complete_delivery(&first.id, Status::Completed, Some("resumed result"), None, 3, &[]).unwrap();
+    assert!(entries.iter().any(|entry| entry.data["text"] == "resumed result" && entry.data["final"] == true));
+    assert!(s.group_delivery_controls("g").unwrap().is_empty());
 }
 
 /// 同一批次超过十次仍可继续领取；两个不同 ID 的并发领取均保留。
@@ -313,7 +427,7 @@ fn delivery_crash_worker() {
         s.start_delivery(&d.id, "a").unwrap();
     }
     if phase == "completed" {
-        s.complete_delivery(&d.id, Status::Completed, Some("saved result"), None, 1).unwrap();
+        s.complete_delivery(&d.id, Status::Completed, Some("saved result"), None, 1, &[]).unwrap();
     }
     std::fs::write(std::path::Path::new(&dir).join("ready"), &d.id).unwrap();
     loop {
@@ -417,10 +531,11 @@ fn delivery_results_keep_only_the_still_open_source_call() {
         s.claim_delivery(&d.id, &d.target_bot_id).unwrap();
         s.start_delivery(&d.id, &d.target_bot_id).unwrap();
     }
-    let entries = s.complete_delivery(&deliveries[0].id, Status::Completed, Some("spoken reply"), None, 1).unwrap();
+    let entries =
+        s.complete_delivery(&deliveries[0].id, Status::Completed, Some("spoken reply"), None, 1, &[]).unwrap();
     assert_eq!(entries.iter().find(|entry| entry.kind == "agent").unwrap().data["call"], "voice-1");
     s.kv_set("call.ended.voice-1", "1").unwrap();
-    let entries = s.complete_delivery(&deliveries[1].id, Status::Completed, Some("after call"), None, 1).unwrap();
+    let entries = s.complete_delivery(&deliveries[1].id, Status::Completed, Some("after call"), None, 1, &[]).unwrap();
     assert!(entries.iter().find(|entry| entry.kind == "agent").unwrap().data["call"].is_null());
 }
 
@@ -474,6 +589,7 @@ fn mixed_group_handoffs_continue_until_the_result_is_handed_to_the_user() {
                 Some("交付：实现与复核完成，请用户确认结果。"),
                 None,
                 1,
+                &[],
             )
             .unwrap();
             break;
@@ -491,7 +607,7 @@ fn mixed_group_handoffs_continue_until_the_result_is_handed_to_the_user() {
             task.body = Some("继续修改并复核".into());
             s.enqueue_task(&task).unwrap();
         }
-        s.complete_delivery(&current.id, Status::Completed, Some(&format!("@{target} 继续修改并复核")), None, 1)
+        s.complete_delivery(&current.id, Status::Completed, Some(&format!("@{target} 继续修改并复核")), None, 1, &[])
             .unwrap();
         let queued = s.queued_deliveries("g").unwrap();
         assert_eq!(queued.len(), 1, "每次只产生一份后续派工");
