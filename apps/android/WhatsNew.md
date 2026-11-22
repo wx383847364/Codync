@@ -7,7 +7,7 @@ released version's section; a version without one gets the PRs' "What's New: And
 else a generic "Bug fixes and improvements" line. Delete old sections.
 -->
 
-## 2.48.0
+## 2.50.0
 
 ### zh-Hant
 - 可用新機器人開啟獨立群組任務，或建立下一階段並按需查閱上一階段的聊天與交接。
