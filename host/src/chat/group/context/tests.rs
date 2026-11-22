@@ -489,3 +489,79 @@ async fn group_history_rechecks_foreign_cursors_source_membership_and_cancelled_
     f.hub.store.cancel_deliveries("g", Some("b"), "测试取消").unwrap();
     assert!(f.read(&next, args).await.is_err(), "已取消执行不可续页");
 }
+
+/// 预览只提示可回查，实际调用才读上一阶段原文，并逐页检查范围和权限。
+#[tokio::test]
+async fn previous_stage_reads_only_its_frozen_visible_source_on_demand() {
+    let f = Fixture::new();
+    let store = &f.hub.store;
+    let source = Lane::main("other");
+    let write = |kind, text| {
+        // 候选数据来自真实消息表，可区分正文、隐藏记录和创建后的变更。
+        store.insert_entry(&source, kind, 0, &json!({"text": text})).unwrap()
+    };
+    let prior = write(EntryKind::User, "PREVIOUS_REFERENCE exact decision 2");
+    let edited = write(EntryKind::User, "PREVIOUS_REFERENCE previous edit");
+    let hidden = write(EntryKind::Thought, "PREVIOUS_REFERENCE hidden");
+    let room = uuid::Uuid::new_v4().to_string();
+    let mut current = store.bot("g").unwrap().unwrap().config;
+    current.id.clone_from(&room);
+    let snapshot =
+        crate::chat::files::snapshot_bytes(&crate::chat::files::root(&room), "handoff.md", b"ACCEPTED_HANDOFF_MARKER")
+            .unwrap();
+    current.stage = Some(
+        serde_json::from_value(json!({
+            "leaderId":"b", "goal":"", "acceptance":"", "ownedMembers":["b"], "incoming":snapshot.meta,
+            "previous":{"roomId":"other","name":"Previous","cutoffRev":store.current_rev()}
+        }))
+        .unwrap(),
+    );
+    store.save_bot(&current).unwrap();
+    let late = write(EntryKind::User, "PREVIOUS_REFERENCE late");
+    store.update_entry(&edited.id, &json!({"text":"PREVIOUS_REFERENCE late edit"})).unwrap();
+    let local = f.hub.post_group(&room, &json!({"text":"Implement the current change"}), &["b".into()]).unwrap();
+    let delivery = store.queued_deliveries(&room).unwrap().remove(0);
+    f.activate(&delivery);
+
+    let prompt = delivery_prompt(&f.hub, &delivery, &f.member()).unwrap().prompt;
+    assert!(prompt.contains("scope=previousStage"));
+    assert!(!prompt.contains("PREVIOUS_REFERENCE"));
+    assert!(!prompt.contains("ACCEPTED_HANDOFF_MARKER"));
+    assert!(local.data.get("stageHandoff").is_none());
+    let schema =
+        crate::chat::memory::tools().as_array().unwrap().iter().find(|tool| tool["name"] == "search_history").unwrap()
+            ["inputSchema"]
+            .clone();
+    assert!(schema["properties"]["kind"]["enum"].as_array().unwrap().contains(&json!("handoff")));
+    let list = f.read(&delivery, json!({"scope":"previousStage","query":"PREVIOUS_REFERENCE"})).await.unwrap();
+    assert_eq!(list["results"].as_array().unwrap().len(), 1);
+    assert_eq!(list["results"][0]["id"], prior.id);
+    let page = f.read(&delivery, json!({"scope":"previousStage","entryId":prior.id,"limit":9})).await.unwrap();
+    assert_eq!(page["text"], "PREVIOUS_");
+    assert_eq!(page["referenceOnly"], true);
+    let second = f
+        .read(
+            &delivery,
+            json!({"scope":"previousStage","entryId":prior.id,
+        "offset":page["nextOffset"],"version":page["version"]}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(second["text"], "REFERENCE exact decision 2");
+    for id in [&local.id, &late.id, &edited.id, &hidden.id] {
+        assert!(f.read(&delivery, json!({"scope":"previousStage","entryId":id})).await.is_err());
+        assert!(f.read(&delivery, json!({"scope":"previousStage","from":id})).await.is_err());
+    }
+    assert!(f.read(&delivery, json!({"scope":"previousStage","roomId":"g"})).await.is_err());
+    assert_eq!(
+        f.read(&delivery, json!({"scope":"previousStage","kind":"handoff"})).await.unwrap()["text"],
+        "ACCEPTED_HANDOFF_MARKER"
+    );
+    store.delete_bot("other").unwrap();
+    assert!(f.read(&delivery, json!({"scope":"previousStage","query":"PREVIOUS_REFERENCE"})).await.is_err());
+    let after_delete = f.read(&delivery, json!({"scope":"previousStage","kind":"handoff"})).await.unwrap();
+    assert_eq!(after_delete["text"], "ACCEPTED_HANDOFF_MARKER");
+    current.members.retain(|member| member != "b");
+    store.save_bot(&current).unwrap();
+    assert!(f.read(&delivery, json!({"scope":"previousStage","kind":"handoff"})).await.is_err());
+}

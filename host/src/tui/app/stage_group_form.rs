@@ -4,8 +4,16 @@ use super::{After, App, Bot, Editor, Overlay};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use serde_json::{Value, json};
 
+/// 表单模式记录独立任务或旧版阶段的来源状态。
+enum TaskGroupMode {
+    Independent,
+    Stage { from_stage: bool },
+}
+
 pub struct StageGroupForm {
     source: String,
+    pub source_name: String,
+    mode: TaskGroupMode,
     request_id: String,
     pub name: Editor,
     pub goal: Editor,
@@ -15,7 +23,6 @@ pub struct StageGroupForm {
     pub cursor: usize,
     pub field: usize,
     pub leader: Option<String>,
-    pub from_stage: bool,
     pub handoff: Option<crate::chat::files::SharedFile>,
     pub use_handoff: bool,
     pub saving: bool,
@@ -30,9 +37,20 @@ pub struct StageRole {
     pub project: Option<String>,
     pub reuse_project: bool,
     pub shared_memory: bool,
+    pub restriction: Option<&'static str>,
 }
 
 impl StageGroupForm {
+    /// 独立任务有独立名称及角色选择，不显示阶段字段。
+    pub(in crate::tui) fn independent(&self) -> bool {
+        matches!(self.mode, TaskGroupMode::Independent)
+    }
+
+    /// 旧版阶段表单按来源类型决定是否强制交接。
+    pub(in crate::tui) fn from_stage(&self) -> bool {
+        matches!(self.mode, TaskGroupMode::Stage { from_stage: true })
+    }
+
     /// 粘贴写入当前文本字段，搜索和角色说明独立。
     pub(super) fn editor(&mut self) -> Option<&mut Editor> {
         match self.field {
@@ -126,23 +144,45 @@ impl App {
 
     /// 保留来源群的成员顺序，用户选择所需角色和负责人。
     pub(super) fn open_stage_group(&mut self) {
-        let Some(source) = self.stage_source() else { return };
+        self.open_task_group(false);
+    }
+
+    /// 独立会话预选来源角色，也允许从可见机器人复用角色配置。
+    pub(super) fn open_task_group(&mut self, independent: bool) {
+        let Some(source) =
+            (if independent { self.selected_group_id().and_then(|id| self.bots.get(id)) } else { self.stage_source() })
+        else {
+            return;
+        };
         let roles = source
             .members
             .iter()
             .filter_map(|id| self.bots.get(id))
+            .chain(
+                self.bots
+                    .values()
+                    .filter(|bot| independent && !bot.group && !bot.hidden && !source.members.contains(&bot.id)),
+            )
             .map(|bot| StageRole {
                 id: bot.id.clone(),
                 source_rev: bot.rev,
                 instructions: Editor::with(&bot.description),
-                selected: false,
+                selected: independent && source.members.contains(&bot.id),
                 project: (!bot.managed_workspace && !bot.cwd.is_empty()).then(|| bot.cwd.clone()),
                 reuse_project: false,
                 shared_memory: bot.stage_memory_shared,
+                restriction: (bot.task_role_copyable == Some(false))
+                    .then_some("Custom launch commands cannot be copied. Choose a standard agent role."),
             })
             .collect();
         self.overlays.push(Overlay::StageGroup(Box::new(StageGroupForm {
             source: source.id.clone(),
+            source_name: source.name.clone(),
+            mode: if independent {
+                TaskGroupMode::Independent
+            } else {
+                TaskGroupMode::Stage { from_stage: source.stage.is_some() }
+            },
             request_id: uuid::Uuid::new_v4().to_string(),
             name: Editor::default(),
             goal: Editor::default(),
@@ -151,15 +191,14 @@ impl App {
             roles,
             cursor: 0,
             field: 0,
-            leader: None,
-            from_stage: source.stage.is_some(),
+            leader: if independent { source.group_leader().map(str::to_owned) } else { None },
             handoff: source
                 .stage
                 .as_ref()
                 .and_then(|stage| stage.handoff.as_ref())
-                .filter(|handoff| handoff.accepted_at.is_some())
+                .filter(|handoff| !independent && handoff.accepted_at.is_some())
                 .map(|handoff| handoff.file.clone()),
-            use_handoff: false,
+            use_handoff: !independent && self.task_group_contexts,
             saving: false,
             error: None,
         })));
@@ -178,10 +217,18 @@ impl App {
         }
         match key.code {
             KeyCode::Esc => return None,
-            KeyCode::Tab => form.field = (form.field + 1) % 7,
-            KeyCode::BackTab => form.field = (form.field + 6) % 7,
+            KeyCode::Tab | KeyCode::BackTab => {
+                // 独立任务不显示阶段字段，键盘焦点直接跨过它们。
+                let step = if key.code == KeyCode::Tab { 1 } else { 6 };
+                form.field = (form.field + step) % 7;
+                while form.independent() && matches!(form.field, 4 | 5) {
+                    form.field = (form.field + step) % 7;
+                }
+            }
             KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => self.save_stage_group(&mut form),
-            KeyCode::F(2) if form.handoff.is_some() => form.use_handoff = !form.use_handoff,
+            KeyCode::F(2) if !self.task_group_contexts && form.handoff.is_some() => {
+                form.use_handoff = !form.use_handoff;
+            }
             KeyCode::Enter if form.field == 1 => form.field = 2,
             KeyCode::Up | KeyCode::Down if form.field == 2 => {
                 let row = current
@@ -235,7 +282,7 @@ impl App {
         let valid = !form.name.text.trim().is_empty()
             && (self.group_member_picker
                 || [&form.goal, &form.acceptance].iter().all(|field| !field.text.trim().is_empty()));
-        if !self.optional_stage_setup && (!valid || form.leader.is_none()) {
+        if !form.independent() && !self.optional_stage_setup && (!valid || form.leader.is_none()) {
             form.error = Some(
                 if self.group_member_picker {
                     "Enter a stage name and choose a lead."
@@ -246,8 +293,12 @@ impl App {
             );
             return;
         }
-        if !self.optional_stage_setup && form.from_stage && !form.use_handoff {
+        if !form.independent() && !self.optional_stage_setup && form.from_stage() && !form.use_handoff {
             form.error = Some("Review and accept a handoff in Stage details first.".into());
+            return;
+        }
+        if let Some(reason) = form.roles.iter().filter(|role| role.selected).find_map(|role| role.restriction) {
+            form.error = Some(reason.into());
             return;
         }
         let roles: Vec<_> = form
@@ -262,13 +313,17 @@ impl App {
         }
         form.saving = true;
         form.error = None;
-        self.call(
-            "createStageGroup",
-            json!({
+        let mut draft = json!({
                 "botId":form.source, "requestId":form.request_id, "name":form.name.text, "goal":form.goal.text,
                 "acceptance":form.acceptance.text, "leaderId":form.leader.as_deref().unwrap_or_default(), "roles":roles,
                 "handoffVersion":form.handoff.as_ref().filter(|_| form.use_handoff).map(|file| &file.id)
-            }),
+        });
+        if !form.independent() && self.task_group_contexts {
+            draft["referencePrevious"] = json!(true);
+        }
+        self.call(
+            if form.independent() { "createGroupSession" } else { "createStageGroup" },
+            draft,
             After::StageGroupCreated,
         );
     }

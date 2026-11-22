@@ -6,11 +6,13 @@ public struct StageGroupView: View {
     @Environment(BotStore.self) private var store
     @Environment(\.dismissModal) private var dismiss
     let group: Bot
+    private let independent: Bool
     @State private var requestId = UUID()
     @State private var name = ""
     @State private var goal = ""
     @State private var acceptance = ""
     @State private var leaderId: String?
+    @State private var initialized = false
     @State private var showingRoles = false
     @State private var editingRole: String?
     @State private var handoffVersion: String?
@@ -19,19 +21,35 @@ public struct StageGroupView: View {
     @State private var error: String?
 
     /// 将表单绑定到来源群，成员变更由所属电脑同步。
-    public init(group: Bot) { self.group = group }
+    public init(group: Bot, independent: Bool = false) {
+        self.group = group
+        self.independent = independent
+        _leaderId = State(initialValue: independent ? group.stage?.leaderId ?? group.groupLeaderId : nil)
+    }
 
-    private var candidates: [Bot] { group.members.compactMap { store.bots[$0] } }
+    /// 新会话也可选其他现有角色的配置，阶段表单只列直接来源成员。
+    private var candidates: [Bot] {
+        let original = group.members.compactMap { store.bots[$0] }
+        return independent ? original + store.roster.filter { !$0.isGroup && !group.members.contains($0.id) } : original
+    }
+    /// 只在新版 Host 上展示创建即授权的回查范围。
+    private var referencePrevious: Bool { !independent && store.hello?.taskGroupContexts == true }
+    /// 只显示已经验收的交接版本。
+    private var acceptedHandoff: StageHandoff? {
+        guard let handoff = group.stage?.handoff, handoff.acceptedAt != nil else { return nil }
+        return handoff
+    }
     private var picked: [Bot] { candidates.filter { roles[$0.id] != nil } }
     private var optional: Bool { store.supportsGroupMemberPicker }
 
     /// 阶段群沿用统一的成员布局，交接和角色配置在成员区后面。
     public var body: some View {
         let membersOnly = store.supportsOptionalStageSetup
+        let blocked = picked.filter { $0.taskRoleCopyable == false }
         let validFields = !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && (optional || [goal, acceptance].allSatisfy { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
-        CreateForm(title: "Create next stage group", placeholder: "Stage name", name: $name, saving: saving,
-                   canCreate: !saving && (membersOnly ? !picked.isEmpty : validFields && picked.contains { $0.id == leaderId }
+        CreateForm(title: independent ? "Create new group session" : "Create next stage group", placeholder: independent ? "Name your group" : "Stage name", name: $name, saving: saving,
+                   canCreate: !saving && blocked.isEmpty && (independent || membersOnly ? !picked.isEmpty : validFields && picked.contains { $0.id == leaderId }
                        && (group.stage == nil || handoffVersion != nil)),
                    error: error, create: save, group: true) {
             GroupAvatar(members: picked, size: 80)
@@ -39,11 +57,20 @@ public struct StageGroupView: View {
             VStack(alignment: .leading, spacing: 12) {
                 GroupMemberPicker(bots: candidates, picked: picked, toggle: toggleRole)
                 GroupBotPicker(bots: picked, selection: $leaderId, label: membersOnly ? "Group lead (optional)" : "Group lead", allowsNone: membersOnly)
+                if !independent {
                 TextField(L10n.tr(optional ? "Stage goal (optional)" : "Stage goal"), text: $goal, axis: .vertical)
                     .lineLimit(2...5).fieldBox(fill: Palette.surface)
                 TextField(L10n.tr(optional ? "Acceptance criteria (optional)" : "Acceptance criteria"), text: $acceptance, axis: .vertical)
                     .lineLimit(2...5).fieldBox(fill: Palette.surface)
-                if let stage = group.stage {
+                }
+                if referencePrevious {
+                    Text(L10n.tr("Previous group · {name}").replacingOccurrences(of: "{name}", with: group.name))
+                        .font(.footnote).foregroundStyle(Palette.secondary)
+                    if let handoff = acceptedHandoff {
+                        Text("\(L10n.tr("Accepted handoff")) · \(handoff.file.sha256.prefix(12))")
+                            .font(.caption).foregroundStyle(Palette.secondary)
+                    }
+                } else if !independent, let stage = group.stage {
                     if let handoff = stage.handoff, handoff.acceptedAt != nil {
                         Toggle(isOn: Binding(get: { handoffVersion == handoff.file.id },
                             set: { handoffVersion = $0 ? handoff.file.id : nil })) {
@@ -53,6 +80,17 @@ public struct StageGroupView: View {
                         Text(L10n.tr("Review and accept a handoff in Stage details first."))
                             .font(.footnote).foregroundStyle(Palette.secondary)
                     }
+                }
+                if independent {
+                    Text(L10n.tr("Start a new task with fresh bots.")).font(.footnote).foregroundStyle(Palette.secondary)
+                }
+                if !blocked.isEmpty {
+                    Text(L10n.tr("Custom launch commands cannot be copied. Choose a standard agent role.") + " · " + blocked.map(\.name).joined(separator: ", "))
+                        .font(.footnote).foregroundStyle(Palette.secondary)
+                }
+                if picked.contains(where: { $0.stageMemoryShared == true }) {
+                    Text(L10n.tr("Some selected agents may use their own global memory."))
+                        .font(.footnote).foregroundStyle(Palette.secondary)
                 }
                 Button {
                     // 设置页始终从第一个有效角色打开。
@@ -65,6 +103,15 @@ public struct StageGroupView: View {
                         Image(systemName: "chevron.right")
                     }.fieldBox(fill: Palette.surface)
                 }.buttonStyle(.plain).disabled(picked.isEmpty)
+            }
+        }
+        .onAppear {
+            // 初次打开独立会话表单时只预选原群角色。
+            if independent, !initialized {
+                initialized = true
+                for bot in candidates where group.members.contains(bot.id) {
+                    roles[bot.id] = StageGroupDraft.Role(botId: bot.id, sourceRev: bot.rev, description: bot.description)
+                }
             }
         }
         .codyncSheet(isPresented: $showingRoles) {
@@ -111,6 +158,10 @@ public struct StageGroupView: View {
                     set: { roles[bot.id]?.reuseProject = $0 }
                 )).toggleStyle(.codync)
                 Text(bot.cwd).font(.caption).foregroundStyle(Palette.secondary)
+                if roles[bot.id]?.reuseProject == true {
+                    Text(L10n.tr("This role can read existing files in the project folder."))
+                        .font(.caption).foregroundStyle(Palette.secondary)
+                }
             }
             Text(L10n.tr("New bots start with their own workspace and Codync shared memory off."))
                 .font(.footnote).foregroundStyle(Palette.secondary)
@@ -126,13 +177,15 @@ public struct StageGroupView: View {
         guard !picked.isEmpty, !saving else { return }
         let lead = picked.first { $0.id == leaderId }?.id ?? ""
         let draft = StageGroupDraft(botId: group.id, requestId: requestId, name: name, goal: goal, acceptance: acceptance,
-                                    leaderId: lead, roles: group.members.compactMap { roles[$0] }, handoffVersion: handoffVersion)
+                                    leaderId: lead, roles: picked.compactMap { roles[$0.id] },
+                                    handoffVersion: independent ? nil : referencePrevious ? acceptedHandoff?.file.id : handoffVersion,
+                                    referencePrevious: referencePrevious ? true : nil)
         saving = true
         error = nil
         Task {
             defer { saving = false }
             do {
-                try await store.createStageGroup(draft)
+                try await store.createStageGroup(draft, independent: independent)
                 dismiss()
             } catch {
                 self.error = error.localizedDescription
@@ -180,6 +233,10 @@ public struct StageDetailsView: View {
         let pending = !details.work.pending.isEmpty
         let changed = markdown.trimmingCharacters(in: .whitespacesAndNewlines) != (details.markdown ?? "")
             || evidence.trimmingCharacters(in: .whitespacesAndNewlines) != (handoff?.evidence ?? "")
+        if let previous = details.bot.stage?.previous {
+            Text(L10n.tr("Previous group · {name}").replacingOccurrences(of: "{name}", with: previous.name))
+                .font(.footnote).foregroundStyle(Palette.secondary)
+        }
         Text("\(details.bot.name) · \(L10n.tr(archived ? "Stage archived" : closed ? "Stage closed" : "Stage open"))").font(.headline)
         Text(L10n.tr(handoff?.acceptedAt == nil ? "Stage awaiting acceptance" : "Stage accepted")).font(.footnote)
         ForEach(details.work.counts.keys.sorted(), id: \.self) { status in

@@ -1,12 +1,16 @@
 package com.codync.android.core
 
+import kotlinx.serialization.EncodeDefault
+import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.*
 
 /** 阶段群的负责人、确认材料和准入状态由 Host 保存。 */
 @Serializable data class StageGroup(val leaderId: String, val goal: String, val acceptance: String,
     val handoff: StageHandoff? = null, val incoming: StageFile? = null, val closedAt: Long? = null,
-    val archivedAt: Long? = null, val ownedMembers: List<String> = emptyList())
+    val archivedAt: Long? = null, val ownedMembers: List<String> = emptyList(), val previous: Previous? = null) {
+    @Serializable data class Previous(val name: String)
+}
 
 @Serializable data class StageFile(val id: String, val name: String, val sha256: String, val size: Long)
 @Serializable data class StageHandoff(val file: StageFile, val evidence: String, val acceptedAt: Long? = null)
@@ -18,8 +22,10 @@ import kotlinx.serialization.json.*
 }
 
 /** 将预览时的源角色版本和用户确认的交接版本绑定到创建请求。 */
+@OptIn(ExperimentalSerializationApi::class)
 @Serializable data class StageGroupDraft(val botId: String, val requestId: String, val name: String, val goal: String,
-    val acceptance: String, val leaderId: String, val roles: List<Role>, val handoffVersion: String? = null) {
+    val acceptance: String, val leaderId: String, val roles: List<Role>, val handoffVersion: String? = null,
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val referencePrevious: Boolean? = null) {
     @Serializable data class Role(val botId: String, val sourceRev: Long, val description: String, val reuseProject: Boolean = false)
 }
 

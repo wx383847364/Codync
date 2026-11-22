@@ -16,6 +16,7 @@ impl Hub {
         v["harnessMemory"] =
             (!cfg.is_group() && crate::agent::own_memory::switchable(cfg)).then_some(cfg.harness_memory).into();
         if !cfg.is_group() {
+            v["taskRoleCopyable"] = cfg.task_role_copyable().into();
             v["harnessMemoryShared"] = crate::agent::own_memory::shared(cfg).into();
             // 预览继承整条回退链，任一后端存在全局记忆都应提示。
             v["stageMemoryShared"] = (0..crate::agent::fallback::steps(cfg))

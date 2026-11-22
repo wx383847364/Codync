@@ -9,6 +9,7 @@ a version without one gets a generic "Bug fixes and improvements" line. Delete o
 ## 2.48.0
 
 ### zh-Hant
+- 可用新機器人開啟獨立群組任務，或建立下一階段並按需查閱上一階段的聊天與交接。
 - 可暫停或繼續群組中的單一任務，並將新訊息引導至成員正在執行的回合。
 - 在輸入框鍵入 / 搜尋工作區檔案，選取後以 @檔名帶入訊息。
 - 在機器人詳情查看主會話的上下文與近期 token 用量。私聊任務預計放不下時，可以帶著摘要開啟新會話，保留同一個機器人及聊天記錄。
@@ -16,6 +17,7 @@ a version without one gets a generic "Bug fixes and improvements" line. Delete o
 - 群組的預設收件者提示只在輸入框空白時顯示。
 
 ### en-US
+- Start an independent group task with fresh bots, or let a new stage consult the previous chat and handoff on demand.
 - Pause or continue individual group assignments and guide a member during its current turn.
 - Search workspace files with / and insert a file reference into your message.
 - See the main session's context and recent token usage in bot details. When a private task may exceed the available context, start a fresh session with a summary and keep the same bot and chat history.

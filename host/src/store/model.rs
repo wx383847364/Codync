@@ -64,6 +64,9 @@ pub(crate) struct StageGroup {
     pub handoff: Option<StageHandoff>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub incoming: Option<crate::chat::files::SharedFile>,
+    /// 新阶段只可按需读取创建时授权的直接来源。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous: Option<PreviousStage>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub incoming_files: Vec<crate::chat::files::SharedFile>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -81,6 +84,15 @@ impl StageGroup {
     pub(crate) fn read_only(&self) -> bool {
         self.closed_at.is_some() || self.archived_at.is_some()
     }
+}
+
+/// 阶段创建时冻结的来源及聊天版本截止点。
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct PreviousStage {
+    pub room_id: String,
+    pub name: String,
+    pub cutoff_rev: i64,
 }
 
 /// 验收记录绑定这一个快照版本；保存新版本需要再次验收。
@@ -112,6 +124,9 @@ pub struct BotConfig {
     /// 新会话群的编号基名。存在时，成员按群使用独立的模型会话。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) group_session_base: Option<String>,
+    /// 独立会话按角色复制的新身份，用于收拢会话成员。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub group_session_owned_members: Vec<String>,
     /// 仅由阶段群创建入口写入，普通编辑与复制会话不会覆盖它。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) stage: Option<StageGroup>,
@@ -208,6 +223,11 @@ pub struct BotConfig {
 }
 
 impl BotConfig {
+    /// 自定义命令可能包含令牌或强制恢复旧会话，角色复制只接受标准入口。
+    pub(crate) fn task_role_copyable(&self) -> bool {
+        self.command.is_none() && self.fallbacks.iter().all(|fallback| fallback.command.is_none())
+    }
+
     /// 返回当前群的默认负责人，阶段群继续使用阶段内的身份。
     pub(crate) fn group_leader(&self) -> Option<&str> {
         self.stage

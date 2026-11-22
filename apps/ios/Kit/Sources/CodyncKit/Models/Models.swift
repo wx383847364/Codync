@@ -238,6 +238,7 @@ public struct Hello: Codable, Sendable {
     /// Host 支持创建具有独立模型会话的群。
     public var groupSessions: Bool?
     public var stageGroups: Bool?
+    public var taskGroupContexts: Bool?
     public var groupMemberPicker: Bool?
     public var optionalStageSetup: Bool?
     public var stageRoster: Bool?
@@ -431,6 +432,9 @@ public struct StageGroup: Codable, Hashable, Sendable {
     public var closedAt: Int64?
     public var archivedAt: Int64?
     public var ownedMembers: [String]?
+    public var previous: Previous?
+
+    public struct Previous: Codable, Hashable, Sendable { public var name: String }
 }
 
 public struct StageFile: Codable, Hashable, Sendable {
@@ -547,10 +551,11 @@ public struct StageGroupDraft: Encodable, Sendable {
     public var leaderId: String
     public var roles: [Role]
     public var handoffVersion: String?
+    public var referencePrevious: Bool?
 
     /// 将阶段表单和所选角色固定到同一次提交。
     public init(botId: String, requestId: UUID, name: String, goal: String, acceptance: String, leaderId: String,
-                roles: [Role], handoffVersion: String? = nil) {
+                roles: [Role], handoffVersion: String? = nil, referencePrevious: Bool? = nil) {
         self.botId = botId
         self.requestId = requestId
         self.name = name
@@ -559,5 +564,6 @@ public struct StageGroupDraft: Encodable, Sendable {
         self.leaderId = leaderId
         self.roles = roles
         self.handoffVersion = handoffVersion
+        self.referencePrevious = referencePrevious
     }
 }

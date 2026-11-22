@@ -45,7 +45,82 @@ pub(super) fn authorized(c: &Connection, id: &str, bot: &str, started: bool) -> 
     Ok(d)
 }
 
+/// 只允许当前阶段创建且仍在群内的角色查阅授权资料。
+fn previous_stage(c: &Connection, context: &str, bot: &str) -> Result<(String, super::StageGroup)> {
+    let delivery = authorized(c, context, bot, true)?;
+    let cfg: String =
+        c.query_row("SELECT config FROM bots WHERE id=? AND deleted=0", [&delivery.room_id], |row| row.get(0))?;
+    let cfg: BotConfig = serde_json::from_str(&cfg)?;
+    let stage = cfg
+        .stage
+        .filter(|stage| stage.previous.is_some() && stage.owned_members.iter().any(|id| id == bot))
+        .ok_or_else(|| anyhow!("This execution has no previous-stage reference access"))?;
+    Ok((delivery.room_id, stage))
+}
+
+/// 来源聊天删除后不再返回旧正文；交接快照的读取不依赖此检查。
+fn live_previous_source(c: &Connection, context: &str, bot: &str) -> Result<super::PreviousStage> {
+    let (_, stage) = previous_stage(c, context, bot)?;
+    let previous = stage.previous.ok_or_else(|| anyhow!("Previous-stage reference missing"))?;
+    let live: bool =
+        c.query_row("SELECT EXISTS(SELECT 1 FROM bots WHERE id=? AND deleted=0)", [&previous.room_id], |row| {
+            row.get(0)
+        })?;
+    ensure!(live, "The previous group was deleted");
+    Ok(previous)
+}
+
+/// 读取上一阶段的可见原文，排除创建后写入或修改的消息。
+fn previous_message(c: &Connection, room: &str, cutoff_rev: i64, id: &str) -> Result<Entry> {
+    c.query_row(
+        &format!("SELECT {} FROM entries WHERE id=?1 AND bot_id=?2 AND rev<=?3 AND ({VISIBLE})", entries::ENTRY_COLS),
+        params![id, room, cutoff_rev],
+        entries::row_entry,
+    )
+    .optional()?
+    .ok_or_else(|| anyhow!("No visible message {id} in the previous stage"))
+}
+
 impl Store {
+    /// 搜索和游标只能落在授权的来源与聊天截止点之内。
+    pub(crate) fn search_previous_stage_messages(
+        &self,
+        context: &str,
+        bot: &str,
+        terms: &[String],
+        from: Option<&str>,
+        limit: i64,
+    ) -> Result<Vec<Entry>> {
+        let mut db = self.db.locked();
+        let tx = db.transaction()?;
+        let previous = live_previous_source(&tx, context, bot)?;
+        let from = from
+            .map(|id| previous_message(&tx, &previous.room_id, previous.cutoff_rev, id).map(|entry| entry.seq))
+            .transpose()?;
+        let rows = entries::search_messages_on(&tx, &previous.room_id, terms, from, limit, Some(previous.cutoff_rev))?;
+        tx.commit()?;
+        Ok(rows)
+    }
+
+    /// 每次翻页都重新验证当前执行和旧消息版本范围。
+    pub(crate) fn read_previous_stage_message(&self, context: &str, bot: &str, id: &str) -> Result<Entry> {
+        let mut db = self.db.locked();
+        let tx = db.transaction()?;
+        let previous = live_previous_source(&tx, context, bot)?;
+        let entry = previous_message(&tx, &previous.room_id, previous.cutoff_rev, id)?;
+        tx.commit()?;
+        Ok(entry)
+    }
+
+    /// 返回当前阶段自己保存的交接快照，来源群删除后仍可按已授予的范围读取。
+    pub(crate) fn previous_stage_handoff(&self, context: &str, bot: &str) -> Result<(String, super::StageGroup)> {
+        let mut db = self.db.locked();
+        let tx = db.transaction()?;
+        let result = previous_stage(&tx, context, bot)?;
+        tx.commit()?;
+        Ok(result)
+    }
+
     /// 只读变化指纹避免周期补查反复重建同一个无法装入的任务包。
     pub(crate) fn group_context_revision(&self, room: &str) -> Result<i64> {
         Ok(self
@@ -226,7 +301,7 @@ impl Store {
         let result = match kind {
             "messages" => {
                 let seq = from.map(|id| message(&tx, &scope.room_id, id).map(|e| e.seq)).transpose()?;
-                HistoryRows::Messages(entries::search_messages_on(&tx, &scope.room_id, terms, seq, limit)?)
+                HistoryRows::Messages(entries::search_messages_on(&tx, &scope.room_id, terms, seq, limit, None)?)
             }
             "plans" => {
                 let seq = if let Some(id) = from {

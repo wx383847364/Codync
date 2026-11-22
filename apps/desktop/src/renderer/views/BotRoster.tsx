@@ -249,7 +249,7 @@ export function BotRoster({ roster, compact, onContext, onSectionContext, openEx
           <div className={`computer-roster-content ${open ? '' : 'collapsed'}`} inert={!open} aria-hidden={!open}>
             <div className={compact ? '' : 'stage-roster-members'}>
               {open && members.map((member) => <div className="stage-member" key={member.bot.id}>
-                {row(member, items, true, item.bot.stage?.ownedMembers?.includes(member.bot.id))}
+                {row(member, items, true, (item.bot.stage?.ownedMembers ?? item.bot.groupSessionOwnedMembers)?.includes(member.bot.id))}
                 {!compact && member.bot.id === (item.bot.stage?.leaderId || item.bot.groupLeaderId) && <span className="stage-lead-label">{tr('Lead')}</span>}
               </div>)}
             </div>

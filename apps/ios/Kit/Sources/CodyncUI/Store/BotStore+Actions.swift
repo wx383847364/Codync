@@ -305,7 +305,7 @@ extension BotStore {
     public func move(_ botId: String, by offset: Int) {
         guard let bot = bots[botId] else { return }
         let owned = Set(roster.flatMap { group in
-            (group.stage?.ownedMembers ?? []).filter { group.members.contains($0) }
+            (group.stage?.ownedMembers ?? group.groupSessionOwnedMembers ?? []).filter { group.members.contains($0) }
         })
         var peers = roster.filter { !owned.contains($0.id) && $0.stage?.archivedAt == nil && $0.isRosterPeer(of: bot) }.map(\.id)
         guard let i = peers.firstIndex(of: botId), peers.indices.contains(i + offset) else { return }
@@ -393,10 +393,10 @@ extension BotStore {
     }
 
     /// 将阶段群加入名单，预填首次任务并打开群。现有草稿优先。
-    public func createStageGroup(_ draft: StageGroupDraft) async throws {
-        let (saved, firstMessage) = try await ready().createStageGroup(draft)
+    public func createStageGroup(_ draft: StageGroupDraft, independent: Bool = false) async throws {
+        let (saved, firstMessage) = try await ready().createStageGroup(draft, independent: independent)
         let bot = putHostBot(saved)
-        if bot.lastMessage == nil, composerDraft(for: bot.id).isEmpty {
+        if !independent, bot.lastMessage == nil, composerDraft(for: bot.id).isEmpty {
             setComposerDraft(firstMessage, for: bot.id)
         }
         selection = bot.id

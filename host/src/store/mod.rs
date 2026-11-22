@@ -21,7 +21,7 @@ pub use model::{
     AVATAR_COLORS, AVATAR_SHAPES, BotConfig, BotKind, BotRow, Entry, EntryKind, Fallback, Lane, Permission,
     message_text, run_session_key,
 };
-pub(crate) use model::{StageGroup, StageHandoff, group_session_slot, slotted_group};
+pub(crate) use model::{PreviousStage, StageGroup, StageHandoff, group_session_slot, slotted_group};
 
 use crate::LockExt;
 use anyhow::Result;

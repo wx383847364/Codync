@@ -34,8 +34,8 @@ quotes itself.
 |---|---|---|
 | `send` | `botId, text, clientNonce, replyTo?, mentions?: [{botId,start,end}]` | `botId` is a bot or a group. `replyTo`: the id of a user message or final reply in that chat; anything else is refused. Works in the relay mailbox too. |
 | `createBot` | `{kind:"group", name, description?, members}` | Returns the existing ordinary group when these exact bots already share one. |
-| `createGroupSession` | `{botId}` | Opens a new, numbered group with the same settings and ordered member IDs. Its transcript starts empty and each member opens an independent agent session. |
-| `createStageGroup` | `{botId, requestId, name, goal, acceptance, leaderId, roles: [{botId, sourceRev, description, reuseProject}]}` | Creates a stage and its new bots in one transaction. `requestId` is a UUID. Identical retries return the live group, its first draft and `createdMembers`, the original ordered IDs. `sourceRev` binds the preview to the reviewed source settings. The lead is selected by its source bot ID and saved as its new bot ID. |
+| `createGroupSession` | `{botId, requestId, name, leaderId, roles}` | Copies the reviewed role configuration to new bot IDs and creates an empty, independent group with a stable creation receipt. Legacy requests without `roles` reuse the existing bots. |
+| `createStageGroup` | `{botId, requestId, name, goal, acceptance, leaderId, referencePrevious, handoffVersion, roles: [{botId, sourceRev, description, reuseProject}]}` | Creates a stage and its new bots in one transaction. `requestId` is a UUID. Identical retries return the live group, its first draft and `createdMembers`, the original ordered IDs. `sourceRev` binds the preview to the reviewed source settings. The lead is selected by its source bot ID and saved as its new bot ID. |
 | `stageDetails` | `{botId}` | Reads stage, delivery counts and pending items, handoff content, and the restorable first draft. |
 | `changeStage` | `{botId, action, markdown?, evidence?, previousVersion?, version?}` | `saveHandoff` writes an immutable Markdown snapshot. `accept` binds acceptance to its file ID. `close` and `reopen` control admissions. |
 | `stageUsage` | `{botId}` | Reads local delivery, attempt, observed ACP prompt, confirmed new session and process counts, provider-reported totals by backend/model, and coverage. |
@@ -170,11 +170,7 @@ the current execution and result save; `/new-now` cancels, waits for the existin
 15-second grace/agent termination, persists interruption, then forgets the old session.
 `/new-cancel` withdraws a pending switch. Main and ordinary group turns share that session.
 
-Clients show **Create new group session** when `hello.groupSessions` is true. The action copies the source group's setup under a new chat ID. The
-Host allocates the number while saving the new group. For these groups the agent
-session belongs to the room, member and backend. Session creation, resume, and context
-maintenance use that identity. Private chat handoffs stay in the main session, and bots
-continue to use their workspace and long-term memory.
+Clients with `hello.taskGroupContexts` submit a reviewed role draft for **Create new group session**. The Host creates new bot IDs and an independent, empty chat. Blank names use the source numbering sequence. The agent session belongs to the room, member and backend. Legacy callers use the existing bots and their workspaces and long-term memory.
 
 Clients show **Create next stage group** when `hello.stageGroups` is true. The stage name,
 goal, acceptance criteria, confirmed role instructions and chosen lead are captured before
@@ -198,10 +194,7 @@ acceptance. The check and stage state update share a write transaction with deli
 admission. A closed stage keeps its history, handoff and late records. Reopening lets the
 user send or explicitly retry without changing previous terminal states.
 
-To create a stage from another stage, the user selects its accepted handoff version.
-The host copies that immutable snapshot into the new room. The first user message
-references that copy as context, under the new task's authorization. The working agent
-receives the path and hash. Users can select files already shared to the source room
+With `referencePrevious: true`, stage creation binds the direct source group and its chat revision at commit. New roles may query visible source messages through `search_history` with `scope: previousStage` during a live stage assignment. The same tool reads an accepted handoff by version when one was present and reviewed. Prompt assembly exposes only the availability of the reference. Users can select files already shared to the source room
 as evidence. The Host checks their versions and copies the selected snapshots to the
 new room so they can be opened after the old files or chat are removed. The new roles
 start without the previous transcript. The

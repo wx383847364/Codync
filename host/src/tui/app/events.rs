@@ -276,6 +276,7 @@ impl App {
                 self.bot_session_usage = v["botSessionUsage"] == true;
                 self.group_session_contexts = v["groupSessionContexts"] == true;
                 self.stage_groups = v["stageGroups"] == true;
+                self.task_group_contexts = v["taskGroupContexts"] == true;
                 self.mismatch = crate::compat::check(env!("CARGO_PKG_VERSION"), crate::compat::MIN_HOST, &v);
                 v["name"].as_str().unwrap_or("computer").clone_into(&mut self.host);
                 v["version"].as_str().unwrap_or_default().clone_into(&mut self.host_version);

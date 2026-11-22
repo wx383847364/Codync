@@ -188,7 +188,10 @@ private class ComputerRoster(private val context: Context, val key: String) {
     CodyncSheet(sessionTarget, { sessionTarget = null }) { (computer, group) ->
         val state = states.firstOrNull { it.computer.id == computer }
         val store = accounts.store(computer)
-        if (state != null && store != null) NewGroupView(state, store, source = group)
+        if (state != null && store != null) {
+            if (state.supportsTaskGroupContexts) StageGroupEditor(group, state, store, independent = true)
+            else NewGroupView(state, store, source = group)
+        }
     }
     CodyncSheet(stageTarget, { stageTarget = null }) { (computer, group) ->
         // 用来源电脑上的成员和连接状态显示阶段表单。
@@ -359,7 +362,7 @@ private class RosterReorder {
 /** Roster order: pinned bots, then where the user dragged them, then most recent activity. */
 /** 归属明确且仍是阶段成员的机器人跟随群显示。 */
 private fun stageRoots(bots: List<Bot>): List<Bot> {
-    val owned = bots.flatMap { group -> group.stage?.ownedMembers.orEmpty().filter { it in group.members } }.toSet()
+    val owned = bots.flatMap { group -> (group.stage?.ownedMembers ?: group.groupSessionOwnedMembers).filter { it in group.members } }.toSet()
     return bots.filter { it.id !in owned }
 }
 
@@ -397,7 +400,7 @@ private fun Bot.movesWith(other: Bot) = band == other.band && (pinned || section
             else MenuItem("Edit profile", icon = "pencil", action = edit),
             if (bot.kind == "group" && state.supportsGroupSessions) {
                 MenuItem("Create new group session", icon = "bubble.left.and.bubble.right",
-                    detail = if (state.supportsGroupMemberPicker) "Original members are preselected. You can change them." else "Reuse the same bots in a fresh chat.") {
+                    detail = if (state.supportsTaskGroupContexts) "Start a new task with fresh bots." else if (state.supportsGroupMemberPicker) "Original members are preselected. You can change them." else "Reuse the same bots in a fresh chat.") {
                     // 仅发送来源群 ID，名单和编号由 Host 确定。
                     if (state.supportsGroupMemberPicker) createSession() else store.createGroupSession(bot.id)
                 }
@@ -405,6 +408,7 @@ private fun Bot.movesWith(other: Bot) = band == other.band && (pinned || section
             if (bot.kind == "group" && state.supportsStageGroups) {
                 val stage = bot.stage
                 val detail = when {
+                    state.supportsTaskGroupContexts -> "Let fresh bots consult this group when needed."
                     state.supportsOptionalStageSetup -> null
                     stage == null -> "Create new bots and choose a lead."
                     stage.handoff?.acceptedAt == null -> "Review and accept a handoff in Stage details first."
@@ -452,7 +456,7 @@ private fun Bot.movesWith(other: Bot) = band == other.band && (pinned || section
 
 /** One bot: avatar with its status dot (and [agent]'s logo, if any), name and day, then the live activity or last message. */
 @Composable internal fun BotRow(bot: Bot, state: AppState, agent: AgentMark? = null) {
-    val owner = state.bots.firstOrNull { bot.id in it.stage?.ownedMembers.orEmpty() && bot.id in it.members }
+    val owner = state.bots.firstOrNull { bot.id in (it.stage?.ownedMembers ?: it.groupSessionOwnedMembers) && bot.id in it.members }
     val affiliation = (owner?.name ?: bot.section ?: bot.cwd.trimEnd('/').substringAfterLast('/')
         .takeIf { !bot.managedWorkspace && it.isNotBlank() }).takeIf { bot.kind != "group" }
     Row(Modifier.fillMaxWidth().padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically,

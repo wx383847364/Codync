@@ -91,6 +91,8 @@ pub enum Event {
     GroupContextPrepared,
     GroupContextCompacted,
     GroupMentionRejected,
+    TaskGroupCreated,
+    PreviousStageReferenceRead,
     /// A turn moved on to the bot's next agent (`agent::fallback`).
     AgentFellBack,
     UsageReadFailed,
@@ -198,6 +200,8 @@ impl Event {
             Self::GroupContextPrepared => "group_context_prepared",
             Self::GroupContextCompacted => "group_context_compacted",
             Self::GroupMentionRejected => "group_mention_rejected",
+            Self::TaskGroupCreated => "task_group_created",
+            Self::PreviousStageReferenceRead => "previous_stage_reference_read",
             Self::AgentFellBack => "agent_fell_back",
             Self::UsageReadFailed => "usage_read_failed",
             Self::SessionReset => "session_reset",

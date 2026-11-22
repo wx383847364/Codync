@@ -361,6 +361,7 @@ pub(super) mod tests {
             members: vec![],
             group_leader_id: None,
             group_session_base: None,
+            group_session_owned_members: Vec::new(),
             stage: None,
             name: name.into(),
             description: "Keeps the shop's site running".into(),

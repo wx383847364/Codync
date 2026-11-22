@@ -5,7 +5,7 @@ use super::model::{BotConfig, BotRow, EntryKind, LastMessage, StageGroup, messag
 use super::{Store, logged, next_rev};
 use crate::LockExt;
 use anyhow::{Context as _, Result};
-use rusqlite::{OptionalExtension, params};
+use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::Value;
 
 /// Raw `bots` row before the config JSON is parsed.
@@ -32,10 +32,22 @@ const SAVE_BOT: &str = "INSERT INTO bots(id, rev, config) VALUES(?1, ?2, ?3)
      ON CONFLICT(id) DO UPDATE SET rev = ?2, config = ?3 WHERE deleted = 0";
 
 /// 在调用方事务中刷新机器人同步版本。
-pub(super) fn touch_bot(c: &rusqlite::Connection, id: &str) -> Result<i64> {
+pub(super) fn touch_bot(c: &Connection, id: &str) -> Result<i64> {
     let rev = next_rev(c)?;
     c.execute("UPDATE bots SET rev = ?2 WHERE id = ?1", params![id, rev])?;
     Ok(rev)
+}
+
+/// 在调用方提供的事务内保存成员、群和可选的创建回执。
+fn save_bots_on(tx: &Connection, cfgs: &[BotConfig], creation: Option<(&str, &str)>) -> Result<()> {
+    for cfg in cfgs {
+        let rev = next_rev(tx)?;
+        tx.execute(SAVE_BOT, params![cfg.id, rev, serde_json::to_string(cfg)?])?;
+    }
+    if let Some((key, value)) = creation {
+        tx.execute("INSERT INTO kv(k,v) VALUES(?1,?2)", [key, value])?;
+    }
+    Ok(())
 }
 
 impl Store {
@@ -112,20 +124,9 @@ impl Store {
 
     /// Saves several bots in one transaction, each with its own rev: all of them or, on an error, none.
     pub fn save_bots(&self, cfgs: &[BotConfig]) -> Result<()> {
-        self.save_bots_with_creation(cfgs, None)
-    }
-
-    /// 将新群、新成员与创建回执一起保存；请求重传可恢复已提交的身份。
-    pub(crate) fn save_bots_with_creation(&self, cfgs: &[BotConfig], creation: Option<(&str, &str)>) -> Result<()> {
         let mut c = self.db.locked();
         let tx = c.transaction()?;
-        for cfg in cfgs {
-            let rev = next_rev(&tx)?;
-            tx.execute(SAVE_BOT, params![cfg.id, rev, serde_json::to_string(cfg)?])?;
-        }
-        if let Some((key, value)) = creation {
-            tx.execute("INSERT INTO kv(k,v) VALUES(?1,?2)", [key, value])?;
-        }
+        save_bots_on(&tx, cfgs, None)?;
         tx.commit()?;
         Ok(())
     }
@@ -133,6 +134,20 @@ impl Store {
     /// 发布 bot 实时状态前更新同步版本。
     pub fn touch_bot(&self, id: &str) -> Result<i64> {
         touch_bot(&self.db.locked(), id)
+    }
+
+    /// 用创建事务的前一版本标记来源聊天截止点，同时保存群和回执。
+    pub(crate) fn save_created_group(&self, cfgs: &mut [BotConfig], creation: (&str, &str)) -> Result<()> {
+        let mut db = self.db.locked();
+        let tx = db.transaction()?;
+        if let Some(previous) =
+            cfgs.last_mut().and_then(|cfg| cfg.stage.as_mut()).and_then(|stage| stage.previous.as_mut())
+        {
+            previous.cutoff_rev = next_rev(&tx)? - 1;
+        }
+        save_bots_on(&tx, cfgs, Some(creation))?;
+        tx.commit()?;
+        Ok(())
     }
 
     /// 删除标记、相关投递取消和存活群卡片在同一事务提交，返回提交后需要发布的变化。
@@ -268,7 +283,7 @@ impl Store {
 }
 
 /// 用已有投递行汇总状态；待处理列表只含身份、显示名及状态。
-fn stage_work(c: &rusqlite::Connection, id: &str) -> Result<Value> {
+fn stage_work(c: &Connection, id: &str) -> Result<Value> {
     let counts = c
         .prepare("SELECT status,COUNT(*) FROM deliveries WHERE room_id=? GROUP BY status")?
         .query_map([id], |r| Ok((r.get::<_, String>(0)?, Value::from(r.get::<_, i64>(1)?))))?
@@ -282,7 +297,7 @@ fn stage_work(c: &rusqlite::Connection, id: &str) -> Result<Value> {
 }
 
 /// 队列准入只限制已关闭的阶段群，普通群沿用现有规则。
-pub(super) fn stage_closed(c: &rusqlite::Connection, id: &str) -> Result<bool> {
+pub(super) fn stage_closed(c: &Connection, id: &str) -> Result<bool> {
     Ok(c.query_row(
         "SELECT coalesce(json_extract(config,'$.stage.closedAt'), json_extract(config,'$.stage.archivedAt')) IS NOT NULL
          FROM bots WHERE id=? AND deleted=0",
@@ -362,6 +377,7 @@ mod tests {
             members: vec![],
             group_leader_id: None,
             group_session_base: None,
+            group_session_owned_members: Vec::new(),
             stage: None,
             name: "Rev".into(),
             description: String::new(),

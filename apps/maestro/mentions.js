@@ -21,11 +21,12 @@ if (typeof CLEANUP !== 'undefined') {
   }
 } else {
   const run = Math.random().toString(36).slice(2, 6)
+  const isolatedTest = typeof TASK_GROUP_TEST !== 'undefined'
   const taskTest = typeof PAUSE_TEST !== 'undefined'
   // 暂停用例复用可中断的 ACP 夹具，其他用例只需要成员元数据。
   const member = (name, description, seconds) =>
-    api('createBot', { name, description, backend: 'custom',
-      command: taskTest ? `python3 -X utf8 -u '${STEER_AGENT}' plain ${seconds}` : `python3 -X utf8 -u '${STEER_AGENT}' steer 60`,
+    api('createBot', { name, description, backend: isolatedTest ? 'opencode' : 'custom',
+      command: isolatedTest ? undefined : taskTest ? `python3 -X utf8 -u '${STEER_AGENT}' plain ${seconds}` : `python3 -X utf8 -u '${STEER_AGENT}' steer 60`,
       connectors: [], permission: 'auto', notify: false }).bot
   const alpha = member(`Mention Alpha ${run}`, 'Reviews the code', 24)
   const beta = member(`Mention Beta ${run}`, 'Writes the docs', 12)
@@ -39,5 +40,5 @@ if (typeof CLEANUP !== 'undefined') {
   output.alpha = alpha.name
   output.beta = beta.name
   // 暂停测试稍后显式启动两条任务，避免这里额外占用同一成员。
-  if (!taskTest) api('send', { botId: group.id, text: `@${beta.name} review the build` })
+  if (!taskTest && !isolatedTest) api('send', { botId: group.id, text: `@${beta.name} review the build` })
 }

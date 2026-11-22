@@ -10,14 +10,14 @@ use ratatui::{buffer::Buffer, layout::Rect};
 /// 绘制可滚动角色列表及当前角色的编辑字段。
 pub(super) fn stage_group_view(buf: &mut Buffer, area: Rect, app: &App, stage: &StageGroupForm) {
     let t = theme();
-    let title = tr("Create next stage group");
+    let title = tr(if stage.independent() { "Create new group session" } else { "Create next stage group" });
     let inner = frame_box(buf, centered(area, 83, 22), t.text, t.panel, Some((title.as_ref(), t.text)));
     if inner.height < 13 || inner.width < 30 {
         return;
     }
     let column = 31.min(inner.width - 12);
     for (field, y, key, editor) in [
-        (0, inner.y, "Stage name", &stage.name),
+        (0, inner.y, if stage.independent() { "Name your group" } else { "Stage name" }, &stage.name),
         (1, inner.y + 1, "Search or add bots", &stage.query),
         (
             4,
@@ -32,6 +32,9 @@ pub(super) fn stage_group_view(buf: &mut Buffer, area: Rect, app: &App, stage: &
             &stage.acceptance,
         ),
     ] {
+        if stage.independent() && matches!(field, 4 | 5) {
+            continue;
+        }
         put(buf, inner.x, y, column, tr(key).as_ref(), t.secondary.patch(t.panel));
         input_line(
             buf,
@@ -74,7 +77,9 @@ pub(super) fn stage_group_view(buf: &mut Buffer, area: Rect, app: &App, stage: &
         let workspace = tr("Personal workspace");
         let folder = if role.reuse_project { role.project.as_deref().unwrap_or_default() } else { &workspace };
         put(buf, inner.x, y, inner.width, folder, t.secondary.patch(t.panel));
-        let memory = tr(if role.shared_memory {
+        let memory = tr(if role.reuse_project {
+            "This role can read existing files in the project folder."
+        } else if role.shared_memory {
             "This agent shares its own memory across sessions."
         } else {
             "New bots start with their own workspace and Codync shared memory off."
@@ -91,7 +96,21 @@ pub(super) fn stage_group_view(buf: &mut Buffer, area: Rect, app: &App, stage: &
             false,
         );
     }
-    if stage.from_stage && (stage.handoff.is_some() || !app.optional_stage_setup) {
+    if stage.independent() || app.task_group_contexts {
+        let summary = if stage.independent() {
+            tr("Start a new task with fresh bots.").into_owned()
+        } else {
+            let source = tr("Previous group · {name}").replace("{name}", &stage.source_name);
+            stage.handoff.as_ref().map_or_else(
+                || source.clone(),
+                |file| {
+                    // 与桌面和手机一样，提交前显示将固定的已验收版本。
+                    format!("{source} · {} {}", tr("Accepted handoff"), file.sha256.get(..12).unwrap_or(&file.sha256))
+                },
+            )
+        };
+        put(buf, inner.x, inner.bottom() - 2, inner.width, &summary, t.dim);
+    } else if stage.from_stage() && (stage.handoff.is_some() || !app.optional_stage_setup) {
         let summary = stage.handoff.as_ref().map_or_else(
             || tr("Review and accept a handoff in Stage details first.").into_owned(),
             |file| {
@@ -104,6 +123,19 @@ pub(super) fn stage_group_view(buf: &mut Buffer, area: Rect, app: &App, stage: &
             },
         );
         put(buf, inner.x, inner.bottom() - 2, inner.width, &summary, t.dim);
+    }
+    if let Some(reason) = stage.roles.iter().filter(|role| role.selected).find_map(|role| role.restriction) {
+        put(buf, inner.x, inner.y + 2, inner.width, &tr(reason), t.red);
+    } else if stage.roles.iter().any(|role| role.selected && role.shared_memory) {
+        // 创建前可见影响整组的后端记忆提示，无需逐个打开角色。
+        put(
+            buf,
+            inner.x,
+            inner.y + 2,
+            inner.width,
+            &tr("Some selected agents may use their own global memory."),
+            t.secondary.patch(t.panel),
+        );
     }
     let label = tr(if stage.saving {
         "Creating…"
@@ -134,7 +166,11 @@ pub(super) fn stage_details_view(buf: &mut Buffer, area: Rect, form: &StageDetai
         });
         let accepted =
             tr(if stage["handoff"]["acceptedAt"].is_number() { "Stage accepted" } else { "Stage awaiting acceptance" });
-        let top = format!("{} · {stage_state} · {accepted}", state["bot"]["name"].as_str().unwrap_or_default());
+        let mut top = format!("{} · {stage_state} · {accepted}", state["bot"]["name"].as_str().unwrap_or_default());
+        if let Some(name) = stage["previous"]["name"].as_str() {
+            top.push_str(" · ");
+            top.push_str(&tr("Previous group · {name}").replace("{name}", name));
+        }
         put(buf, inner.x, inner.y, inner.width, &top, t.bold.patch(t.panel));
         let counts = state["work"]["counts"]
             .as_object()

@@ -62,6 +62,7 @@ pub struct Bot {
     /// The harness's own memory beside Codync's; `None` where the screen says nothing about it.
     pub harness_memory: Option<OwnMemory>,
     pub stage_memory_shared: bool,
+    pub task_role_copyable: Option<bool>,
     /// Agents that carry on, in order, when its own can't answer (`agent::fallback`).
     pub fallbacks: Vec<crate::store::Fallback>,
     /// The bot may set its own fallbacks.
@@ -87,6 +88,7 @@ pub struct Bot {
     pub members: Vec<String>,
     pub group_leader_id: Option<String>,
     pub(crate) stage: Option<crate::store::StageGroup>,
+    pub group_session_owned_members: Vec<String>,
     /// Where the running turn talks: a chat (`None` = its own).
     pub working_chat: Option<String>,
     pub guiding_delivery_id: Option<String>,
@@ -225,6 +227,7 @@ impl Bot {
                 .map(OwnMemory::Switch)
                 .or_else(|| (v["harnessMemoryShared"] == true).then_some(OwnMemory::Shared)),
             stage_memory_shared: v["stageMemoryShared"] == true,
+            task_role_copyable: v["taskRoleCopyable"].as_bool(),
             fallbacks: serde_json::from_value(v["fallbacks"].clone()).unwrap_or_default(),
             self_fallbacks: v["selfFallbacks"].as_bool().unwrap_or(true),
             agent_step: v["agentStep"]["agent"].as_str().map(str::to_owned),
@@ -248,6 +251,8 @@ impl Bot {
             group: v["kind"] == "group",
             members: strs(&v["members"]),
             group_leader_id: v["groupLeaderId"].as_str().map(str::to_owned),
+            group_session_owned_members: serde_json::from_value(v["groupSessionOwnedMembers"].clone())
+                .unwrap_or_default(),
             stage: serde_json::from_value(v["stage"].clone()).unwrap_or_default(),
             working_chat: v["workingChat"].as_str().map(str::to_owned),
             guiding_delivery_id: v["guidingDeliveryId"].as_str().map(str::to_owned),

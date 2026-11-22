@@ -71,8 +71,14 @@ fn section_key(name: &str) -> (String, String, Reverse<&str>) {
 pub fn roster_lines<'a>(roster: &[&'a Bot], folded: &HashSet<String>) -> Vec<RosterLine<'a>> {
     let owned: HashSet<_> = roster
         .iter()
-        .filter_map(|bot| bot.stage.as_ref().map(|stage| (*bot, stage)))
-        .flat_map(|(bot, stage)| stage.owned_members.iter().filter(|id| bot.members.contains(id)))
+        .flat_map(|bot| {
+            // 两种创建入口都把专属角色收在各自群下。
+            bot.stage
+                .as_ref()
+                .map_or(&bot.group_session_owned_members, |stage| &stage.owned_members)
+                .iter()
+                .filter(|id| bot.members.contains(id))
+        })
         .collect();
     let (archives, roots): (Vec<_>, Vec<_>) = roster
         .iter()

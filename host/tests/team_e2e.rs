@@ -412,3 +412,51 @@ async fn group_tools_relay_through_three_members_without_display_mentions_duplic
         assert!(finals(&host.call("history", json!({"botId":id})).await).is_empty(), "all results stay in group");
     }
 }
+
+/// 两种创建入口均复制角色，并按请求重放同一个新群；只有阶段入口保存参考关联。
+#[tokio::test]
+async fn task_group_creation_copies_configuration_and_only_stages_link_back() {
+    let host = Host::start().await;
+    let bot = host.call("createBot", json!({"name":"Reviewer","description":"Stable instructions","backend":"opencode","connectors":[],"skills":[]})).await["bot"].clone();
+    let source = host
+        .call(
+            "createBot",
+            json!({"name":"Plan group","description":"OLD_TASK_ONLY","kind":"group","members":[bot["id"]]}),
+        )
+        .await["bot"]
+        .clone();
+    let legacy = host.call("createGroupSession", json!({"botId":source["id"]})).await;
+    assert_eq!(legacy["bot"]["members"][0], bot["id"]);
+    let inspection = |name, request_id| {
+        // 每个入口携带自己的请求 ID 与已预览的源配置。
+        json!({"botId":source["id"],"requestId":request_id,"name":name,"leaderId":bot["id"],
+            "roles":[{"botId":bot["id"],"sourceRev":bot["rev"],"description":"Stable instructions"}]})
+    };
+    let draft = inspection("Different task", uuid::Uuid::new_v4().to_string());
+    let (left, right) =
+        tokio::join!(host.call("createGroupSession", draft.clone()), host.call("createGroupSession", draft));
+    assert_eq!(left["bot"]["id"], right["bot"]["id"]);
+    assert_eq!(left["createdMembers"], right["createdMembers"]);
+    assert_ne!(left["replayed"], right["replayed"]);
+    let independent = &left["bot"];
+    let member = &independent["members"][0];
+    assert_ne!(member, &bot["id"]);
+    assert_eq!(independent["groupLeaderId"], *member);
+    assert_eq!(independent["groupSessionOwnedMembers"][0], *member);
+    assert_eq!(independent["name"], "Different task");
+    assert_eq!(independent["description"], "");
+    assert!(independent["stage"].is_null());
+    assert_eq!(host.call("history", json!({"botId":independent["id"]})).await["entries"], json!([]));
+    let db = rusqlite::Connection::open(host.home.join("codync.db")).unwrap();
+    let raw: String =
+        db.query_row("SELECT config FROM bots WHERE id=?1", [member.as_str().unwrap()], |row| row.get(0)).unwrap();
+    let cloned: Value = serde_json::from_str(&raw).unwrap();
+    assert_eq!(cloned["description"], "Stable instructions");
+    assert_eq!(cloned["sharedMemory"], false);
+    assert_ne!(cloned["cwd"], bot["cwd"]);
+    let mut stage = inspection("Next stage", uuid::Uuid::new_v4().to_string());
+    stage["referencePrevious"] = json!(true);
+    let saved = host.call("createStageGroup", stage).await;
+    assert_eq!(saved["bot"]["stage"]["previous"]["roomId"], source["id"]);
+    assert_ne!(saved["createdMembers"][0], *member);
+}

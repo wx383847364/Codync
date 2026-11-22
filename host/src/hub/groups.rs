@@ -27,25 +27,10 @@ impl Hub {
                 .filter(|row| !row.deleted && row.config.is_group())
                 .ok_or_else(|| anyhow!("group not found"))?
                 .config;
-            let base = cfg
-                .group_session_base
-                .take()
-                // 复制编号群时继续原序列。群改名后以用户当前看到的名字开始编号。
-                .filter(|base| {
-                    cfg.name
-                        .strip_prefix(base)
-                        .and_then(|suffix| suffix.strip_prefix(' '))
-                        .is_some_and(|suffix| suffix.parse::<u64>().is_ok())
-                })
-                .unwrap_or_else(|| cfg.name.trim().to_owned());
-            let rows = self.store.bots()?;
-            let names: std::collections::HashSet<_> = rows.iter().map(|row| row.config.name.as_str()).collect();
-            // 已删除群的编号仍占用。手工取过的名字只占用自身的编号。
-            cfg.name = (1..=names.len() + 1)
-                .map(|number| format!("{base} {number}"))
-                .find(|name| !names.contains(name.as_str()))
-                .ok_or_else(|| anyhow!("group session number exhausted"))?;
+            let (base, name) = self.group_session_name(&cfg)?;
+            cfg.name = name;
             cfg.group_session_base = Some(base);
+            cfg.group_session_owned_members.clear();
             cfg.stage = None;
             // 旧客户端没有提交选择。新客户端可明确选择空负责人或调整成员。
             let explicit = selection.is_some();
@@ -75,6 +60,29 @@ impl Hub {
         crate::network::publish(self);
         crate::usage::bots_changed(self);
         Ok(bot)
+    }
+
+    /// 复用原群的编号序列，独立创建和旧接口采用同一套名称分配。
+    pub(super) fn group_session_name(&self, cfg: &BotConfig) -> Result<(String, String)> {
+        let base = cfg
+            .group_session_base
+            .clone()
+            // 复制编号群时继续原序列。群改名后以用户当前看到的名字开始编号。
+            .filter(|base| {
+                cfg.name
+                    .strip_prefix(base)
+                    .and_then(|suffix| suffix.strip_prefix(' '))
+                    .is_some_and(|suffix| suffix.parse::<u64>().is_ok())
+            })
+            .unwrap_or_else(|| cfg.name.trim().to_owned());
+        let rows = self.store.bots()?;
+        let names: std::collections::HashSet<_> = rows.iter().map(|row| row.config.name.as_str()).collect();
+        // 已删除群的编号仍占用。手工取过的名字只占用自身的编号。
+        let name = (1..=names.len() + 1)
+            .map(|number| format!("{base} {number}"))
+            .find(|name| !names.contains(name.as_str()))
+            .ok_or_else(|| anyhow!("group session number exhausted"))?;
+        Ok((base, name))
     }
 
     /// A group is busy while one of its members works in it: that member's status and activity.

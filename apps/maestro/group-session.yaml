@@ -9,7 +9,10 @@ onFlowComplete:
       env:
         CLEANUP: "true"
 ---
-- runScript: mentions.js
+- runScript:
+    file: mentions.js
+    env:
+      TASK_GROUP_TEST: "true"
 - runFlow:
     when:
       platform: iOS
@@ -39,6 +42,7 @@ onFlowComplete:
 - longPressOn: ${output.group}
 - tapOn: "Create new group session"
 - assertVisible: "Search or add bots"
+- assertVisible: "Start a new task with fresh bots."
 - tapOn: "Create"
 - assertVisible: "${output.group} 1"
 - assertVisible: "Ask everyone.*"
@@ -68,3 +72,16 @@ onFlowComplete:
       platform: Android
     commands:
       - tapOn: "Delete group chat"
+# 从同一个来源群建立下一阶段，预览范围后用新角色打开空白群。
+- extendedWaitUntil:
+    visible: "${output.group}"
+    timeout: 15000
+- longPressOn:
+    text: "^${output.group}$"
+- tapOn: "Create next stage group"
+- assertVisible: "Previous group · ${output.group}"
+- tapOn: "Show bot list"
+- tapOn: "${output.alpha}"
+- tapOn: "Create"
+- assertVisible: "${output.group} · ${output.alpha}"
+- assertVisible: "Ask everyone.*"

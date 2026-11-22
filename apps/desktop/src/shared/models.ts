@@ -17,6 +17,7 @@ export interface StageGroupDraft {
   leaderId: string
   roles: { botId: string; sourceRev: number; description: string; reuseProject: boolean }[]
   handoffVersion?: string
+  referencePrevious?: boolean
 }
 
 export interface StageFile { id: string; name: string; sha256: string; size: number }
@@ -24,6 +25,7 @@ export interface StageGroup {
   leaderId: string; goal: string; acceptance: string; closedAt?: number; archivedAt?: number; ownedMembers?: string[]
   handoff?: { file: StageFile; evidence: string; acceptedAt?: number }
   incoming?: StageFile
+  previous?: { name: string }
 }
 
 export interface StageDetails {
@@ -62,6 +64,7 @@ export interface Bot {
   /** `agent`, or `group`: several bots and the user in one chat. */
   kind: string
   members: string[]
+  groupSessionOwnedMembers?: string[]
   groupLeaderId?: string
   stage?: StageGroup
   name: string
@@ -125,6 +128,7 @@ export interface Bot {
   /** The harness keeps one memory for all its sessions that Codync can't turn off (Hermes Agent, Gemini CLI): every bot on it shares it. */
   harnessMemoryShared: boolean
   stageMemoryShared?: boolean
+  taskRoleCopyable?: boolean
   /** Moves whenever memory changes, so an open memory screen fetches it again. */
   memoryRev: number
   autoName: boolean
@@ -592,6 +596,7 @@ export interface Hello {
   /** 主机支持创建具有独立模型会话的群。 */
   groupSessions?: boolean
   stageGroups?: boolean
+  taskGroupContexts?: boolean
   groupMemberPicker?: boolean
   optionalStageSetup?: boolean
   stageRoster?: boolean

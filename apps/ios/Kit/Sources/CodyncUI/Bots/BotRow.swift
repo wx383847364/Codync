@@ -62,7 +62,7 @@ public struct BotRow: View {
 
     /// 阶段机器人使用所属群名称作为归属，原机器人显示项目名称。
     private var owner: Bot? {
-        model.bots.values.first { $0.stage?.ownedMembers?.contains(bot.id) == true && $0.members.contains(bot.id) }
+        model.bots.values.first { ($0.stage?.ownedMembers ?? $0.groupSessionOwnedMembers)?.contains(bot.id) == true && $0.members.contains(bot.id) }
     }
 
     /// Live activity while working, otherwise the last message (Grok Bot row behavior).

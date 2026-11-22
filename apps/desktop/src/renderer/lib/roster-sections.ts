@@ -38,8 +38,8 @@ export function rosterLines<T extends { bot: Placed }>(items: T[], folded: reado
 }
 
 /** 按创建归属收起仍在阶段中的机器人，移出阶段后恢复独立入口。 */
-export function stageRoster<T extends { bot: { id: string; members: string[]; stage?: { ownedMembers?: string[] } } }>(items: T[]) {
-  const owned = new Set(items.flatMap(({ bot }) => bot.stage?.ownedMembers?.filter((id) => bot.members.includes(id)) ?? []))
+export function stageRoster<T extends { bot: { id: string; members: string[]; groupSessionOwnedMembers?: string[]; stage?: { ownedMembers?: string[] } } }>(items: T[]) {
+  const owned = new Set(items.flatMap(({ bot }) => (bot.stage?.ownedMembers ?? bot.groupSessionOwnedMembers ?? []).filter((id) => bot.members.includes(id))))
   const byId = new Map(items.map((item) => [item.bot.id, item]))
   return {
     roots: items.filter(({ bot }) => !owned.has(bot.id)),

@@ -18,6 +18,7 @@ public struct Bot: Codable, Identifiable, Hashable, Sendable {
     public var kind: String
     /// A group's bots.
     public var members: [String]
+    public var groupSessionOwnedMembers: [String]?
     public var groupLeaderId: String?
     public var stage: StageGroup?
     public var name: String
@@ -79,6 +80,7 @@ public struct Bot: Codable, Identifiable, Hashable, Sendable {
     /// every bot on it shares it. Nil from an older host.
     public var harnessMemoryShared: Bool?
     public var stageMemoryShared: Bool?
+    public var taskRoleCopyable: Bool?
     /// Moves whenever memory changes, so an open memory screen fetches it again.
     public var memoryRev: Int64?
     /// Created without a name: the host names it after its first few conversations.
@@ -128,6 +130,7 @@ extension Bot {
         id = try c.decode(String.self, forKey: .id)
         kind = try c.decodeIfPresent(String.self, forKey: .kind) ?? "agent"
         members = try c.decodeIfPresent([String].self, forKey: .members) ?? []
+        groupSessionOwnedMembers = try c.decodeIfPresent([String].self, forKey: .groupSessionOwnedMembers)
         groupLeaderId = try c.decodeIfPresent(String.self, forKey: .groupLeaderId)
         stage = try c.decodeIfPresent(StageGroup.self, forKey: .stage)
         name = try c.decodeIfPresent(String.self, forKey: .name) ?? "Bot"
@@ -166,6 +169,7 @@ extension Bot {
         harnessMemory = try c.decodeIfPresent(Bool.self, forKey: .harnessMemory)
         harnessMemoryShared = try c.decodeIfPresent(Bool.self, forKey: .harnessMemoryShared)
         stageMemoryShared = try c.decodeIfPresent(Bool.self, forKey: .stageMemoryShared)
+        taskRoleCopyable = try c.decodeIfPresent(Bool.self, forKey: .taskRoleCopyable)
         memoryRev = try c.decodeIfPresent(Int64.self, forKey: .memoryRev)
         autoName = try c.decodeIfPresent(Bool.self, forKey: .autoName) ?? false
         createdAt = try c.decodeIfPresent(Int64.self, forKey: .createdAt) ?? 0

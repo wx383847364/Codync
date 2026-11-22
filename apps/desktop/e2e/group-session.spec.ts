@@ -21,7 +21,7 @@ async function expectInlineOptions(button: Locator) {
 }
 
 /** 从真实右键菜单创建新群，检查导航、编号、成员顺序和实际 ACP 会话。 */
-test('right-click opens an empty numbered group with its own member sessions', async () => {
+test('legacy creation keeps its own member sessions across numbered groups', async () => {
   const { browser, page } = await attach()
   const workspace = mkdtempSync(join(tmpdir(), 'codync-group-session-'))
   const name = `Session crew ${Date.now()}`
@@ -53,9 +53,9 @@ test('right-click opens an empty numbered group with its own member sessions', a
     await expect(page.getByText('A old reply', { exact: true })).toBeVisible()
 
     for (const number of [1, 2, 3]) {
-      await source.click({ button: 'right' })
-      await page.getByRole('menuitem', { name: 'Create new group session' }).click()
-      await page.getByRole('dialog', { name: 'Create new group session' }).getByRole('button', { name: 'Create', exact: true }).click()
+      // 旧接口仍复用这组自定义 ACP 夹具的机器人和工作目录。
+      const { bot: legacy } = await api<{ bot: Group }>(page, 'createGroupSession', { botId: original.id })
+      await page.locator(`[data-roster-row$="/${legacy.id}"]`).click()
       const selected = page.locator('.roster-row[aria-current=true]')
       await expect(selected.getByText(`${name} ${number}`, { exact: true })).toBeVisible()
       const id = (await selected.getAttribute('data-roster-row'))!.split('/').at(-1)!
@@ -154,6 +154,7 @@ test('the group picker searches, adds, and clears the lead in a fresh session', 
     await page.getByRole('menuitem', { name: 'Create new group session' }).click()
     const fresh = page.getByRole('dialog', { name: 'Create new group session' })
     await expect(fresh.getByRole('button', { name: /Group lead/ })).toContainText(lead.name)
+    await expect(fresh.getByText('Start a new task with fresh bots.')).toBeVisible()
     await fresh.getByRole('button', { name: `Remove ${lead.name}`, exact: true }).click()
     await expect(fresh.getByRole('button', { name: /Group lead/ })).toContainText('No lead')
     await fresh.getByRole('combobox', { name: 'Search or add bots' }).fill(backup.name)
@@ -164,6 +165,15 @@ test('the group picker searches, adds, and clears the lead in a fresh session', 
     await expect(page.locator('.composer textarea')).toHaveAttribute('placeholder', 'Ask everyone · @ to ask one bot')
     await expect(page.locator('.intro-card')).toContainText(backup.name)
     await expect(page.locator('.intro-card')).not.toContainText(lead.name)
+    const db = new DatabaseSync(join(homedir(), `.codync-dev-${sandbox().name}`, 'codync.db'), { readOnly: true })
+    try {
+      const row = db.prepare('SELECT config FROM bots WHERE id = ?').get(ids[0]!)
+      const isolated = JSON.parse(row!.config as string) as { members: string[]; stage?: unknown }
+      ids.push(...isolated.members)
+      expect(isolated.members).toHaveLength(2)
+      expect(isolated.members.every((id) => !bots.some((bot) => bot.id === id))).toBe(true)
+      expect(isolated.stage).toBeUndefined()
+    } finally { db.close() }
   } finally {
     // 移除测试群和机器人，便于继续在同一沙箱检查。
     for (const id of ids) await api(page, 'deleteBot', { botId: id }).catch(() => {})
@@ -194,8 +204,8 @@ test('stage opens with fresh roles, saves a versioned handoff and closes indepen
     // 用户在选择前能看到两种创建方式，读屏也会读出说明。
     const sessionAction = page.getByRole('menuitem', { name: 'Create new group session', exact: true })
     const stageAction = page.getByRole('menuitem', { name: 'Create next stage group', exact: true })
-    await expect(sessionAction.getByText('Original members are preselected. You can change them.')).toBeVisible()
-    await expect(sessionAction).toHaveAccessibleDescription('Original members are preselected. You can change them.')
+    await expect(sessionAction.getByText('Start a new task with fresh bots.')).toBeVisible()
+    await expect(sessionAction).toHaveAccessibleDescription('Start a new task with fresh bots.')
     await stageAction.click()
     await page.getByPlaceholder('Stage name').fill(`${name} next`)
     await page.getByPlaceholder('Stage goal (optional)').fill('Build the next phase')
@@ -382,8 +392,8 @@ test('stage opens with fresh roles, saves a versioned handoff and closes indepen
     await stage.click({ button: 'right' })
     await stageAction.click()
     await page.getByPlaceholder('Stage name').fill(`${name} successor`)
-    // 两个阶段字段同时留空，交接仍可由现有开关明确带入。
-    await page.getByRole('switch', { name: 'Use accepted handoff' }).click()
+    // 已验收版本在表单中展示，创建即允许机器人按需回查。
+    await expect(page.getByText(`Previous group · ${name} next · Accepted handoff`, { exact: false })).toBeVisible()
     await page.getByRole('combobox', { name: 'Search or add bots' }).fill('Lead')
     await page.getByRole('option', { name: lead.name, exact: true }).click()
     await page.getByRole('button', { name: /Group lead/ }).click()

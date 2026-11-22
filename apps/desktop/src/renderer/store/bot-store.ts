@@ -293,10 +293,10 @@ export class BotStore extends BotSending {
   }
 
   /** 接收已提交的新群，将首条消息存入本地草稿后打开。 */
-  async createStageGroup(draft: StageGroupDraft) {
-    const res = await (await this.ready()).call<{ bot: Bot; draft: string }>('createStageGroup', draft)
+  async createStageGroup(draft: StageGroupDraft, independent = false) {
+    const res = await (await this.ready()).call<{ bot: Bot; draft: string }>(independent ? 'createGroupSession' : 'createStageGroup', draft)
     const bot = this.putHostBot(normalizeBot(res.bot))
-    if (!bot.lastMessage && !this.composerDrafts.get(bot.id)) this.composerDrafts.set(bot.id, res.draft)
+    if (!independent && !bot.lastMessage && !this.composerDrafts.get(bot.id)) this.composerDrafts.set(bot.id, res.draft)
     this.selection = bot.id
     this.onRosterChanged?.()
     this.changed()

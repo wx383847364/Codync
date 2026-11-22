@@ -33,32 +33,40 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 
 /** 选择来源角色和负责人，阶段字段可选填，创建后打开空白或预填草稿。 */
-@Composable internal fun StageGroupEditor(group: Bot, state: AppState, store: AppStore) {
+@Composable internal fun StageGroupEditor(group: Bot, state: AppState, store: AppStore, independent: Boolean = false) {
     val dismiss = LocalDismissModal.current
     val requestId = remember(group.id) { UUID.randomUUID().toString() }
     var name by remember { mutableStateOf("") }
     var goal by remember { mutableStateOf("") }
     var acceptance by remember { mutableStateOf("") }
-    var leader by remember { mutableStateOf<String?>(null) }
-    var roles by remember { mutableStateOf(emptyMap<String, StageGroupDraft.Role>()) }
+    var leader by remember { mutableStateOf(if (independent) group.stage?.leaderId ?: group.groupLeaderId else null) }
+    val original = group.memberBots(state.bots)
+    var roles by remember {
+        // 独立会话预选原群角色，Host 会创建各自的新身份。
+        mutableStateOf(if (independent) original.associate { it.id to StageGroupDraft.Role(it.id, it.rev, it.description) } else emptyMap())
+    }
     var handoffVersion by remember { mutableStateOf<String?>(null) }
     var editingRole by remember { mutableStateOf<String?>(null) }
-    val candidates = group.memberBots(state.bots)
+    val candidates = if (independent) original + state.bots.filter { it.kind != "group" && !it.deleted && !it.hidden && it.id !in group.members } else original
+    val referencePrevious = !independent && state.supportsTaskGroupContexts
     val picked = candidates.filter { it.id in roles }
+    val blocked = picked.filter { it.taskRoleCopyable == false }
     val selectedLead = picked.firstOrNull { it.id == leader }
     val optional = state.supportsGroupMemberPicker
     val membersOnly = state.supportsOptionalStageSetup
     val handoff = group.stage?.handoff?.takeIf { it.acceptedAt != null }
     val accepted = handoff != null && handoffVersion == handoff.file.id
 
-    CreateLayout(state, "Create next stage group", name, { name = it }, "Stage name",
-        if (membersOnly) picked.isNotEmpty() else selectedLead != null && name.isNotBlank() && (optional || (goal.isNotBlank() && acceptance.isNotBlank())) &&
-            (group.stage == null || accepted),
+    CreateLayout(state, if (independent) "Create new group session" else "Create next stage group",
+        name, { name = it }, if (independent) "Name your group" else "Stage name",
+        blocked.isEmpty() && (if (independent || membersOnly) picked.isNotEmpty() else selectedLead != null && name.isNotBlank() && (optional || (goal.isNotBlank() && acceptance.isNotBlank())) &&
+            (group.stage == null || accepted)),
         {
             // 固定来源顺序与请求 ID，Host 可识别重试。
             val draft = StageGroupDraft(group.id, requestId, name, goal, acceptance, selectedLead?.id.orEmpty(),
-                group.members.mapNotNull(roles::get), handoffVersion.takeIf { accepted })
-            store.createStageGroup(draft) { dismiss() }
+                picked.mapNotNull { roles[it.id] }, if (referencePrevious) handoff?.file?.id else handoffVersion.takeIf { !independent && accepted },
+                true.takeIf { referencePrevious })
+            store.createStageGroup(draft, independent) { dismiss() }
         }, { GroupAvatar(picked.map { AvatarFace(it.avatarShape, it.avatarColor, it.status) }, 80.dp) },
         group = true, busyKey = "stage-group") {
         GroupMemberPicker(candidates, picked, state.bots) { bot ->
@@ -69,11 +77,16 @@ import kotlinx.coroutines.launch
             } else roles = roles + (bot.id to StageGroupDraft.Role(bot.id, bot.rev, bot.description))
         }
         GroupBotPicker(picked, state.bots, selectedLead?.id, if (membersOnly) "Group lead (optional)" else "Group lead", allowsNone = membersOnly) { leader = it }
+        if (!independent) {
         FieldBox(goal, { goal = it }, if (optional) "Stage goal (optional)" else "Stage goal",
             minLines = 2, maxLines = 5, fill = Palette.surface)
         FieldBox(acceptance, { acceptance = it }, if (optional) "Acceptance criteria (optional)" else "Acceptance criteria",
             minLines = 2, maxLines = 5, fill = Palette.surface)
-        if (group.stage != null) {
+        }
+        if (referencePrevious) {
+            Text(tr("Previous group · {name}").replace("{name}", group.name), style = Type.footnote, color = Palette.secondary)
+            if (handoff != null) Text(tr("Accepted handoff") + " · " + handoff.file.sha256.take(12), style = Type.caption, color = Palette.secondary)
+        } else if (!independent && group.stage != null) {
             if (handoff == null && !membersOnly) {
                 Text(tr("Review and accept a handoff in Stage details first."), style = Type.footnote, color = Palette.secondary)
             } else if (handoff != null) {
@@ -81,6 +94,14 @@ import kotlinx.coroutines.launch
                     Text(tr("Use accepted handoff") + " · " + handoff.file.sha256.take(12), style = Type.body)
                 }
             }
+        }
+        if (independent) Text(tr("Start a new task with fresh bots."), style = Type.footnote, color = Palette.secondary)
+        if (blocked.isNotEmpty()) {
+            Text(tr("Custom launch commands cannot be copied. Choose a standard agent role.") + " · " + blocked.joinToString(", ") { it.name },
+                style = Type.footnote, color = Palette.secondary)
+        }
+        if (picked.any { it.stageMemoryShared == true }) {
+            Text(tr("Some selected agents may use their own global memory."), style = Type.footnote, color = Palette.secondary)
         }
         Row(Modifier.fillMaxWidth().background(Palette.surface, RoundedCornerShape(12.dp))
             .clickable(enabled = picked.isNotEmpty()) { editingRole = picked.firstOrNull()?.id }.padding(12.dp),
@@ -108,6 +129,8 @@ import kotlinx.coroutines.launch
                             Text(tr("Reuse project folder"), style = Type.body)
                         }
                         Text(bot.cwd, style = Type.caption, color = Palette.secondary)
+                        if (role.reuseProject) Text(tr("This role can read existing files in the project folder."),
+                            style = Type.caption, color = Palette.secondary)
                     }
                     Text(tr("New bots start with their own workspace and Codync shared memory off."), style = Type.footnote, color = Palette.secondary)
                     if (bot.stageMemoryShared == true) {
@@ -160,6 +183,10 @@ import kotlinx.coroutines.launch
                 val handoff = stage.handoff
                 val pending = current.work.pending.isNotEmpty()
                 val changed = markdown.trim() != current.markdown.orEmpty() || evidence.trim() != handoff?.evidence.orEmpty()
+                current.bot.stage?.previous?.let { previous ->
+                    // 详情沿用创建时保存的来源名称。
+                    Text(tr("Previous group · {name}").replace("{name}", previous.name), style = Type.footnote, color = Palette.secondary)
+                }
                 Text(current.bot.name + " · " + tr(if (archived) "Stage archived" else if (closed) "Stage closed" else "Stage open"), style = Type.headline)
                 Text(tr(if (handoff?.acceptedAt == null) "Stage awaiting acceptance" else "Stage accepted"), style = Type.footnote)
                 for ((status, count) in current.work.counts) Text(tr(status) + " · " + count, style = Type.footnote)

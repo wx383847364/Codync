@@ -109,6 +109,7 @@ pub(super) async fn call(hub: &Arc<Hub>, caller: &Caller, method: &str, b: Value
             let hub = hub.clone();
             json!({"bot": tokio::task::spawn_blocking(move || hub.create_bot(cfg)).await??})
         }
+        "createGroupSession" if b.get("roles").is_some() => hub.create_task_group(b, true).await?,
         "createGroupSession" => {
             let id = str_arg(&b, "botId")?.to_owned();
             let selection: Option<crate::hub::GroupSessionSelection> =
@@ -119,7 +120,7 @@ pub(super) async fn call(hub: &Arc<Hub>, caller: &Caller, method: &str, b: Value
         }
         "createStageGroup" => {
             // 用户发送前只返回草稿，连接器凭据由 Host 既有凭据库保管。
-            hub.create_stage_group(b).await?
+            hub.create_task_group(b, false).await?
         }
         "stageDetails" | "changeStage" => {
             let room = str_arg(&b, "botId")?.to_owned();

@@ -59,17 +59,22 @@ pub(super) fn search_messages_on(
     terms: &[String],
     from: Option<i64>,
     limit: i64,
+    cutoff_rev: Option<i64>,
 ) -> Result<Vec<Entry>> {
     let mut sql = format!(
-        "SELECT {ENTRY_COLS} FROM entries WHERE bot_id = ?1 AND seq <= ?3 AND {NOT_REMOVED} AND
+        "SELECT {ENTRY_COLS} FROM entries WHERE bot_id = ?1 AND seq <= ?3 AND rev <= ?4 AND {NOT_REMOVED} AND
                (kind = 'user' OR (kind = 'agent' AND json_extract(data, '$.final') = 1))"
     );
     for i in 0..terms.len() {
-        let _ = write!(sql, " AND instr(lower(json_extract(data, '$.text')), ?{}) > 0", i + 4);
+        let _ = write!(sql, " AND instr(lower(json_extract(data, '$.text')), ?{}) > 0", i + 5);
     }
     sql.push_str(" ORDER BY seq DESC LIMIT ?2");
-    let mut args: Vec<rusqlite::types::Value> =
-        vec![bot_id.to_owned().into(), limit.into(), from.unwrap_or(i64::MAX).into()];
+    let mut args: Vec<rusqlite::types::Value> = vec![
+        bot_id.to_owned().into(),
+        limit.into(),
+        from.unwrap_or(i64::MAX).into(),
+        cutoff_rev.unwrap_or(i64::MAX).into(),
+    ];
     args.extend(terms.iter().map(|t| t.to_lowercase().into()));
     let mut st = c.prepare(&sql)?;
     Ok(st.query_map(rusqlite::params_from_iter(args), row_entry)?.collect::<rusqlite::Result<_>>()?)
@@ -269,7 +274,7 @@ impl Store {
     // An FTS5 trigram table once a bot's search passes a second.
     /// 私聊搜索复用同一事务内查询，群检索另由可信投递校验权限。
     pub fn search_messages(&self, bot_id: &str, terms: &[String], from: Option<i64>, limit: i64) -> Result<Vec<Entry>> {
-        search_messages_on(&self.db.locked(), bot_id, terms, from, limit)
+        search_messages_on(&self.db.locked(), bot_id, terms, from, limit, None)
     }
 
     /// The newest `limit` bot-to-bot notices in `bot_id`'s main chat that involve `peer_id`, oldest first.

@@ -14,21 +14,21 @@ Type a bot name in **Search or add bots** or open the list with its arrow. Add t
 - A group can't contain another group.
 - If an ordinary group already has the same members and lead, this opens that group.
 
-Use **Create new group session** for a fresh chat with your existing bots. Use **Create next stage group** for a new team of bot instances with an optional lead. To carry a handoff into the next stage, accept it in **Stage details**, then select **Use accepted handoff** in the creation form. You can also create the next stage without a handoff.
+Use **Create new group session** to start a separate task with fresh bots based on the roles you choose. Use **Create next stage group** to continue the same task with fresh bots that can consult the source group on demand. Both open an empty chat.
 
-## Start a fresh conversation with the same group
+## Start an independent task
 
 - **Desktop:** right-click the group in the sidebar and choose **Create new group session**.
 - **iPhone and Android:** touch and hold the group in the bot list and choose **Create new group session**.
 - **Terminal UI:** select the group and press `Ctrl+K` and choose **Create new group session**.
 
-The form starts with the source group’s members and lead. You can change either before creating the session. Its name gets the next number, such as **Release 1**, **Release 2**, or **Release 3**. Each member starts a fresh agent session for that group, and later messages in that group use its own conversation. Bots still use their own settings, workspace and long-term memory.
+The form starts with the source group’s members and lead. You can change either and review the role instructions before creating the session. Leave the name blank to use the next number, such as **Release 1** or **Release 2**. The copied roles each get a new bot and agent session. The source chat and handoff stay with the source group.
 
 ## Start the next stage of a task
 
-Open the source group's menu and choose **Create next stage group**. Right-click on desktop, touch and hold on iPhone or Android, or use `Ctrl+K` in the terminal. Select at least one source role. The stage name, lead, goal, acceptance criteria, and handoff are optional. Leaving the name blank generates one from the source group and selected roles. Use **Role settings** to review each selected role’s instructions and workspace. If someone edits a selected bot's configuration while the form is open, reopen the form to review it. On desktop and phones, the lead and role lists open below their fields and mark the current choice. In the terminal, press Tab to reach the role instructions and press `p` on a selected role to reuse its project folder.
+Open the source group's menu and choose **Create next stage group**. Right-click on desktop, touch and hold on iPhone or Android, or use `Ctrl+K` in the terminal. Select at least one source role. The stage name, lead, goal, and acceptance criteria are optional. The form shows which source chat and accepted handoff will be available for reference. Leaving the name blank generates one from the source group and selected roles. Use **Role settings** to review each selected role’s instructions and workspace. If someone edits a selected bot's configuration while the form is open, reopen the form to review it. On desktop and phones, the lead and role lists open below their fields and mark the current choice. In the terminal, press Tab to reach the role instructions and press `p` on a selected role to reuse its project folder.
 
-The new group starts with fresh bot instances. When you enter a goal or acceptance criteria, Codync prepares a draft with the supplied text. Review and send it when you are ready. New bots get their own workspace by default. You can explicitly reuse an existing project directory for a role. Codync shared memory starts off. The form identifies agents that keep their own shared memory.
+The new group starts with fresh bot instances. When you enter a goal or acceptance criteria, Codync prepares a draft with the supplied text. Review and send it when you are ready. For both creation flows, new bots get individual workspaces by default. You can explicitly reuse an existing project directory for a role, which gives it access to existing files in that directory. Codync shared memory and supported agent memory switches start off. The form identifies agents that may use their own global memory. Choose a standard agent configuration for roles that use a custom launch command, including custom fallback commands.
 
 Messages without an explicit recipient go to the stage lead if set and to all members otherwise. Use `@` to select another member, reply to a member's message, or use `@all` to address everyone. Keep work and revisions for the same stage in this group.
 
@@ -40,7 +40,7 @@ Choose **Stage details** from the stage group's menu. Edit and save the Markdown
 
 For files from an earlier bot's workspace, first share them in its stage group. Select them under **Shared evidence files** to pin their saved versions. The next stage receives its own copy of each selected file.
 
-Choose **Close stage** after its tasks are finished or stopped. You can keep reading its messages and handoff. **Reopen stage** lets you send work there again. When creating the next stage, select **Use accepted handoff** to carry its saved version into your first task. **Restore first draft** recovers the goal and acceptance criteria before your first send.
+Choose **Close stage** after its tasks are finished or stopped. You can keep reading its messages and handoff. **Reopen stage** lets you send work there again. Creating the next stage authorizes its roles to search the direct source group's visible messages up to creation and read the saved version of any accepted handoff. These materials are read on demand. Messages added or changed later stay in the source group. **Restore first draft** recovers the goal and acceptance criteria before your first send.
 
 ### View stage usage
 

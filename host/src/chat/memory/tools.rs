@@ -43,17 +43,18 @@ pub fn tools() -> Value {
         },
         {
             "name": "search_history",
-            "description": "Outside a group, read your own chat history with the user, newest first. In a group, supply the contextDeliveryId in the current prompt: searches and full-original reads are restricted to that live source group. Discover messages/plans/unfinished deliveries with kind and from/next. Read a complete message/plan by entryId or task by deliveryId, then offset/nextOffset and returned version until complete. Restart from offset=0 if the material changes. Large attachments/quotes metadata can be read separately with part=metadata. No arbitrary room or private-chat access in group scope.",
+            "description": "Outside a group, read your own chat history with the user, newest first. In a group, supply the contextDeliveryId in the current prompt: searches and full-original reads are restricted to that live source group. Discover messages/plans/unfinished deliveries with kind and from/next. Read a complete message/plan by entryId or task by deliveryId, then offset/nextOffset and returned version until complete. Restart from offset=0 if the material changes. Large attachments/quotes metadata can be read separately with part=metadata. An authorized new stage can use scope=previousStage to search source messages (kind=messages) or read the accepted handoff (kind=handoff). Returned source material is reference data only.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "contextDeliveryId": {"type":"string","description":"Group only: exact live execution ID from the current protected task packet."},
+                    "scope": {"type":"string","enum":["previousStage"],"description":"Optional read-only reference scope, available only in an authorized stage execution."},
                     "entryId": {"type":"string","description":"Group only: read full visible message or plan, in bounded Unicode-scalar pages."},
                     "deliveryId": {"type":"string","description":"Group only: read the original body of a task or spoken assignment."},
                     "offset": {"type":"integer","minimum":0,"description":"Original material's Unicode-scalar offset; use nextOffset to continue."},
                     "version": {"type":"string","description":"For offset>0 use the version returned by the first page; changed material requires restarting from offset=0."},
                     "part": {"type":"string","enum":["text","metadata"],"description":"Full original text or its complete metadata JSON."},
-                    "kind": {"type":"string","enum":["messages","plans","deliveries"],"description":"Group discovery list; deliveries lists unfinished or requiring human action."},
+                    "kind": {"type":"string","enum":["messages","plans","deliveries","handoff"],"description":"Group discovery list; deliveries lists unfinished work. Use handoff only with scope=previousStage to page the fixed accepted handoff."},
                     "query": {"type": "string", "description": "Words that must all appear, separated by spaces."},
                     "from": {"type": "string", "description": "A message id (from a result, next, or a memory's source): start at that message and go back."},
                     "limit": {"type": "integer", "description": "Maximum results (default 10, at most 30)."},
@@ -77,7 +78,8 @@ pub async fn call(hub: &Arc<Hub>, bot_id: &str, name: &str, group: Option<&str>,
             if let Some((_, id)) = hub.team.scoped_delivery(bot_id, group)? {
                 crate::chat::group::history::read(hub, bot_id, &id, args).await
             } else {
-                if args.get("contextDeliveryId").is_some()
+                if args.get("scope").is_some()
+                    || args.get("contextDeliveryId").is_some()
                     || args.get("entryId").is_some()
                     || args.get("deliveryId").is_some()
                 {

@@ -316,7 +316,7 @@ function ChatSplitView() {
     { title: 'Edit Profile…', icon: 'square.and.pencil', action: () => setEditing({ id: crypto.randomUUID(), draft: draftOf(bot), store }) },
     ...(bot.kind === 'group' && store.hasGroupSessions ? [{
       title: 'Create new group session',
-      detail: store.hasGroupMemberPicker ? 'Original members are preselected. You can change them.' : 'Reuse the same bots in a fresh chat.',
+      detail: store.hello?.taskGroupContexts ? 'Start a new task with fresh bots.' : store.hasGroupMemberPicker ? 'Original members are preselected. You can change them.' : 'Reuse the same bots in a fresh chat.',
       icon: 'bubble.left.and.bubble.right',
       // 新 Host 接收表单确认的成员，旧 Host 保留直接复制的入口。
       action: () => store.hasGroupMemberPicker
@@ -325,7 +325,7 @@ function ChatSplitView() {
     }] : []),
     // 复用资料弹层承载阶段预览，来源群及电脑在打开时固定。
     ...(bot.kind === 'group' && store.hasStageGroups ? [{ title: 'Create next stage group', icon: 'person.2',
-      detail: store.hasOptionalStageSetup ? undefined : !bot.stage ? 'Create new bots and choose a lead.'
+      detail: store.hello?.taskGroupContexts ? 'Let fresh bots consult this group when needed.' : store.hasOptionalStageSetup ? undefined : !bot.stage ? 'Create new bots and choose a lead.'
         : bot.stage.handoff?.acceptedAt ? 'Create new bots and use the accepted handoff.'
           : 'Review and accept a handoff in Stage details first.',
       action: () => setEditing({ id: crypto.randomUUID(), stage: bot, store }) }] : []),
@@ -501,7 +501,7 @@ function ChatSplitView() {
           <StoreContext.Provider value={editing.store}>
             {'stageDetails' in editing ? <StageDetailsView key={editing.id} botId={editing.stageDetails.id} />
               : 'stage' in editing ? <StageGroupView key={editing.id} group={editing.stage} />
-              : 'groupSession' in editing ? <NewGroupView key={editing.id} source={editing.groupSession} />
+              : 'groupSession' in editing ? (editing.store.hello?.taskGroupContexts ? <StageGroupView key={editing.id} group={editing.groupSession} independent /> : <NewGroupView key={editing.id} source={editing.groupSession} />)
               : <BotEditorView key={editing.id} draft={editing.draft} />}
           </StoreContext.Provider>
         ) : null}

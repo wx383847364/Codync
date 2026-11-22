@@ -29,6 +29,7 @@ mod reactions;
 mod sections;
 mod stage_groups;
 mod sync;
+mod task_groups;
 mod validate;
 pub(crate) use validate::validate;
 

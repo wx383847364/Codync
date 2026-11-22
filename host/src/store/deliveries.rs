@@ -348,8 +348,8 @@ impl Store {
         }
         let targets = if targets.is_empty() { default.as_slice() } else { targets };
         let mut data = data.clone();
-        // 首次主动发送携带已确认的交接副本；历史、查看交接和重复发送不创建工作。
-        if let Some(crate::store::StageGroup { incoming: Some(file), incoming_files, .. }) = group.stage
+        // 旧阶段的首次发送携带交接。新阶段由角色按需读取，旧资料缺失不应阻止当前任务。
+        if let Some(crate::store::StageGroup { previous: None, incoming: Some(file), incoming_files, .. }) = group.stage
             && !tx.query_row("SELECT EXISTS(SELECT 1 FROM entries WHERE bot_id=? AND kind='user')", [room], |r| {
                 r.get::<_, bool>(0)
             })?

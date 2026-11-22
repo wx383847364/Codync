@@ -124,7 +124,7 @@ struct BotListView: View {
         let id = store.computer.id
         let all = accounts.roster.filter { $0.ref.computerId == id }
         let owned = Set(all.flatMap { item in
-            (item.bot.stage?.ownedMembers ?? []).filter { item.bot.members.contains($0) }
+            (item.bot.stage?.ownedMembers ?? item.bot.groupSessionOwnedMembers ?? []).filter { item.bot.members.contains($0) }
         })
         let items = all.filter { !owned.contains($0.bot.id) && $0.bot.stage?.archivedAt == nil }
         let archives = Dictionary(grouping: all.filter { $0.bot.stage?.archivedAt != nil }) { $0.bot.section ?? "" }
@@ -264,7 +264,11 @@ struct BotListView: View {
         }
         .codyncSheet(item: $creatingGroupSession) { target in
             if let store = accounts.store(for: target.computerId) {
-                NewGroupView(source: target.group).environment(store)
+                if store.hello?.taskGroupContexts == true {
+                    StageGroupView(group: target.group, independent: true).environment(store)
+                } else {
+                    NewGroupView(source: target.group).environment(store)
+                }
             }
         }
         .codyncSheet(item: $creatingStage) { target in
@@ -468,7 +472,7 @@ struct BotListView: View {
             ]
             if bot.isGroup && store.supportsGroupSessions {
                 items.append(MenuItem("Create new group session", icon: "bubble.left.and.bubble.right",
-                                      detail: store.supportsGroupMemberPicker
+                                      detail: store.hello?.taskGroupContexts == true ? "Start a new task with fresh bots." : store.supportsGroupMemberPicker
                                         ? "Original members are preselected. You can change them." : "Reuse the same bots in a fresh chat.") {
                     // 新版由用户确认预填名单，旧版 Host 保持原有复制操作。
                     if store.supportsGroupMemberPicker {
@@ -480,7 +484,9 @@ struct BotListView: View {
             }
             if bot.isGroup && store.supportsStageGroups {
                 let detail: String?
-                if store.supportsOptionalStageSetup {
+                if store.hello?.taskGroupContexts == true {
+                    detail = "Let fresh bots consult this group when needed."
+                } else if store.supportsOptionalStageSetup {
                     detail = nil
                 } else if let stage = bot.stage {
                     detail = stage.handoff?.acceptedAt == nil ? "Review and accept a handoff in Stage details first."

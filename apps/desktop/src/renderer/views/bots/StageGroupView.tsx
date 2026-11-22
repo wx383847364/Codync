@@ -14,20 +14,26 @@ import { GroupBotPicker, GroupMemberPicker } from './GroupMemberPicker'
 import './bots.css'
 
 /** 预览角色与项目目录，确认后创建独立阶段和首条草稿。 */
-export function StageGroupView({ group }: { group: Bot }) {
+export function StageGroupView({ group, independent = false }: { group: Bot; independent?: boolean }) {
   const store = useStore()
   const tr = useTr()
   const [requestId] = useState(() => crypto.randomUUID())
   const [name, setName] = useState('')
   const [goal, setGoal] = useState('')
   const [acceptance, setAcceptance] = useState('')
-  const [leaderId, setLeader] = useState<string>()
-  const [roles, setRoles] = useState<StageGroupDraft['roles']>([])
+  const [leaderId, setLeader] = useState(independent ? group.stage?.leaderId || group.groupLeaderId : undefined)
+  // 独立任务默认选中原角色，但提交时创建新身份。
+  const [roles, setRoles] = useState<StageGroupDraft['roles']>(() => independent
+    ? store.members(group).map((bot) => ({ botId: bot.id, sourceRev: bot.rev, description: bot.description, reuseProject: false }))
+    : [])
+  const referencePrevious = !independent && store.hello?.taskGroupContexts === true
   const [roleEditor, setRoleEditor] = useState<string>()
   const [handoffVersion, setHandoffVersion] = useState<string>()
   const handoff = group.stage?.handoff?.acceptedAt ? group.stage.handoff : undefined
-  const bots = store.members(group)
+  const original = store.members(group)
+  const bots = independent ? [...original, ...store.roster.filter((bot) => bot.kind !== 'group' && !group.members.includes(bot.id))] : original
   const picked = bots.filter((bot) => roles.some((role) => role.botId === bot.id))
+  const blocked = picked.filter((bot) => bot.taskRoleCopyable === false)
   const editingBot = picked.find((bot) => bot.id === roleEditor)
   const editingRole = roles.find((role) => role.botId === editingBot?.id)
   const leader = picked.find((bot) => bot.id === leaderId)
@@ -55,26 +61,32 @@ export function StageGroupView({ group }: { group: Bot }) {
     if (!picked.length) return
     await store.createStageGroup({
       botId: group.id, requestId, name, goal, acceptance, leaderId: leader?.id ?? '',
-      handoffVersion: accepted ? handoff.file.id : undefined,
-      roles: group.members.flatMap((id) => roles.filter((role) => role.botId === id)),
-    })
+      handoffVersion: referencePrevious ? handoff?.file.id : accepted ? handoff.file.id : undefined,
+      referencePrevious: referencePrevious || undefined,
+      roles: bots.flatMap((bot) => roles.filter((role) => role.botId === bot.id)),
+    }, independent)
   }
 
   return <>
-    <CreateLayout title="Create next stage group" group
+    <CreateLayout title={independent ? "Create new group session" : "Create next stage group"} group
       preview={<GroupAvatar members={picked} size={80} />}
-      name={name} placeholder="Stage name" onName={setName} create={save}
-      canCreate={membersOnly ? picked.length > 0 : !!leader && !!name.trim() && (optional || (!!goal.trim() && !!acceptance.trim())) && (!group.stage || !!accepted)}>
+      name={name} placeholder={independent ? "Name your group" : "Stage name"} onName={setName} create={save}
+      canCreate={blocked.length === 0 && (independent || membersOnly ? picked.length > 0 : !!leader && !!name.trim() && (optional || (!!goal.trim() && !!acceptance.trim())) && (!group.stage || !!accepted))}>
       <GroupMemberPicker bots={bots} picked={picked} onToggle={select} />
       <GroupBotPicker bots={picked} selected={leader?.id} onChange={setLeader} label={membersOnly ? "Group lead (optional)" : "Group lead"} allowsNone={membersOnly} />
+      {!independent && <>
       <AutoTextArea className="field-box" value={goal} placeholder={optional ? 'Stage goal (optional)' : 'Stage goal'} minRows={2} maxRows={5} onChange={setGoal} />
       <AutoTextArea className="field-box" value={acceptance} placeholder={optional ? 'Acceptance criteria (optional)' : 'Acceptance criteria'} minRows={2} maxRows={5} onChange={setAcceptance} />
-      {group.stage && (handoff
+      </>}
+      {referencePrevious ? <Text as="div" size="footnote" tone="secondary">{tr("Previous group · {name}").replace("{name}", () => group.name)}{handoff && ` · ${tr("Accepted handoff")} ${handoff.file.sha256.slice(0, 12)}`}</Text> : !independent && group.stage && (handoff
         ? <div className="stage-handoff-choice">
           <Switch label="Use accepted handoff" on={!!accepted}
             onChange={(on) => setHandoffVersion(on ? handoff.file.id : undefined)}>{tr('Use accepted handoff')} · {handoff.file.sha256.slice(0, 12)}</Switch>
         </div>
         : !membersOnly && <Text as="div" size="footnote" tone="secondary" className="create-group-note">{tr('Review and accept a handoff in Stage details first.')}</Text>)}
+      {independent && <Text as="div" size="footnote" tone="secondary">{tr("Start a new task with fresh bots.")}</Text>}
+      {blocked.length > 0 && <Text as="div" size="footnote" tone="secondary">{tr("Custom launch commands cannot be copied. Choose a standard agent role.")} · {blocked.map((bot) => bot.name).join(", ")}</Text>}
+      {picked.some((bot) => bot.stageMemoryShared) && <Text as="div" size="footnote" tone="secondary">{tr("Some selected agents may use their own global memory.")}</Text>}
       <button type="button" className="field-box stage-role-settings" disabled={!picked.length}
         onClick={() => setRoleEditor(picked[0]?.id)}>
         {tr('Role settings')}
@@ -94,6 +106,7 @@ export function StageGroupView({ group }: { group: Bot }) {
             {editingBot.cwd && !editingBot.managedWorkspace &&
               <Switch label="Reuse project folder" on={!!editingRole.reuseProject}
                 onChange={(reuseProject) => update(editingBot.id, { reuseProject })}>{tr('Reuse project folder')} · {editingBot.cwd}</Switch>}
+            {editingRole.reuseProject && <Text as="div" size="caption" tone="secondary">{tr('This role can read existing files in the project folder.')}</Text>}
             <Text as="div" size="footnote" tone="secondary">{tr('New bots start with their own workspace and Codync shared memory off.')}</Text>
             {editingBot.stageMemoryShared &&
               <Text as="div" size="caption" tone="secondary">{tr('This agent shares its own memory across sessions.')}</Text>}
@@ -147,6 +160,7 @@ export function StageDetailsView({ botId }: { botId: string }) {
     <ModalHeader icon="doc.text" title={tr('Stage details')} />
     <div className="group-scroll"><div className="group-form">
       {details && stage && <>
+        {stage.previous && <Text as="div" size="footnote" tone="secondary">{tr("Previous group · {name}").replace("{name}", () => stage.previous?.name ?? "")}</Text>}
         <Text as="div" weight="semibold">{details.bot.name} · {tr(stage.archivedAt ? 'Stage archived' : stage.closedAt ? 'Stage closed' : 'Stage open')}</Text>
         <Text as="div" size="footnote" tone="secondary">{tr(handoff?.acceptedAt ? 'Stage accepted' : 'Stage awaiting acceptance')}</Text>
         {Object.entries(details.work.counts).map(([status, count]) => <Text as="div" key={status} size="footnote">{tr(status)} · {count}</Text>)}

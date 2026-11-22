@@ -12,7 +12,13 @@ pub(super) fn patched(stored: &BotConfig, patch: &Value) -> Result<BotConfig> {
     for (k, v) in patch.as_object().into_iter().flatten() {
         if !matches!(
             k.as_str(),
-            "id" | "createdAt" | "createdBy" | "lead" | "groupSessionBase" | "groupLeaderId" | "stage"
+            "id" | "createdAt"
+                | "createdBy"
+                | "lead"
+                | "groupSessionBase"
+                | "groupSessionOwnedMembers"
+                | "groupLeaderId"
+                | "stage"
         ) {
             merged[k] = v.clone();
         }

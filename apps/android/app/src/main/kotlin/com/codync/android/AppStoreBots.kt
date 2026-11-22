@@ -111,11 +111,11 @@ fun AppStore.createGroupSession(botId: String, members: List<String>? = null, le
 }
 
 /** 创建已确认的阶段群，保存首条草稿并打开，失败沿用 Store 的错误反馈。 */
-internal fun AppStore.createStageGroup(draft: StageGroupDraft, saved: () -> Unit) = action("stage-group") {
-    val response = ready().call("createStageGroup", WireJson.encodeToJsonElement(draft).jsonObject)
+internal fun AppStore.createStageGroup(draft: StageGroupDraft, independent: Boolean = false, saved: () -> Unit) = action("stage-group") {
+    val response = ready().call(if (independent) "createGroupSession" else "createStageGroup", WireJson.encodeToJsonElement(draft).jsonObject)
     val bot = HostClient.decode(response.jsonObject.getValue("bot").jsonObject)
     receiveReply(response)
-    if (bot.lastMessage == null && state.value.drafts[bot.id]?.text.isNullOrEmpty()) {
+    if (!independent && bot.lastMessage == null && state.value.drafts[bot.id]?.text.isNullOrEmpty()) {
         editDraft(bot.id, response.jsonObject.getValue("draft").jsonPrimitive.content)
     }
     openBot(bot.id)

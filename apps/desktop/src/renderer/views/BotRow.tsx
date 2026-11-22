@@ -15,7 +15,7 @@ import type { BotStore } from '../store/bot-store'
 export const BotRow = memo(function BotRow({ bot, store, compact, usingComputer, members, agent }: { bot: Bot; store: BotStore; compact: boolean; usingComputer: boolean; members: Bot[]; agent: string | null }) {
   // The cached roster paints before hello names the agents. Follow the store so that arrival replaces "Custom agent".
   useModel(store)
-  const stage = [...store.bots.values()].find((group) => group.stage?.ownedMembers?.includes(bot.id) && group.members.includes(bot.id))
+  const stage = [...store.bots.values()].find((group) => (group.stage?.ownedMembers ?? group.groupSessionOwnedMembers)?.includes(bot.id) && group.members.includes(bot.id))
   const affiliation = !isGroup(bot) ? stage?.name ?? bot.section ?? (!bot.managedWorkspace ? folderName(bot) : undefined) : undefined
   return (
     <HStack gap={compact ? 0 : 10} justify={compact ? 'center' : 'flex-start'} className="bot-row">

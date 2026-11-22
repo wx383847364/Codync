@@ -64,6 +64,10 @@ internal fun menuSections(bots: List<Bot>): List<String> = sectionNames(bots.fil
 private const val SECTIONS_HOST = "2.32.0"
 
 /** 根据当前群所属 Host 公布的能力显示独立会话入口。 */
+/** 新版 Host 支持复制角色和按需回查阶段资料。 */
+internal val AppState.supportsTaskGroupContexts: Boolean
+    get() = hello?.get("taskGroupContexts")?.jsonPrimitive?.booleanOrNull == true
+
 internal val AppState.supportsGroupSessions: Boolean
     get() = hello?.get("groupSessions")?.jsonPrimitive?.booleanOrNull == true
 

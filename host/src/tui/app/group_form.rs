@@ -14,6 +14,10 @@ impl App {
     /// 新版 Host 先确认预填成员，旧版 Host 仍能直接复制。
     pub(super) fn create_group_session(&mut self) {
         let Some(id) = self.selected_group_id().map(str::to_owned) else { return };
+        if self.task_group_contexts {
+            self.open_task_group(true);
+            return;
+        }
         if !self.group_member_picker {
             self.call("createGroupSession", json!({"botId":id}), After::GroupSessionCreated);
             return;
