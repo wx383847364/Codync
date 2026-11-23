@@ -118,9 +118,10 @@ pub fn list(store: &Store, bot: &str) -> Vec<Artifact> {
     artifacts
 }
 
-/// Saves an artifact's details under a new rev and tells the apps (`artifact` event; they upsert it by id).
+/// 按版本发布作品详情，删除后到达的发布或改名不能重新保存该作品。
 fn put(hub: &Hub, artifact: &mut Artifact) -> Result<()> {
     hub.emit_change(|| {
+        ensure!(hub.store.bot(&artifact.bot_id)?.is_some_and(|bot| !bot.deleted), "unknown bot");
         hub.store.kv_set_stamped(&key(&artifact.bot_id, &artifact.id), |rev| {
             artifact.rev = rev;
             Ok(serde_json::to_string(artifact)?)
@@ -197,7 +198,13 @@ async fn publish(hub: &Arc<Hub>, bot: &str, group: Option<&str>, args: &Value) -
     };
     let id = existing.as_ref().map_or_else(|| uuid::Uuid::new_v4().to_string(), |artifact| artifact.id.clone());
     let (dest, source) = (html_path(bot, &id)?, Path::new(&row.config.cwd).join(source));
-    let (size, sha256) = tokio::task::spawn_blocking(move || write(&dest, &source)).await??;
+    let writer = hub.clone();
+    let owner = bot.to_owned();
+    let (size, sha256) = tokio::task::spawn_blocking(move || {
+        // 作品写入有 5 MiB 上限，与删除互斥以免已清理的目录在稍后重新出现。
+        writer.with_live_bot(&owner, |_| write(&dest, &source))
+    })
+    .await??;
     let now = now_ms();
     let mut artifact = Artifact {
         id,

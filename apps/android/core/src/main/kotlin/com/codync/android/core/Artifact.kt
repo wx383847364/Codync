@@ -68,6 +68,12 @@ data class ArtifactCache(
 
     fun fail(id: String, message: String): ArtifactCache = copy(failures = failures + (id to message))
 
+    /** 清除删除聊天的作品详情、HTML 和错误缓存。 */
+    fun removeBots(botIds: Set<String>): ArtifactCache {
+        val ids = details.values.filter { it.botId in botIds }.map { it.id }.toSet()
+        return if (ids.isEmpty()) this else copy(details = details - ids, html = html - ids, failures = failures - ids)
+    }
+
     /** The newest version of an artifact known here; `announced` is the version a card names. */
     fun newest(id: String, announced: Long = 0): Long = maxOf(announced, details[id]?.updatedAt ?: 0)
 

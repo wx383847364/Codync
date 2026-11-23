@@ -79,6 +79,7 @@ pub(super) async fn call(hub: &Arc<Hub>, caller: &Caller, method: &str, b: Value
                 "groupSessionContexts": true,
                 "groupResourceUsage": true,
                 "stageGroups": true,
+                "purgeGroup": true,
                 "taskGroupContexts": true,
                 "workspaceFileSearch": true,
                 // Whether `installHostUpdate` can update this computer, from here or a phone.

@@ -252,6 +252,7 @@
     "hello.name": "string",
     "hello.optionalStageSetup": "bool",
     "hello.os": "string",
+    "hello.purgeGroup": "bool",
     "hello.rev": "number",
     "hello.signKey": "string",
     "hello.stageGroups": "bool",

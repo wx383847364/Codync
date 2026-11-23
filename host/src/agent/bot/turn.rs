@@ -249,7 +249,10 @@ impl Actor {
         // 普通群共用会话，但群派工不会收到用户刚刚编辑的私聊摘要。
         let private_handoff_key = (from_user && lane == Lane::main(&self.cfg.id))
             .then(|| crate::store::deliveries::handoff::private_key(&self.cfg.id));
-        let private_handoff = private_handoff_key.as_deref().and_then(|key| self.hub.store.kv_get(key));
+        let private_handoff = private_handoff_key
+            .as_deref()
+            .and_then(|key| self.hub.store.kv_get(key))
+            .map(crate::store::deliveries::handoff::private_text);
         let private_prompt = private_handoff.as_ref().map(|summary| format!(
             "<session-handoff>\nThe user's private handoff from the previous session.\n{summary}\n</session-handoff>\n\n{text}"
         ));

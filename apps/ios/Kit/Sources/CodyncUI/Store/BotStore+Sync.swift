@@ -115,6 +115,7 @@ extension BotStore {
             onRosterChanged?()
             if bot.unread > 0 { acknowledgeVisibleConversations(bot.id) }
         case let .botDeleted(id, r):
+            artifacts.removeBot(id)
             removeComposerDrafts(for: id)
             bots[id] = nil
             entries[id] = nil

@@ -4,7 +4,7 @@ use super::{Hub, patch, sections, validate};
 use crate::LockExt;
 use crate::agent::bot::Cmd;
 use crate::store::BotConfig;
-use anyhow::{Result, anyhow, ensure};
+use anyhow::{Context, Result, anyhow, ensure};
 use serde_json::{Value, json};
 use std::sync::Arc;
 
@@ -96,6 +96,13 @@ impl Hub {
         self.emit_bot(&id);
         crate::usage::bots_changed(self);
         Ok(self.bot_value(&id).unwrap_or(Value::Null))
+    }
+
+    /// 小文件落盘与删除共用发布锁，防止已删除的对话重新创建资源目录。
+    pub(crate) fn with_live_bot<T>(&self, id: &str, operation: impl FnOnce(&BotConfig) -> Result<T>) -> Result<T> {
+        let _emit = self.emit_lock.locked();
+        let row = self.store.bot(id)?.filter(|row| !row.deleted).context("unknown bot")?;
+        operation(&row.config)
     }
 
     /// 删除标记与取消投递先提交，再关闭 actor 和清理成员资源。

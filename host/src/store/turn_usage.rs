@@ -51,11 +51,12 @@ pub(super) fn schema(c: &Connection) -> Result<()> {
 }
 
 impl Store {
-    /// 执行器初始化之前固定尝试身份；不存提示、工具内容或会话正文。
+    /// 初始化时记录尝试身份，已删除的房间与 Bot 不接受迟到的记录。
     pub(crate) fn begin_usage_attempt(&self, attempt: &AttemptStart<'_>) -> Result<()> {
         self.db.locked().execute(
             "INSERT OR IGNORE INTO turn_usage_attempts(id,bot_id,room_id,delivery_id,backend,source,request_ids,started_at)
-             VALUES(?,?,?,?,?,?,?,?)",
+             SELECT ?1,?2,?3,?4,?5,?6,?7,?8
+             WHERE NOT EXISTS(SELECT 1 FROM bots WHERE id IN (?2,?3) AND deleted=1)",
             params![attempt.id, attempt.bot, attempt.room, attempt.delivery, attempt.backend,
                 attempt.source, serde_json::to_string(attempt.requests)?, now_ms()],
         )?;

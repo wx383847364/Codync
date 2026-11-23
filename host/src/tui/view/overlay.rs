@@ -5,7 +5,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
 use ratatui::style::{Modifier, Style};
 
-use super::super::app::{App, Editor, Overlay, tilde};
+use super::super::app::{App, ConfirmAct, Editor, Overlay, tilde};
 use super::super::md::{truncate, width as w};
 use super::buffer::{centered, dim_all, frame_box, put, restyle, rput, u};
 use super::forms::{form_view, group_view};
@@ -69,7 +69,9 @@ pub(super) fn overlay(buf: &mut Buffer, area: Rect, app: &mut App, top: &Overlay
         Overlay::LeadAgent(scroll) => super::lead_agent::lead_agent(buf, area, *scroll),
         Overlay::Confirm(c) => {
             let t = theme();
-            let r = centered(area, 62, 8);
+            // 为彻底删除及其范围说明留出额外行，普通确认沿用原高度。
+            let purge = matches!(&c.act, ConfirmAct::DeleteGroup(_));
+            let r = centered(area, 66, if purge { 11 } else { 8 });
             let inner = frame_box(buf, r, t.red, t.panel, None);
             // The title already includes a bot or device name. Translating it
             // here would also translate a name that is itself a phrase.
@@ -87,6 +89,14 @@ pub(super) fn overlay(buf: &mut Buffer, area: Rect, app: &mut App, top: &Overlay
             };
             let x = put(buf, inner.x, inner.y + 4, 30, &format!(" ↵ {button} "), danger) + 1;
             put(buf, x, inner.y + 4, 14, &format!(" esc {cancel} "), t.text.patch(t.btn).add_modifier(Modifier::BOLD));
+            if purge {
+                let button = super::super::l10n::tr("Delete group and its bots");
+                let bots = super::super::l10n::tr("Removes exclusive bots, conversations and resources.");
+                let copies = super::super::l10n::tr("Copied chats, shared bots and external projects stay.");
+                put(buf, inner.x, inner.y + 6, inner.width, &format!(" X {button} "), danger);
+                put(buf, inner.x, inner.y + 7, inner.width, &bots, t.text.patch(t.panel));
+                put(buf, inner.x, inner.y + 8, inner.width, &copies, t.secondary.patch(t.panel));
+            }
         }
         Overlay::NewBot(n) => new_bot_view(buf, area, n),
         Overlay::Folder(p) => {

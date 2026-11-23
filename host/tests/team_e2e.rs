@@ -460,3 +460,102 @@ async fn task_group_creation_copies_configuration_and_only_stages_link_back() {
     assert_eq!(saved["bot"]["stage"]["previous"]["roomId"], source["id"]);
     assert_ne!(saved["createdMembers"][0], *member);
 }
+
+/// 完整删除移除源群及专属成员资源，保留旧式共享成员和真正复制出来的群及 Bot。
+#[tokio::test]
+async fn group_purge_removes_owned_data_and_keeps_both_forms_of_copy() {
+    let host = Host::start().await;
+    let exclusive = host
+        .call(
+            "createBot",
+            json!({
+                "name":"Exclusive","backend":"opencode","connectors":[],"skills":[]
+            }),
+        )
+        .await["bot"]
+        .clone();
+    let shared = host.bot("Shared").await;
+    let source = host
+        .call(
+            "createBot",
+            json!({
+                "name":"Purge source","kind":"group","members":[exclusive["id"],shared],"groupLeaderId":shared
+            }),
+        )
+        .await["bot"]
+        .clone();
+    let legacy = host
+        .call(
+            "createGroupSession",
+            json!({
+                "botId":source["id"],"selection":{"members":[shared]}
+            }),
+        )
+        .await["bot"]
+        .clone();
+    let copied = host
+        .call(
+            "createGroupSession",
+            json!({
+                "botId":source["id"],"requestId":uuid::Uuid::new_v4().to_string(),"name":"Copied task",
+                "roles":[{"botId":exclusive["id"],"sourceRev":exclusive["rev"],"description":"Copied instructions"}]
+            }),
+        )
+        .await["bot"]
+        .clone();
+    let copied_bot = &copied["members"][0];
+    assert_ne!(copied_bot, &exclusive["id"]);
+
+    let upload = uuid::Uuid::new_v4().to_string();
+    for id in [&source["id"], &exclusive["id"], &legacy["id"], &copied["id"], copied_bot] {
+        // 同一个附件 ID 在不同会话下独立保存，删除源群不应按文件名或 ID 扩散。
+        host.call(
+            "upload",
+            json!({
+                "botId":id,"uploadId":upload,"name":"notes.txt","offset":0,"data":"dGVzdA==","done":true
+            }),
+        )
+        .await;
+    }
+    let source_id = source["id"].as_str().unwrap();
+    let exclusive_id = exclusive["id"].as_str().unwrap();
+    let root = host.home.join("bots");
+    let exclusive_workspace = root.join(exclusive_id).join("workspace");
+    std::fs::write(exclusive_workspace.join("work.txt"), "managed work").unwrap();
+    let generated = root.join(source_id).join("files");
+    std::fs::create_dir_all(&generated).unwrap();
+    std::fs::write(generated.join("report.txt"), "group report").unwrap();
+    let external = host.home.join("project");
+    std::fs::create_dir_all(&external).unwrap();
+    std::fs::write(external.join("source.txt"), "keep external project").unwrap();
+    host.call("updateBot", json!({"id":exclusive["id"],"cwd":external})).await;
+    host.call("send", json!({"botId":source["id"],"text":"BLOCK source history", "attachments":[upload]})).await;
+
+    let prompts = host.home.join("Shared").join("prompts.jsonl");
+    common::eventually("the shared fake agent is working in the source group", Duration::from_secs(10), async || {
+        std::fs::read_to_string(&prompts).is_ok_and(|text| text.contains("BLOCK source history"))
+    })
+    .await;
+    host.call("purgeGroup", json!({"botId":source["id"]})).await;
+    host.call("purgeGroup", json!({"botId":source["id"]})).await;
+    // 完成已删群的迟到取消回执后，共享成员仍应能在其复制会话回复。
+    let legacy_id = legacy["id"].as_str().unwrap();
+    host.call("send", json!({"botId":legacy_id,"text":"kept chat question"})).await;
+    host.wait_for(legacy_id, |e| e["kind"] == "agent" && e["data"]["final"] == true).await;
+    let db = rusqlite::Connection::open(host.home.join("codync.db")).unwrap();
+    for id in [source_id, exclusive_id] {
+        let deleted: bool = db.query_row("SELECT deleted FROM bots WHERE id=?", [id], |row| row.get(0)).unwrap();
+        let entries: i64 = db.query_row("SELECT count(*) FROM entries WHERE bot_id=?", [id], |row| row.get(0)).unwrap();
+        assert!(deleted, "{id} must be deleted");
+        assert_eq!(entries, 0);
+        assert!(!root.join(id).exists());
+    }
+    assert!(external.join("source.txt").exists());
+    for id in [&legacy["id"], &copied["id"], copied_bot] {
+        let file = host.call("readUpload", json!({"botId":id,"uploadId":upload,"offset":0})).await;
+        assert_eq!(file["data"], "dGVzdA==");
+    }
+    let legacy_config: String =
+        db.query_row("SELECT config FROM bots WHERE id=?", [legacy["id"].as_str().unwrap()], |row| row.get(0)).unwrap();
+    assert_eq!(serde_json::from_str::<Value>(&legacy_config).unwrap()["members"], json!([shared]));
+}

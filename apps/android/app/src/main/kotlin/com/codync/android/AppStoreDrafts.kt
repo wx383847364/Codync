@@ -89,6 +89,24 @@ private fun AppStore.updateDraft(draft: ComposerDraft) {
     persistDrafts()
 }
 
+/** 根据 Host 删除事件清理所有被删除聊天的草稿和专属草稿附件。 */
+internal suspend fun AppStore.clearDeletedChatDrafts(deleted: Set<String>) {
+    if (deleted.isEmpty()) return
+    val current = state.value
+    val retired = current.drafts.filterKeys { it.substringBefore('/') in deleted }
+    if (retired.isEmpty()) return
+    val remaining = current.drafts - retired.keys
+    val retainedFiles = (remaining.values.flatMap { it.files } + current.pending.flatMap { it.files }).map { it.path }.toSet()
+    mutableState.update { it.copy(drafts = remaining) }
+    persistDrafts()
+    draftWriter?.join()
+    // 只有草稿写入成功且文件未被别处使用时才能删除磁盘副本。
+    val savedFiles = savedDrafts.values.flatMap { it.files }.map { it.path }.toSet()
+    withContext(Dispatchers.IO) {
+        retired.values.flatMap { it.files }.filter { it.path !in retainedFiles && it.path !in savedFiles }.forEach(attachments::discard)
+    }
+}
+
 internal fun AppStore.persistDrafts() {
     if (draftWriter?.isActive == true) return
     val book = draftBook ?: return

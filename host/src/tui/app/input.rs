@@ -413,8 +413,13 @@ impl App {
                         title: format!("Delete {}?", b.name),
                         detail,
                         note,
-                        button: "Delete",
-                        act: ConfirmAct::Delete(b.id.clone()),
+                        button: if b.group { "Delete only group chat" } else { "Delete" },
+                        // 老 Host 只有原删除入口；只有群确认框响应彻底删除快捷键。
+                        act: if b.group && self.group_purge {
+                            ConfirmAct::DeleteGroup(b.id.clone())
+                        } else {
+                            ConfirmAct::Delete(b.id.clone())
+                        },
                     };
                     self.overlays.push(Overlay::Confirm(c));
                 }

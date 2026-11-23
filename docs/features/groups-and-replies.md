@@ -41,6 +41,7 @@ quotes itself.
 | `stageUsage` | `{botId}` | Reads local delivery, attempt, observed ACP prompt, confirmed new session and process counts, provider-reported totals by backend/model, and coverage. |
 | `updateBot` | `{id, name?, members?, pinned?, hidden?, section?}` | A group can't become a bot or the reverse. `section`: a name, or `null` for none. |
 | `deleteBot` | `botId` | A group's bots stay. A deleted bot leaves its groups. |
+| `purgeGroup` | `botId` | Requires the `purgeGroup` capability in `hello`. Removes a group, its exclusive bots, and their Codync data. Copied groups and bots and members shared with other live groups are preserved. |
 | `reorderBots` | `ids` | The roster as the user dragged it, top first; groups count as rows. See [bot order](computer-order.md#bot-order). |
 | `renameSection` | `from, to` | Every row in section `from` moves to `to`, groups too; an existing name merges them, `null` removes the section. See [bot order](computer-order.md#bot-order). |
 | `guideDelivery` | `deliveryId, activeDeliveryId` | Joins a directly mentioned member's live group turn. The host checks the displayed active delivery ID, room, membership and adapter support. |

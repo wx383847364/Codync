@@ -252,6 +252,7 @@ export class BotSync extends BotMirror {
         if (event.bot.unread > 0) this.acknowledgeVisible(event.bot.id)
         break
       case 'botDeleted':
+        this.artifacts.removeBot(event.id)
         this.composerDrafts.removeBot(event.id)
         this.bots.delete(event.id)
         this.entries.delete(event.id)

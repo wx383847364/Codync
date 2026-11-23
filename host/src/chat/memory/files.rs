@@ -66,10 +66,18 @@ pub fn index(store: &Store, cfg: &BotConfig) -> String {
 // ponytail: one lock for every folder; per-folder locks if scans ever queue behind each other.
 static SCANNING: Mutex<()> = Mutex::new(());
 
+/// 删除标记提交后等待已开始的写入，清理时不会再有新写入获得源 Bot 的资格。
+pub(crate) fn wait_for_writers() {
+    drop(SCANNING.locked());
+}
+
 /// Records what changed in the folders a bot sees since the last scan. Returns whether a file was too fresh to
 /// take yet.
 pub fn scan(hub: &Hub, cfg: &BotConfig) -> bool {
     let _one = SCANNING.locked();
+    if hub.store.bot(&cfg.id).is_ok_and(|row| row.is_some_and(|bot| bot.deleted)) {
+        return false;
+    }
     prune(&hub.store);
     let mut deferred = false;
     for layer in layers(cfg) {
@@ -308,8 +316,7 @@ pub struct Writer<'a> {
 
 /// Writes a file the way every host writer does: only over the content whose hash is `expected` (`None`: no file
 /// yet), through a temporary file in the same folder renamed over it, or by deleting it (`content` `None`). A file
-/// that changed meanwhile isn't overwritten: its change is recorded and the write fails. A bot's write passes the
-/// checks and the rules on what it may change first.
+/// 写入以已有内容的哈希做并发校验，机器人或梦境只能在其仍存在时更新记忆。
 pub fn write(
     hub: &Hub,
     layer: Option<&str>,
@@ -320,6 +327,10 @@ pub fn write(
 ) -> Result<Version> {
     // Held until the change is recorded, so another writer can't pass the same compare-and-swap meanwhile.
     let _one = SCANNING.locked();
+    if let Some(bot) = writer.bot.map(|cfg| cfg.id.as_str()).or(layer) {
+        // 旧测试或外部导入可使用无 roster 记录的层，明确删除的身份一律拒绝。
+        anyhow::ensure!(!hub.store.bot(bot)?.is_some_and(|row| row.deleted), "bot was deleted");
+    }
     let now = read(layer, name)?;
     if now.as_deref().map(mf::hash).as_deref() != expected {
         // The other change is recorded, so it isn't lost.

@@ -81,7 +81,7 @@ host answers and sends it once the host is up.
 | `bot_updated` | host | `changeStage` | `stage_action` (`saveHandoff`/`accept`/`close`/`reopen`), `outcome` (`saved`/`failed`), `error` (`storage`/`other` on failure) |
 | `bots_reordered` | host | `reorderBots` | — |
 | `section_renamed` | host | `renameSection` | `removed`: whether it removed the section (`to` empty or `null`); never the names |
-| `bot_deleted` | host | `deleteBot` | — |
+| `bot_deleted` | host | `deleteBot`, `purgeGroup` | `scope: group_and_bots` for full group deletion |
 | `attachment_preview` | desktop, iPhone, Android | Local draft image preview | `outcome`: `opened` or `decode_failed`; no filename, path or image content |
 | `file_link_action` | desktop, terminal UI, iPhone, Android | Action selected on a file link or shared file | `action`: `open`, `reveal`, `save`, `copy_path`, `copy_contents`, `cursor`, `vscode`; `outcome`: `ok`, `cancelled`, `missing`, `unsupported`, `failed`; no path or contents |
 | `message_sent` | host | `send` (a resend counts once) | `kind`, `agent`, `reply` (whether it quotes a message), `attachments` (count), `workspaceFileReferences` (count when present) |

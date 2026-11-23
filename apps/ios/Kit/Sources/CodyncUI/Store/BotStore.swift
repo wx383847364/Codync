@@ -257,6 +257,9 @@ public final class BotStore {
     /// 由当前 Host 公布的能力决定是否展示阶段入口。
     public var supportsStageGroups: Bool { hello?.stageGroups == true }
 
+    /// 仅在 Host 明确支持时显示彻底删除。
+    var supportsGroupPurge: Bool { hello?.purgeGroup == true }
+
     /// 当前 Host 允许仅选择成员就创建阶段群。
     public var supportsOptionalStageSetup: Bool { hello?.optionalStageSetup == true }
 
