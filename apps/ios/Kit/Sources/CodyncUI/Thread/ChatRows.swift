@@ -12,6 +12,9 @@ struct ChatRow: View {
     var contextModel: String?
     var contextReasoning: String?
     var inspectContext: (() -> Void)?
+    var contextRecommended = false
+    var contextWaiting = false
+    var newSession: (() -> Void)?
     /// The bot or group the chat belongs to.
     let chat: Bot?
     let openTrace: () -> Void
@@ -39,7 +42,7 @@ struct ChatRow: View {
             .padding(.top, groupStart ? 12 : 4)
         case "agent":
             VStack(alignment: .leading, spacing: 4) {
-                if chat?.isGroup == true, groupStart { AuthorLabel(botId: entry.data.author, handoffPending: handoffPending, groupContextLabel: groupContextLabel, contextModel: contextModel, contextReasoning: contextReasoning, inspectContext: inspectContext) }
+                if chat?.isGroup == true, groupStart { AuthorLabel(botId: entry.data.author, handoffPending: handoffPending, groupContextLabel: groupContextLabel, contextModel: contextModel, contextReasoning: contextReasoning, inspectContext: inspectContext, contextRecommended: contextRecommended, contextWaiting: contextWaiting, newSession: newSession) }
                 AgentBubble(entry: entry, openTrace: openTrace, reply: reply, openArtifact: openArtifact)
                 ReactionsRow(entry: entry)
                     .padding(.leading, chat?.isGroup == true ? 34 : 0)
@@ -86,7 +89,7 @@ struct TimeSeparator: View {
     }
 }
 
-/// Who wrote a message in a group: their avatar and name in their color.
+/// 群消息头按完整标签换行，共用成员页的推荐状态和摘要操作。
 struct AuthorLabel: View {
     let botId: String?
     /// The name for an author that isn't one of this computer's bots (a bot on another computer).
@@ -96,20 +99,23 @@ struct AuthorLabel: View {
     var contextModel: String?
     var contextReasoning: String?
     var inspectContext: (() -> Void)?
+    var contextRecommended = false
+    var contextWaiting = false
+    var newSession: (() -> Void)?
     @Environment(BotStore.self) private var model
 
     var body: some View {
         let bot = botId.flatMap { model.bots[$0] }
-        HStack(spacing: 8) {
+        WrapLayout(spacing: 8, leading: true) {
             if let bot { CharacterAvatar(bot: bot, size: 26, animated: false) }
             Text(model.authorName(botId, fallback: name))
                 .font(.subheadline.weight(.medium))
                 .foregroundStyle(bot.map { AvatarPalette.color($0.avatarColor) } ?? Palette.secondary)
             if let groupContextLabel, let inspectContext {
                 Button(groupContextLabel, action: inspectContext)
-                    .font(.caption.monospacedDigit()).foregroundStyle(Palette.secondary)
+                    .font(.caption.monospacedDigit()).foregroundStyle(contextRecommended ? Palette.warning : Palette.secondary)
                     .padding(.horizontal, 6).padding(.vertical, 2)
-                    .background(Palette.bubbleAgent, in: Capsule()).buttonStyle(.plain)
+                    .background(contextRecommended ? Palette.warning.opacity(0.14) : Palette.bubbleAgent, in: Capsule()).buttonStyle(.plain)
                     .fixedSize(horizontal: true, vertical: false)
                 if let contextModel {
                     Text(contextModel).font(.caption.weight(.medium)).foregroundStyle(Palette.secondary).lineLimit(1)
@@ -120,6 +126,18 @@ struct AuthorLabel: View {
                             .fixedSize()
                     }
                 }
+            }
+            if let newSession {
+                Button(action: newSession) {
+                    // 标题和名字旁的读数是独立点击区，不会自动确认摘要。
+                    Label(L10n.tr("Open new session"), systemImage: "arrow.clockwise")
+                }
+                .font(.caption.weight(.semibold)).foregroundStyle(Palette.warning)
+                .padding(.horizontal, 8).padding(.vertical, 4)
+                .background(Palette.warning.opacity(0.14), in: Capsule()).buttonStyle(.plain)
+                .disabled(model.isOffline || model.mismatch != nil)
+            } else if contextWaiting {
+                Text(L10n.tr("New session after this turn")).font(.caption).foregroundStyle(Palette.secondary)
             }
             if handoffPending && model.hello?.groupSessionContexts != true {
                 Text(L10n.tr("Session switch needs confirmation")).font(.caption).foregroundStyle(Palette.warning)
@@ -502,7 +520,8 @@ struct ReactionsRow: View {
 /// elsewhere in the chat skips it.
 extension ChatRow: @MainActor Equatable {
     static func == (a: Self, b: Self) -> Bool {
-        a.entry == b.entry && a.groupStart == b.groupStart && a.handoffPending == b.handoffPending && a.groupContextLabel == b.groupContextLabel
+        a.contextRecommended == b.contextRecommended && a.contextWaiting == b.contextWaiting && (a.newSession != nil) == (b.newSession != nil)
+            && a.entry == b.entry && a.groupStart == b.groupStart && a.handoffPending == b.handoffPending && a.groupContextLabel == b.groupContextLabel
             && a.contextModel == b.contextModel && a.contextReasoning == b.contextReasoning && a.chat?.isGroup == b.chat?.isGroup
             && a.chat?.isWorking == b.chat?.isWorking && (a.reply == nil) == (b.reply == nil)
     }

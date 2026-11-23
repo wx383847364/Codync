@@ -441,6 +441,7 @@ impl App {
 
     // ---------- mouse ----------
 
+    /// 鼠标按持久目标分派操作，消息头与成员页复用同一摘要入口。
     pub fn on_mouse(&mut self, m: MouseEvent) {
         let at = Position::new(m.column, m.row);
         match m.kind {
@@ -482,6 +483,7 @@ impl App {
                     Some(Click::BotChat(entry)) => self.open_bot_chat(&entry),
                     Some(Click::DevServers) => self.open_dev_servers(),
                     Some(Click::GroupContexts) => self.open_group_contexts(),
+                    Some(Click::MemberSession(room, bot)) => self.open_member_session(room, bot),
                     Some(Click::Section(name)) => {
                         self.click_section(&name);
                         self.focus = Focus::Roster;

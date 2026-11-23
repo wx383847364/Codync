@@ -241,19 +241,41 @@ fn entry_lines(
                         && let Some(member) = snapshot["members"]
                             .as_array()
                             .and_then(|rows| rows.iter().find(|m| m["botId"] == e.data["author"]))
-                        && member["used"].is_u64()
                     {
-                        let reading = super::super::manage::context_reading(
-                            member,
-                            snapshot["basis"].as_u64().unwrap_or(512_000),
-                        );
-                        head.push(Span::styled(format!(" · {reading}"), t.secondary));
-                        // 和用量共用原有显示条件，未知档位保持空白。
-                        if let Some(model) = member["actualModelName"].as_str() {
-                            let effort = member["reasoning"]
-                                .as_str()
-                                .map_or_else(String::new, |level| format!(" {}", tr(level)));
-                            head.push(Span::styled(format!(" · {model}{effort}"), t.secondary));
+                        if member["used"].is_u64() {
+                            let reading = super::super::manage::context_reading(
+                                member,
+                                snapshot["basis"].as_u64().unwrap_or(512_000),
+                            );
+                            head.push(Span::styled(format!(" · {reading}"), t.secondary));
+                            // 和用量共用原有显示条件，未知档位保持空白。
+                            if let Some(model) = member["actualModelName"].as_str() {
+                                let effort = member["reasoning"]
+                                    .as_str()
+                                    .map_or_else(String::new, |level| format!(" {}", tr(level)));
+                                head.push(Span::styled(format!(" · {model}{effort}"), t.secondary));
+                            }
+                        }
+                        // 未上报读数也保留待确认派工的入口；键盘和鼠标均进入同一摘要。
+
+                        if super::super::manage::context_action(member) {
+                            let label = format!(" · [{}]", tr("Open new session"));
+                            // 窄终端为按钮和时间另起一行，避免显示被截掉而点击区域仍留在屏外。
+                            if head.iter().map(Span::width).sum::<usize>() + w(&label) + 8 > width {
+                                out.lines.push(Line::from(std::mem::take(&mut head)));
+                            }
+                            let x = u(head.iter().map(Span::width).sum::<usize>());
+                            let width = u(w(&label));
+                            out.buttons.push((
+                                out.lines.len(),
+                                x,
+                                width,
+                                Click::MemberSession(
+                                    b.id.clone(),
+                                    e.data["author"].as_str().unwrap_or_default().to_owned(),
+                                ),
+                            ));
+                            head.push(Span::styled(label, t.amber));
                         }
                     }
                 } else {

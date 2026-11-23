@@ -72,6 +72,7 @@ import kotlinx.serialization.json.jsonPrimitive
     key(state.contextId, state.generation, bot.id) { ThreadView(bot, state, store, editGroup) }
 }
 
+/** 群消息头可直接审阅所选成员摘要，普通群复用私聊确认边界。 */
 @Composable private fun ThreadView(bot: Bot, state: AppState, store: AppStore, editGroup: (Bot) -> Unit) {
     AnalyticsOnAppear(AnalyticsEvent.ScreenViewed(AnalyticsScreen.Chat))
     val context = LocalContext.current
@@ -96,10 +97,17 @@ import kotlinx.serialization.json.jsonPrimitive
     var composerHeight by remember { mutableIntStateOf(0) }
     var groupContexts by remember { mutableStateOf<GroupSessionContexts?>(null) }
     var inspectingContext by remember { mutableStateOf<String?>(null) }
+    var reviewingContext by remember(bot.id) { mutableStateOf<String?>(null) }
     val showContexts = bot.kind == "group" && state.hello?.get("groupSessionContexts")?.jsonPrimitive?.booleanOrNull == true
     if (showContexts) {
         ObserveGroupContexts(bot, state, store, update = { groupContexts = it })
         GroupContextInspection(groupContexts, bot.memberBots(state.bots), inspectingContext) { inspectingContext = it }
+    }
+    CodyncSheet(reviewingContext != null, { reviewingContext = null }) {
+        reviewingContext?.let { target ->
+            // 消息头沿用成员页的摘要编辑器；该页不提供修改名单的操作。
+            GroupContexts(bot, state, store, bot.memberBots(state.bots), remove = {}, canLeaveEditor = { true }, reviewBotId = target)
+        }
     }
     val density = LocalDensity.current
     // The message the composer quotes, until it sends or this chat closes.
@@ -132,7 +140,7 @@ import kotlinx.serialization.json.jsonPrimitive
                 queued = queuedMessages(state.chatEntries(bot), bot.isWorking))
         }
     }) {
-        Transcript(bot, chatState, store, connect, groupContexts, { inspectingContext = it }, PaddingValues(start = 16.dp, end = 16.dp, top = top + 60.dp,
+        Transcript(bot, chatState, store, connect, groupContexts, { inspectingContext = it }, { reviewingContext = it }, PaddingValues(start = 16.dp, end = 16.dp, top = top + 60.dp,
             bottom = with(density) { composerHeight.toDp() } + 8.dp), indicatorTop = top + 50.dp, openRoutine = openRoutine, reply = reply,
             addFallback = { details = DetailsRequest(botId = it.id) }, openArtifact = { viewing = it }, openCall = { callLine = it }, saveSharedFile = saveSharedFile) { peer = it }
     }
@@ -229,8 +237,9 @@ import kotlinx.serialization.json.jsonPrimitive
 private fun AppState.chatEntries(bot: Bot) = entries.filter { it.botId == bot.id && it.isChat }.hidingCalls()
 
 /** 呈现会话消息与实时活动，向上滚动时加载更早的消息。 */
+/** 只在成员最新消息投影推荐入口，操作身份跟随消息作者。 */
 @Composable private fun Transcript(bot: Bot, state: AppState, store: AppStore, connect: ConnectionRequestActions,
-    groupContexts: GroupSessionContexts?, inspectContext: (String) -> Unit, padding: PaddingValues,
+    groupContexts: GroupSessionContexts?, inspectContext: (String) -> Unit, reviewContext: (String) -> Unit, padding: PaddingValues,
     indicatorTop: Dp, openRoutine: (String) -> Unit, reply: (Entry) -> Unit, addFallback: (Bot) -> Unit, openArtifact: (OpenArtifact) -> Unit,
     openCall: (String) -> Unit, saveSharedFile: (Entry, SharedFile) -> Unit, openPeer: (String) -> Unit) {
     val entries = state.chatEntries(bot)
@@ -284,11 +293,15 @@ private fun AppState.chatEntries(bot: Bot) = entries.filter { it.botId == bot.id
                         val author = item.entry.data.text("author")
                         val reading = groupContexts?.members?.firstOrNull { item.latestAuthor && it.botId == author }
                         val details = reading?.used?.let { "${groupContextCompact(it)} · ${groupContextPercent(it, groupContexts.basis)}" }
+                        val waiting = reading?.handoff?.phase in listOf("approved", "switched")
+                        val canReview = !waiting && (reading?.recommended == true || reading?.handoff?.phase == "draft")
                         ChatRow(item.entry, item.groupStart, item.handoffPending, details, { author?.let(inspectContext) }, bot, state, store, openTrace = { store.showTrace(true) },
                         // An update card takes the composer's place, so there's nothing to reply with.
                         reply = if (item.entry.isReplyable && state.mismatch == null) { { reply(item.entry) } } else null, connect = connect,
                         addFallback = addFallback, openArtifact = openArtifact, saveSharedFile = saveSharedFile,
-                        contextModel = reading?.actualModelName, contextReasoning = reading?.reasoning)
+                        contextModel = reading?.actualModelName, contextReasoning = reading?.reasoning,
+                        contextRecommended = reading?.recommended == true, contextWaiting = waiting,
+                        newSession = if (canReview && author != null) { { reviewContext(author) } } else null)
                     }
                 }
                 is ChatItem.Pending -> PendingBubble(item.send, item.groupStart, state, store)

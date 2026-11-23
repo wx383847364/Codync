@@ -177,6 +177,11 @@ impl Actor {
             return Ok(handoff);
         }
         ensure!(current.recommend(), "This session is below the recommended threshold.");
+        // 显示推荐不要求执行器上报窗口，但独立群交接预算不能把未知值当零后归档旧会话。
+        ensure!(
+            current.shared || current.size.is_some(),
+            "The actual model window is unavailable. Wait for context usage to refresh."
+        );
         let session = current.session.ok_or_else(|| anyhow!("No active session"))?;
         let text = if current.shared {
             crate::chat::handoff::build(&self.hub.store, &self.cfg.id, &session, None)?

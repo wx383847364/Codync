@@ -165,7 +165,7 @@ export const ThreadView = memo(function ThreadView({ botId }: { botId: string })
   )
 
   return (
-    <GroupContexts room={bot} panelVisible={detailsOpen}><div className="thread-view" ref={root}>
+    <GroupContexts room={bot} panelVisible={detailsOpen} openPanel={() => { /* 消息头入口沿用右侧详情的摘要编辑器。 */ presentRoutine(null) }}><div className="thread-view" ref={root}>
       <div className="conversation">
         <div className="top-chrome">
           <TopFade />
