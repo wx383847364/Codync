@@ -60,13 +60,53 @@ impl Actor {
     }
 
     /// 从会话返回或配置更新中提取实际模型，缺少报告时不猜测。
-    pub(super) fn note_usage_model(&mut self, sid: &str, options: &Value) {
+    pub(super) fn note_usage_model(&mut self, sid: &str, options: &Value, replace: bool) {
         let model = options["_codyncSelectedModel"]
             .as_str()
             .or_else(|| super::launch::reported_model(options))
             .filter(|model| !model.is_empty());
-        if let (Some(conn), Some(model)) = (self.conn.as_mut(), model) {
+        let Some(conn) = self.conn.as_mut() else { return };
+        if let Some(model) = model {
             conn.confirmed_models.insert(sid.to_owned(), model.to_owned());
+        } else if replace {
+            conn.confirmed_models.remove(sid);
+        }
+        let Some(slot) = conn.session_slots.get(sid) else { return };
+        let name = model.and_then(|id| {
+            options["_codyncSelectedModelName"]
+                .as_str()
+                .map(str::to_owned)
+                .or_else(|| crate::agent::auth::model_name(options, id))
+        });
+        let mut selection = json!({"modelId":model,"modelName":name});
+        let effort = if let Some(value) = options.get("_codyncSelectedReasoning") {
+            value.as_str()
+        } else {
+            super::launch::reported_reasoning(options)
+        }
+        // 旧版模型字段可能不随配置通知重发，只复用同一会话的已确认 ID。
+        .or_else(|| conn.confirmed_models.get(sid).and_then(|id| super::launch::variant_reasoning(id)));
+        let full_update = options["sessionUpdate"] == "config_option_update" && options["configOptions"].is_array();
+        if effort.is_some() || full_update || options.get("_codyncSelectedReasoning").is_some() {
+            // 三档是展示口径。保留未知，额外强度只折叠已经明确上报的值。
+            selection["reasoning"] = json!(match effort {
+                Some("minimal" | "low") => Some("Low"),
+                Some("medium") => Some("Medium"),
+                Some("high" | "xhigh" | "very_high" | "extra_high" | "extra-high" | "max") => Some("High"),
+                _ => None,
+            });
+        }
+        match self.hub.store.save_scoped_selection(
+            &self.cfg.id,
+            &conn.backend,
+            slot.as_deref(),
+            sid,
+            &selection,
+            replace,
+        ) {
+            Ok(true) => self.hub.emit_bot(&self.cfg.id),
+            Ok(false) => {}
+            Err(error) => tracing::warn!(%error, "could not persist confirmed session options"),
         }
     }
 

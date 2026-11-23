@@ -121,6 +121,40 @@ impl Store {
         Ok(attempts.collect::<rusqlite::Result<_>>()?)
     }
 
+    /// 同一数据库快照计算群与本机的可观测输入和输出，保留缺报与历史缺口。
+    pub(crate) fn group_token_usage(&self, room: &str) -> Result<Value> {
+        let c = self.db.locked();
+        let (group, host, partial): (Option<i64>, Option<i64>, bool) = c.query_row(
+            "WITH reports AS (
+                SELECT room_id, json_extract(reported,'$.inputTokens') AS input,
+                    json_extract(reported,'$.outputTokens') AS output,
+                    json_extract(reported,'$.cachedReadTokens') AS cache_read,
+                    json_extract(reported,'$.cachedWriteTokens') AS cache_write
+                FROM turn_usage_attempts WHERE prompts > 0 AND finished_at IS NOT NULL
+             ), tokens AS (
+                SELECT room_id, CASE WHEN COALESCE(input, output, cache_read, cache_write) IS NOT NULL
+                    THEN COALESCE(input,0) + COALESCE(output,0)
+                         + COALESCE(cache_read,0) + COALESCE(cache_write,0) END AS total,
+                    input IS NULL OR output IS NULL AS incomplete FROM reports
+             )
+             SELECT SUM(CASE WHEN room_id=? THEN total END), SUM(total),
+                COALESCE(MAX(incomplete),0) OR EXISTS(
+                    SELECT 1 FROM entries WHERE kind='agent' AND created_at <
+                        (SELECT CAST(v AS INTEGER) FROM kv WHERE k='turn.usage.since')
+                ) OR EXISTS(
+                    SELECT 1 FROM deliveries WHERE started_at <
+                        (SELECT CAST(v AS INTEGER) FROM kv WHERE k='turn.usage.since')
+                )
+             FROM tokens",
+            [room],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )?;
+        // 只转换显示比例，原始累计值仍以整数返回。
+        #[allow(clippy::cast_precision_loss)]
+        let share = group.zip(host.filter(|&total| total > 0)).map(|(n, total)| n as f64 / total as f64);
+        Ok(json!({"groupTokens":group,"hostTokens":host,"share":share,"partial":partial}))
+    }
+
     /// 每个阶段只汇总自己的尝试，缺报、历史缺口及无法归属的尝试分别给出。
     pub(crate) fn stage_usage(&self, room: &str) -> Result<Value> {
         let c = self.db.locked();
@@ -246,6 +280,46 @@ fn provider_reports(c: &Connection, room: &str) -> Result<Vec<Value>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 群份额以全 Host 实报输入和输出为分母，并区分未知与已知零。
+    #[test]
+    fn group_usage_counts_observed_tokens_across_chats() {
+        let store = Store::open(std::path::Path::new(":memory:")).unwrap();
+        assert_eq!(store.group_token_usage("group").unwrap()["groupTokens"], Value::Null);
+        for (id, room, input, output, cached_read, cached_write) in [
+            ("group", Some("group"), json!(5), json!(15), json!(3), json!(2)),
+            ("private", None, json!(50), json!(25), Value::Null, Value::Null),
+            ("missing", Some("group"), Value::Null, Value::Null, Value::Null, Value::Null),
+            ("zero", Some("other"), json!(0), json!(0), json!(0), json!(0)),
+        ] {
+            store
+                .begin_usage_attempt(&AttemptStart {
+                    id,
+                    room,
+                    bot: "removed-member",
+                    delivery: None,
+                    backend: "custom",
+                    source: "user",
+                    requests: &[],
+                })
+                .unwrap();
+            store.observe_usage_event(id, UsageEvent::Prompt, None).unwrap();
+            store
+                .finish_usage_attempt(
+                    id,
+                    "completed",
+                    1,
+                    &json!({"source":"provider_reported","inputTokens":input,"outputTokens":output,
+                        "cachedReadTokens":cached_read,"cachedWriteTokens":cached_write,"thoughtTokens":200}),
+                )
+                .unwrap();
+        }
+        assert_eq!(
+            store.group_token_usage("group").unwrap(),
+            json!({"groupTokens":25,"hostTokens":100,"share":0.25,"partial":true})
+        );
+        assert_eq!(store.group_token_usage("other").unwrap()["groupTokens"], 0);
+    }
 
     /// 手工可复算：同投递两种后端各记一次，零值保留，缺报、重复完成和重启区分。
     #[test]

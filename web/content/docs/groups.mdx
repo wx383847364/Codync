@@ -16,6 +16,16 @@ Type a bot name in **Search or add bots** or open the list with its arrow. Add t
 
 Use **Create new group session** to start a separate task with fresh bots based on the roles you choose. Use **Create next stage group** to continue the same task with fresh bots that can consult the source group on demand. Both open an empty chat.
 
+## Read member context in chat
+
+When a group reply shows a member's current context usage, its label also shows the session's confirmed model and reasoning level when the agent provides them.
+
+## Check resources and token usage
+
+On desktop, iPhone, and Android, select the group title and look below the member list for **Resources and usage**. In the terminal, select **Member context** from the chat header. Storage includes attachments uploaded to this group and files bots publish with the group’s file-sharing action. Workspace files and bot libraries are outside that total. Choose **Open in Finder** on the Mac running the Host to inspect the group's resource directory.
+
+The token total uses recorded input and output tokens for this group, including separately reported input cache reads and writes. Reasoning tokens are not added separately because they can already be part of the reported output. Its share compares that total with the usage recorded across all conversations on the same Host. **Partial usage records** means older activity or some agent usage reports are missing.
+
 ## Start an independent task
 
 - **Desktop:** right-click the group in the sidebar and choose **Create new group session**.

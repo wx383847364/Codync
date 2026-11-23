@@ -117,14 +117,7 @@ fn reasoning_options(session: &Value) -> Vec<Value> {
         .as_array()
         .into_iter()
         .flatten()
-        .filter(|o| {
-            o["category"] == "thought_level"
-                || (o["category"] != "mode"
-                    && matches!(
-                        o["id"].as_str(),
-                        Some("reasoning_effort" | "reasoning-effort" | "thought_level" | "effort")
-                    ))
-        })
+        .filter(|o| is_reasoning_config(o))
         .filter_map(parse_select_option)
         .map(|mut option| {
             option["kind"] = "reasoning".into();
@@ -146,6 +139,31 @@ pub(crate) fn model_config(session: &Value) -> Option<&Value> {
         .filter(is_select)
         .find(|v| v["category"] == "model")
         .or_else(|| options.iter().filter(is_select).find(|v| v["id"] == "model" || v["id"] == "models"))
+}
+
+/// 识别 ACP 推理配置，独立于模型目录是否列出档位选项。
+fn is_reasoning_config(option: &Value) -> bool {
+    option["category"] == "thought_level"
+        || (option["category"] != "mode" && option["id"].as_str().is_some_and(reasoning_id))
+}
+
+/// 老版本适配器会省略推理分类，或将该选项嵌入模型 ID。
+pub(crate) fn reasoning_id(id: &str) -> bool {
+    matches!(id, "reasoning_effort" | "reasoning-effort" | "thought_level" | "effort")
+}
+
+/// 仅从会话的推理配置读取当前选项。
+pub(crate) fn reasoning_config(session: &Value) -> Option<&Value> {
+    session["configOptions"]
+        .as_array()?
+        .iter()
+        .find(|item| item["type"] == "select" && item["currentValue"].is_string() && is_reasoning_config(item))
+}
+
+/// 只解析已确认模型的名称。缺少名称时由调用处显示执行器报告的模型 ID。
+pub(crate) fn model_name(session: &Value, id: &str) -> Option<String> {
+    let catalog = model_catalog(session, &Value::Null);
+    catalog["models"].as_array()?.iter().find(|model| model["id"] == id)?["name"].as_str().map(str::to_owned)
 }
 
 /// The model ids the agent lists, in its order.

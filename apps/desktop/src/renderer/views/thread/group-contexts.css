@@ -18,7 +18,11 @@
 .group-context-reading small { color: var(--secondary); font-size: var(--text-caption); }
 .group-context-meter { display: block; margin-top: 5px; height: 3px; border-radius: 8px; background: color-mix(in srgb, var(--secondary) 22%, transparent); overflow: hidden; }
 .group-context-meter > span { display: block; height: 100%; border-radius: inherit; }
-.group-context-chip { font-size: 11px; padding: 2px 6px; border-radius: 6px; background: var(--bubble-agent); color: var(--secondary); font-variant-numeric: tabular-nums; }
+.group-context-chip { flex: none; white-space: nowrap; font-size: 11px; padding: 2px 6px; border-radius: 6px; background: var(--bubble-agent); color: var(--secondary); font-variant-numeric: tabular-nums; }
+
+.group-context-model { min-width: 0; display: inline-flex; align-items: center; gap: 5px; color: var(--secondary); font-size: 12px; font-weight: 550; white-space: nowrap; }
+.group-context-model > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.group-context-effort { flex: none; padding: 1px 4px; border-radius: 4px; background: var(--surface); font-size: 11px; }
 
 .group-context-review { display: flex; flex-direction: column; gap: 9px; padding: 58px 20px 8px; }
 .group-context-review .group-context-back { align-self: flex-start; margin: 0 0 5px; }

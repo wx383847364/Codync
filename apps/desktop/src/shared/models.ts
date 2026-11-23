@@ -602,6 +602,7 @@ export interface Hello {
   stageRoster?: boolean
   botSessionUsage?: boolean
   groupSessionContexts?: boolean
+  groupResourceUsage?: boolean
   /** 主机能按附件身份校验原图尺寸，不包含正文路径读取能力。 */
   fileImageInfo?: boolean
   workspaceFileSearch?: boolean

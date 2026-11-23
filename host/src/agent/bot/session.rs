@@ -389,10 +389,10 @@ impl Actor {
         conn.session_slots.insert(sid.clone(), slot.map(str::to_owned));
         conn.renamed.insert(sid.clone(), renamed);
         let options = select_model(&conn.acp, &res, &sid, &self.cfg).await?;
-        self.note_options(&sid, &options, Listing::Session);
-        // 新进程可能复用已出现过的 session ID，只有会话重载可以沿用旧用量。
+        // 先为新会话建立快照，再写入该会话确认的模型，防止复用 ID 时继承旧元数据。
         self.context_usage_at.remove(&sid);
         self.hub.store.reset_scoped_context(&self.cfg.id, &self.cfg.backend, slot, &sid)?;
+        self.note_options(&sid, &options, Listing::Session);
         if let Some(active) = &self.active_delivery {
             self.hub.store.register_group_replacement(&active.delivery.id, &self.cfg.backend, slot, &sid)?;
         }

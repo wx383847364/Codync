@@ -37,6 +37,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -140,7 +141,8 @@ internal fun chatItems(entries: List<Entry>, pending: List<PendingSend>, busy: B
  *  `openArtifact` opens an artifact card's artifact. */
 /** 呈现群投递聚合卡和原有聊天消息，重试使用投递身份。 */
 @Composable internal fun ChatRow(entry: Entry, groupStart: Boolean, handoffPending: Boolean, groupContextLabel: String?, inspectContext: () -> Unit, chat: Bot?, state: AppState, store: AppStore,
-    openTrace: () -> Unit, reply: (() -> Unit)?, connect: ConnectionRequestActions, addFallback: (Bot) -> Unit, openArtifact: (OpenArtifact) -> Unit, saveSharedFile: (Entry, SharedFile) -> Unit) {
+    openTrace: () -> Unit, reply: (() -> Unit)?, connect: ConnectionRequestActions, addFallback: (Bot) -> Unit, openArtifact: (OpenArtifact) -> Unit, saveSharedFile: (Entry, SharedFile) -> Unit,
+    contextModel: String? = null, contextReasoning: String? = null) {
     val group = chat?.kind == "group"
     when (entry.kind) {
         "user" -> Column(Modifier.fillMaxWidth().padding(top = if (groupStart) 12.dp else 4.dp).animateContentSize(Motion.layoutSize),
@@ -150,7 +152,8 @@ internal fun chatItems(entries: List<Entry>, pending: List<PendingSend>, busy: B
         }
         "agent" -> Column(Modifier.fillMaxWidth().padding(top = if (groupStart) 12.dp else 4.dp).animateContentSize(Motion.layoutSize),
             verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            if (group && groupStart) AuthorLabel(entry.data.text("author"), state, handoffPending = handoffPending, contextLabel = groupContextLabel, inspectContext = inspectContext)
+            if (group && groupStart) AuthorLabel(entry.data.text("author"), state, handoffPending = handoffPending, contextLabel = groupContextLabel, inspectContext = inspectContext,
+                contextModel = contextModel, contextReasoning = contextReasoning)
             AgentBubble(entry, state, store, openTrace, reply, openArtifact, saveSharedFile)
             Box(Modifier.padding(start = if (group) 34.dp else 0.dp)) { ReactionsRow(entry, state, store) }
         }
@@ -178,14 +181,22 @@ internal fun chatItems(entries: List<Entry>, pending: List<PendingSend>, busy: B
 internal class ConnectionRequestActions(val openApp: (String, ComposioApp) -> Unit, val install: (String, MarketConnector) -> Unit)
 
 /** Who wrote a message: their avatar and name in their color, or [name] for a bot on another computer. */
-@Composable internal fun AuthorLabel(botId: String?, state: AppState, name: String? = null, handoffPending: Boolean = false, contextLabel: String? = null, inspectContext: (() -> Unit)? = null) {
+@Composable internal fun AuthorLabel(botId: String?, state: AppState, name: String? = null, handoffPending: Boolean = false, contextLabel: String? = null, inspectContext: (() -> Unit)? = null, contextModel: String? = null, contextReasoning: String? = null) {
     val bot = state.bots.firstOrNull { it.id == botId }
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         if (bot != null) CharacterAvatar(bot.avatarShape, bot.avatarColor, 26.dp, customImage = bot.customIcon?.dataUrl, customTinted = bot.customIcon?.tinted == true)
         Text(state.authorName(botId, name), style = Type.subheadline.medium, color = bot?.let { AvatarPalette.tint(it.avatarColor) } ?: Palette.secondary)
         if (contextLabel != null && inspectContext != null) {
             Text(contextLabel, Modifier.clip(CircleShape).background(Palette.bubbleAgent).clickable(onClick = inspectContext)
-                .padding(horizontal = 6.dp, vertical = 2.dp), style = Type.caption, color = Palette.secondary)
+                .padding(horizontal = 6.dp, vertical = 2.dp), style = Type.caption, color = Palette.secondary, maxLines = 1)
+            if (contextModel != null) {
+                // 窄屏先缩短模型名，保留现有用量及推理档位。
+                Text(contextModel, Modifier.weight(1f, fill = false), style = Type.caption.medium,
+                    color = Palette.secondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                if (contextReasoning != null) Text(tr(contextReasoning),
+                    Modifier.background(Palette.surface, RoundedCornerShape(4.dp))
+                        .padding(horizontal = 4.dp, vertical = 1.dp), style = Type.caption.medium, color = Palette.secondary, maxLines = 1)
+            }
         }
         if (handoffPending && state.hello?.get("groupSessionContexts")?.jsonPrimitive?.booleanOrNull != true) {
             Text(tr("Session switch needs confirmation"), Modifier.background(Palette.warning.copy(alpha = 0.14f), CircleShape).padding(horizontal = 7.dp, vertical = 2.dp),

@@ -55,10 +55,15 @@ pub(crate) async fn select_model(acp: &Acp, res: &Value, sid: &str, cfg: &BotCon
     };
     let mut current = res.clone();
     let mut confirmed = reported_model(res).map(str::to_owned);
+    let mut reasoning = reported_reasoning(res).map(str::to_owned);
     if selected.is_some() {
         if let Some(config_id) = crate::agent::auth::model_config(res).and_then(|c| c["id"].as_str()) {
             let answer = set(config_id, model).await.map_err(|e| model_error(model, &e))?;
-            confirmed = Some(reported_model(&answer).unwrap_or(model).to_owned());
+            let resolved = reported_model(&answer).unwrap_or(model);
+            if confirmed.as_deref() != Some(resolved) || answer["configOptions"].is_array() {
+                reasoning = reported_reasoning(&answer).map(str::to_owned);
+            }
+            confirmed = Some(resolved.to_owned());
             if answer["configOptions"].is_array() {
                 current = answer;
             }
@@ -67,13 +72,31 @@ pub(crate) async fn select_model(acp: &Acp, res: &Value, sid: &str, cfg: &BotCon
                 .request("session/set_model", json!({"sessionId": sid, "modelId": model}))
                 .await
                 .map_err(|e| model_error(model, &e))?;
-            confirmed = Some(reported_model(&answer).unwrap_or(model).to_owned());
+            let resolved = reported_model(&answer).unwrap_or(model);
+            if confirmed.as_deref() != Some(resolved) || answer["configOptions"].is_array() {
+                reasoning = reported_reasoning(&answer).map(str::to_owned);
+            }
+            confirmed = Some(resolved.to_owned());
         }
     }
     for (id, value) in options {
         let answer = set(id, value).await.map_err(|e| model_error(&format!("{model} with {id}={value}"), &e))?;
+        // 优先采纳执行器返回的有效值；空响应只确认本次成功设置的推理选项。
+        let effort_option = [&current, res]
+            .into_iter()
+            .any(|listing| crate::agent::auth::reasoning_config(listing).is_some_and(|option| option["id"] == id))
+            || crate::agent::auth::reasoning_id(id);
+        let from_answer = reported_reasoning(&answer);
         if let Some(model) = reported_model(&answer) {
+            if confirmed.as_deref() != Some(model) {
+                reasoning = None;
+            }
             confirmed = Some(model.to_owned());
+        }
+        if from_answer.is_some() || answer["configOptions"].is_array() {
+            reasoning = from_answer.map(str::to_owned);
+        } else if effort_option {
+            reasoning = Some(value.to_owned());
         }
         if answer["configOptions"].is_array() {
             current = answer;
@@ -86,8 +109,12 @@ pub(crate) async fn select_model(acp: &Acp, res: &Value, sid: &str, cfg: &BotCon
         current["modes"] = modes.clone();
     }
     if let Some(model) = confirmed {
+        let name =
+            crate::agent::auth::model_name(&current, &model).or_else(|| crate::agent::auth::model_name(res, &model));
         current["_codyncSelectedModel"] = model.into();
+        current["_codyncSelectedModelName"] = json!(name);
     }
+    current["_codyncSelectedReasoning"] = json!(reasoning);
     Ok(current)
 }
 
@@ -97,6 +124,11 @@ pub(super) fn reported_model(options: &Value) -> Option<&str> {
         .and_then(|item| item["currentValue"].as_str())
         .or_else(|| options["models"]["currentModelId"].as_str())
         .filter(|model| !model.is_empty())
+}
+
+/// 读取实际推理档位，空值和默认占位由调用处保持未知。
+pub(super) fn reported_reasoning(options: &Value) -> Option<&str> {
+    crate::agent::auth::reasoning_config(options)?["currentValue"].as_str()
 }
 
 /// The model to select and the options to set on it: the model id's variant, then the bot's own. How the agent
@@ -122,15 +154,25 @@ fn model_error(model: &str, e: &anyhow::Error) -> anyhow::Error {
 /// lists plain models instead, the bracket becomes options of the plain model.
 fn split_variant<'a>(res: &Value, model: &'a str) -> (&'a str, Vec<(&'a str, &'a str)>) {
     let listed = |id: &str| crate::agent::auth::model_ids(res).iter().any(|m| m == id);
-    if let Some((name, params)) = model.strip_suffix(']').and_then(|m| m.split_once('['))
-        && let Some(params) =
-            params.split(',').filter(|p| !p.is_empty()).map(|p| p.split_once('=')).collect::<Option<Vec<_>>>()
+    if let Some((name, params)) = variant_options(model)
         && !listed(model)
         && listed(name)
     {
         return (name, params);
     }
     (model, Vec::new())
+}
+
+/// 解析模型 ID 明示的键值参数；无键值的标记保持原样。
+fn variant_options(model: &str) -> Option<(&str, Vec<(&str, &str)>)> {
+    let (name, params) = model.strip_suffix(']')?.split_once('[')?;
+    let params = params.split(',').filter(|p| !p.is_empty()).map(|p| p.split_once('=')).collect::<Option<Vec<_>>>()?;
+    Some((name, params))
+}
+
+/// 仅在没有独立推理选项时读取已确认变体 ID 的推理档。
+pub(super) fn variant_reasoning(model: &str) -> Option<&str> {
+    variant_options(model)?.1.into_iter().find(|(id, _)| crate::agent::auth::reasoning_id(id)).map(|(_, value)| value)
 }
 
 /// Spawns an ACP agent and completes the `initialize` handshake.
@@ -249,6 +291,8 @@ mod tests {
         let variants = json!({"configOptions": [{"id": "model", "category": "model", "type": "select",
             "options": [{"value": variant}]}]});
         assert_eq!(split_variant(&variants, variant), (variant, vec![]));
+        assert_eq!(variant_reasoning(variant), Some("medium"));
+        assert_eq!(variant_reasoning("opus[1m]"), None);
         assert_eq!(split_variant(&plain, "other[x=1]"), ("other[x=1]", vec![]));
         // Claude's `opus[1m]` is a model id of its own, not a variant.
         assert_eq!(split_variant(&json!({"models": {"availableModels": [{"modelId": "opus"}]}}), "opus[1m]").1, vec![]);

@@ -2036,5 +2036,18 @@
   "The queued task will start with this summary.": "Die wartende Aufgabe startet mit dieser Zusammenfassung.",
   "Your next message starts a fresh session carrying this summary.": "Deine nächste Nachricht startet eine neue Sitzung mit dieser Zusammenfassung.",
   "This task may exceed the available context. Review what will carry over, then start a new session with the button or /new, or try the current session.": "Diese Aufgabe könnte den verfügbaren Kontext überschreiten. Prüfe die übernommenen Inhalte und starte eine neue Sitzung oder versuche es in der aktuellen. Auch /new übernimmt die Zusammenfassung.",
-  "Opening a new session with this summary.": "Neue Sitzung mit dieser Zusammenfassung wird geöffnet."
+  "Opening a new session with this summary.": "Neue Sitzung mit dieser Zusammenfassung wird geöffnet.",
+  "Resources and usage": "Ressourcen und Nutzung",
+  "Group resource storage": "Speicherbedarf der Gruppe",
+  "Group token usage": "Token-Nutzung der Gruppe",
+  "Share of host usage": "Anteil an der Host-Nutzung",
+  "All conversations on this host: {tokens} Token": "Alle Chats auf diesem Host: {tokens} Token",
+  "No usage recorded": "Keine Nutzung erfasst",
+  "Partial usage records": "Unvollständige Nutzungsdaten",
+  "Could not refresh usage.": "Nutzung konnte nicht aktualisiert werden.",
+  "Could not open the group resource folder.": "Der Ressourcenordner konnte nicht geöffnet werden.",
+  "Open in Finder": "Im Finder öffnen",
+  "Open folder": "Ordner öffnen",
+  "Low": "Niedrig",
+  "High": "Hoch"
 }
