@@ -97,7 +97,13 @@ fn protected_task_and_user_changes_survive_a_bounded_background() {
             )
             .unwrap();
     }
-    let packet = delivery_prompt(&f.hub, &next, &f.member()).unwrap();
+    // 排队后改名仍按已保存的成员 ID 要求回应，原始 @ 正文不重写。
+    let mut recipient = f.member();
+    recipient.name = "Renamed".into();
+    f.hub.store.save_bot(&recipient).unwrap();
+    let packet = delivery_prompt(&f.hub, &next, &recipient).unwrap();
+    assert!(packet.prompt.contains("A group member directly @-mentioned you in the current request below."));
+    assert!(packet.prompt.contains("briefly acknowledge it"));
     assert!(packet.prompt.contains(&original));
     assert!(packet.prompt.contains("ROOT_TAIL 不要替换用户配置") && packet.prompt.contains("KEY_NO_REPLACE"));
     assert!(packet.prompt.contains("TODO_EXACT 路径与截止时间不能丢"));

@@ -4,7 +4,7 @@ use super::PASS;
 use crate::hub::Hub;
 use crate::store::{
     BotConfig, Entry,
-    deliveries::{Delivery, Kind},
+    deliveries::{Delivery, Kind, REPLY_MENTION},
     group_context::Snapshot,
 };
 use anyhow::{Result, anyhow};
@@ -36,6 +36,12 @@ pub fn delivery_prompt(hub: &Hub, delivery: &Delivery, me: &BotConfig) -> Result
 /// 完整材料按 entry ID 去重；后续独立用户请求只保留原文，不自动绑定为本任务授权。
 fn assemble(hub: &Hub, s: &Snapshot, me: &BotConfig) -> Result<Prepared> {
     let mut out = vec![instructions(&s.room, &s.members, me)];
+    if is_member_mention(s) {
+        // 点名需要可见回应；确认收悉不必反向点名，也不能扩大原任务授权。
+        out.push(format!(
+            "A group member directly @-mentioned you in the current request below. Answer it in the group, even if you have no new findings. If the message only reports a result, briefly acknowledge it and state any relevant next step or blocker already known. Do not reply with \"{PASS}\" or only a reaction. Do not @-mention anyone merely to acknowledge receipt."
+        ));
+    }
     if s.delivery.held_after_pause() {
         // 继续沿用原任务与可用会话，已落地的操作需要核对，避免重复副作用。
         out.push("The user resumed this paused assignment. Continue the same task from its available session and workspace progress. Check the effects of interrupted work before repeating any operation, and preserve work already completed.".into());
@@ -246,6 +252,32 @@ fn author(s: &Snapshot, e: &Entry) -> String {
     s.members.iter().find(|m| m.id == id).map_or_else(|| id.to_owned(), |m| m.name.clone())
 }
 
+/// 优先使用已保存的点名关系，旧投递只从正式文字回复识别点名。
+fn is_member_mention(s: &Snapshot) -> bool {
+    if s.delivery.source_kind == REPLY_MENTION {
+        return true;
+    }
+    if s.delivery.source_kind != "reply" {
+        return false;
+    }
+    // 旧记录也可能来自纯文件结果，文件卡文字没有参与原正文路由。
+    let Some((source, execution)) = s.source.as_ref().zip(s.delivery.source_execution_id.as_deref()) else {
+        return false;
+    };
+    if source.id.strip_prefix("delivery-result-") != Some(execution) {
+        return false;
+    }
+    let Some(text) = source.data["text"].as_str() else { return false };
+    match crate::chat::mentions::route(text, &[], &s.members, None) {
+        Ok((_, direct)) => direct.contains(&s.delivery.target_bot_id),
+        Err(error) => {
+            // 群成员改名可能让历史正文出现歧义，已入队投递仍按保存的目标执行。
+            tracing::debug!(delivery = %s.delivery.id, %error, "could not resolve historical member mention");
+            false
+        }
+    }
+}
+
 /// 群内执行规则沿用现有权限与协作合同，正文背景的预算不改变派工生命周期。
 fn instructions(group: &BotConfig, members: &[BotConfig], me: &BotConfig) -> String {
     let peers: Vec<&BotConfig> = members.iter().filter(|m| m.id != me.id).collect();
@@ -270,10 +302,10 @@ fn instructions(group: &BotConfig, members: &[BotConfig], me: &BotConfig) -> Str
         "For this group turn, message_bot(botId, message, idempotencyKey?) may assign work to another current member. The result stays in this source group, never your private chat; finish your turn so the room can continue, and do not wait or poll. This current-turn rule replaces earlier instructions forbidding message_bot in groups. You have your full toolkit here. Do the work first, then answer: your final reply of this turn is \
          the one message the room sees. Keep it short and conversational. After this round, only the \
          participants someone @-mentions answer again: @-mention another participant when you need their \
-         answer or action, and only then. If you have nothing new worth adding, reply exactly \"{PASS}\". Never \
+         answer or action, and only then. If this turn does not require a response and you have nothing new worth adding, reply exactly \"{PASS}\". Never \
          reveal private one-on-one context. Reactions are rare: react(emoji, to) only where a person would, \
          never to a question or a request, `to` naming whose newest message (\"user\" or a participant). With \
-         nothing to add, a reaction and \"{PASS}\" agrees without a message."
+         nothing to add in an optional turn, a reaction and \"{PASS}\" agrees without a message."
     ));
     // 一次成员 turn 的结束不代表用户任务已完成；后续工作必须形成明确投递。
     out.push("Continue the user's task until you have delivered the requested result or genuinely need the user's decision, missing information, or approval. There is no fixed group round, reply-count, or handoff-depth limit. A member turn ending is not the whole task finishing. If another member must act or answer next, explicitly @-mention them or call message_bot with the concrete next action; never merely say you are waiting without assigning it. Do not stop just to ask the user whether to continue already-authorized work. When delivering the result to the user, state the outcome and any remaining limitations; when blocked on the user, ask the specific question. In either case do not @-mention members just to thank, acknowledge, or repeat the result. End that turn and wait for the user's reply; do not invent a reply or new authorization. Existing accepted assignments still keep their own execution and cancellation state.".into());

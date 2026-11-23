@@ -1,6 +1,6 @@
 //! 结果、终态、派生投递与聚合卡片的同事务保存。
 
-use super::{COLS, Delivery, Status, TOOL_RETURN, eligible, get, insert, row, wire};
+use super::{COLS, Delivery, REPLY_MENTION, REPLY_NOTICE, Status, TOOL_RETURN, eligible, get, insert, row, wire};
 use crate::{
     LockExt,
     store::{BotConfig, Entry, EntryKind, Store, now_ms},
@@ -261,10 +261,10 @@ fn route_result(c: &Connection, d: &Delivery, source: &str, text: Option<&str>, 
         .prepare("SELECT target_bot_id FROM deliveries WHERE source_execution_id=? AND kind='task'")?
         .query_map([&d.id], |r| r.get::<_, String>(0))?
         .collect::<rusqlite::Result<Vec<_>>>()?;
-    let mut targets = match crate::chat::mentions::targets(text.unwrap_or_default(), &[], &members, None) {
-        Ok(mut targets) => {
+    let (mut targets, direct) = match crate::chat::mentions::route(text.unwrap_or_default(), &[], &members, None) {
+        Ok((mut targets, direct)) => {
             targets.retain(|target| target != &d.target_bot_id && !tasked.contains(target));
-            targets
+            (targets, direct)
         }
         Err(error) => {
             entries.push(entry(
@@ -275,7 +275,7 @@ fn route_result(c: &Connection, d: &Delivery, source: &str, text: Option<&str>, 
                 turn,
                 &json!({"text":error.to_string(),"style":"error","deliveryId":d.id}),
             )?);
-            Vec::new()
+            (Vec::new(), Vec::new())
         }
     };
     // 明确请求的结果只回给原发起人一次，展示性的 @ 复用同一投递。
@@ -289,7 +289,8 @@ fn route_result(c: &Connection, d: &Delivery, source: &str, text: Option<&str>, 
     }
     for target in targets {
         let mut next = Delivery::speak(&d.room_id, source, &target);
-        next.source_kind = "reply".into();
+        // 自动结果回传和广播也创建回合，但没有直接点名的回应要求。
+        next.source_kind = if direct.contains(&target) { REPLY_MENTION } else { REPLY_NOTICE }.into();
         next.source_bot_id = Some(d.target_bot_id.clone());
         next.source_execution_id = Some(d.id.clone());
         next.batch_root_id.clone_from(&d.batch_root_id);

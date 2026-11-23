@@ -282,6 +282,11 @@ test('relay compacts bounded background past fixed limits while preserving origi
     const work = requests.filter((request) => !request.prompt[0].text.startsWith('/compact'))
     expect(work).toHaveLength(13)
     expect(new Set(requests.map((request) => request.sessionId)).size).toBe(1)
+    // 文字点名在真实 ACP 入参中要求回应，用户首轮和工具派工沿用各自规则。
+    const directMention = 'A group member directly @-mentioned you in the current request below.'
+    expect(work[0]?.prompt[0].text).not.toContain(directMention)
+    expect(work[1]?.prompt[0].text).toContain(directMention)
+    expect(work[2]?.prompt[0].text).not.toContain(directMention)
     for (const request of work) {
       expect(request.prompt[0].text).toContain(original)
       const excerpt = request.prompt[0].text.split('Saved room progress excerpts')[1]?.split('Context estimates only:')[0] ?? ''

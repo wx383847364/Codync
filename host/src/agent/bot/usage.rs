@@ -1,6 +1,7 @@
 //! 回合尝试的本地观测：只保留执行器实报，缺失不是零，共享协调开销不摊给单个请求。
 
 use super::{Actor, Done};
+use crate::store::deliveries::{REPLY_MENTION, REPLY_NOTICE};
 use crate::store::turn_usage::{AttemptStart, TOKEN_FIELDS, UsageEvent};
 use serde_json::{Value, json};
 use std::time::Instant;
@@ -32,7 +33,11 @@ impl Actor {
         } else if self.active_routine.is_some() {
             "routine"
         } else if let Some(row) = delivery {
-            row.source_kind.as_str()
+            // 点名和广播仅用于选择提示词，使用量仍沿用客户端已有的回复类别。
+            match row.source_kind.as_str() {
+                REPLY_MENTION | REPLY_NOTICE => "reply",
+                source => source,
+            }
         } else if scope != "other" {
             scope
         } else if self.active_prompt {

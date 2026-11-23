@@ -18,6 +18,10 @@ use serde_json::Value;
 
 /// 投递来源中记录发起人需要处理最终结果，重启后保持相同回传意图。
 pub(crate) const TOOL_RETURN: &str = "tool_return";
+/// 正文点名的判定与目标一同保存，避免执行时受成员名称变化影响。
+pub(crate) const REPLY_MENTION: &str = "reply_mention";
+/// 广播与自动结果回传只提供后续发言机会。
+pub(crate) const REPLY_NOTICE: &str = "reply_notice";
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -68,6 +72,7 @@ pub struct Delivery {
 
 /// 投递与查询索引同库建立；单调序号通过保留全部投递行计算，不受 UUID 排序影响。
 pub(super) fn schema(c: &Connection) -> Result<()> {
+    // 先建立覆盖新旧消息来源的唯一索引，再替换旧索引，升级时始终保有去重约束。
     c.execute_batch("CREATE TABLE IF NOT EXISTS deliveries(
         id TEXT PRIMARY KEY, room_id TEXT NOT NULL, kind TEXT NOT NULL CHECK(kind IN ('speak','task')),
         source_kind TEXT NOT NULL, source_entry_id TEXT, source_execution_id TEXT, source_bot_id TEXT,
@@ -75,8 +80,9 @@ pub(super) fn schema(c: &Connection) -> Result<()> {
         attempt INTEGER NOT NULL, parent_id TEXT, round INTEGER NOT NULL, chain_depth INTEGER NOT NULL,
         idempotency_key TEXT, status TEXT NOT NULL, claimed_at INTEGER, started_at INTEGER,
         finished_at INTEGER, last_error TEXT);
-        CREATE UNIQUE INDEX IF NOT EXISTS delivery_source ON deliveries(source_entry_id,target_bot_id,kind,attempt)
-            WHERE source_kind IN ('user','reply');
+        CREATE UNIQUE INDEX IF NOT EXISTS delivery_message_source ON deliveries(source_entry_id,target_bot_id,kind,attempt)
+            WHERE source_kind IN ('user','reply','reply_mention','reply_notice');
+        DROP INDEX IF EXISTS delivery_source;
         CREATE UNIQUE INDEX IF NOT EXISTS delivery_key ON deliveries(source_bot_id,room_id,target_bot_id,idempotency_key)
             WHERE idempotency_key IS NOT NULL;
         CREATE UNIQUE INDEX IF NOT EXISTS delivery_sequence ON deliveries(room_id,room_seq);

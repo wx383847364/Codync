@@ -172,12 +172,13 @@ fn matching_end(text: &str, start: usize, handle: &str) -> Option<usize> {
 }
 
 /// 结构化片段按 ID 路由，其余正文接受唯一名称；未知 @ 是普通文本。
+#[cfg(test)]
 pub fn targets(text: &str, mentions: &[Mention], members: &[BotConfig], quoted: Option<&str>) -> Result<Vec<String>> {
     Ok(route(text, mentions, members, quoted)?.0)
 }
 
 /// 同时返回派工目标和直接 @ 的成员；广播与引用只影响派工。
-pub(super) fn route(
+pub(crate) fn route(
     text: &str,
     mentions: &[Mention],
     members: &[BotConfig],

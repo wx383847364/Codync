@@ -113,8 +113,8 @@ fn stage_returns_only_requested_final_results_once() {
                 &crate::store::Lane::main("g"),
                 EntryKind::Agent,
                 1,
-                &json!({"deliveryId":delivery.id,"author":"a","final":true,"text":"@c report.md",
-                    "files":[{"id":"snapshot","name":"@c report.md"}]}),
+                &json!({"deliveryId":delivery.id,"author":"a","final":true,"text":"@b report.md",
+                    "files":[{"id":"snapshot","name":"@b report.md"}]}),
             )
             .unwrap()
             .id
@@ -129,6 +129,8 @@ fn stage_returns_only_requested_final_results_once() {
             assert_eq!(next.target_bot_id, "b");
             assert_eq!(next.source_execution_id.as_deref(), Some(delivery.id.as_str()));
             assert_eq!(next.source_entry_id.as_deref(), Some(source.as_str()));
+            let expected_kind = if text == Some("@b result") { REPLY_MENTION } else { REPLY_NOTICE };
+            assert_eq!(next.source_kind, expected_kind);
         }
     }
 }
