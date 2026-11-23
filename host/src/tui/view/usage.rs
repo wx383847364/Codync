@@ -166,6 +166,45 @@ pub(in crate::tui) fn when_future(ms: i64) -> String {
     }
 }
 
+/// 成员列表在有界弹层内滚动，长名字收缩以保证容量列始终可见。
+pub(super) fn group_workspaces(buf: &mut Buffer, area: Rect, report: Option<&Value>, cursor: usize, local: bool) {
+    let t = theme();
+    let title = tr("Member workspaces");
+    let members = report.and_then(|value| value["members"].as_array()).map_or(&[][..], Vec::as_slice);
+    let room = centered(area, 68, u(members.len().clamp(3, 10) + 5));
+    let inner = frame_box(buf, room, t.text, t.panel, Some((&title, t.text)));
+    let total = report
+        .and_then(|value| value["totalBytes"].as_u64())
+        .map_or_else(|| tr(if report.is_some() { "Unavailable" } else { "Loading…" }).into_owned(), workspace_size);
+    put(buf, inner.x, inner.y, inner.width, &total, t.dim.patch(t.panel));
+    let rows = usize::from(inner.height.saturating_sub(3));
+    let offset = cursor.saturating_sub(rows.saturating_sub(1));
+    for (index, member) in members.iter().enumerate().skip(offset).take(rows) {
+        let y = inner.y + u(index - offset + 1);
+        let style = if index == cursor { t.text.patch(t.sel) } else { t.text.patch(t.panel) };
+        let bytes = member["bytes"].as_u64().map_or_else(|| tr("Unavailable").into_owned(), workspace_size);
+        let name = member["name"].as_str().unwrap_or_default();
+        let label =
+            if member["shared"] == true { format!("{name} · {}", tr("Shared across groups")) } else { name.into() };
+        put(buf, inner.x, y, inner.width.saturating_sub(15), &label, style);
+        put(buf, inner.right().saturating_sub(14), y, inner.width.min(14), &bytes, style);
+    }
+    let hint = if local && members.get(cursor).is_some_and(|member| member["directory"].is_string()) {
+        format!("↑↓  ↵ {}  esc", tr("Open folder"))
+    } else {
+        "↑↓  esc".into()
+    };
+    put(buf, inner.x, inner.bottom().saturating_sub(1), inner.width, &hint, t.dim.patch(t.panel));
+}
+
+/// 工作区可能占数 GiB，保持大小列有足够空间。
+pub(in crate::tui) fn workspace_size(bytes: u64) -> String {
+    match bytes {
+        0..1_000_000_000 => super::file_size(bytes),
+        _ => format!("{}.{} GB", bytes / 1_000_000_000, bytes % 1_000_000_000 / 100_000_000),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::super::app::App;

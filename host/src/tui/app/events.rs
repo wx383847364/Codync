@@ -206,6 +206,7 @@ impl App {
                 match after {
                     After::Hello => self.error = Some(e),
                     After::Tracked | After::GroupContexts(_) => {}
+                    After::GroupWorkspaceUsage(room) => self.show_group_workspace_usage(&room, &Value::Null),
                     After::GroupResourceUsage(room) => self.show_group_resource_usage(&room, None),
                     After::History(id) => {
                         self.history_busy.remove(&id);
@@ -277,6 +278,7 @@ impl App {
                 self.bot_session_usage = v["botSessionUsage"] == true;
                 self.group_session_contexts = v["groupSessionContexts"] == true;
                 self.group_resource_usage = v["groupResourceUsage"] == true;
+                self.group_workspace_usage = v["groupWorkspaceUsage"] == true;
                 self.stage_groups = v["stageGroups"] == true;
                 self.group_purge = v["purgeGroup"] == true;
                 self.task_group_contexts = v["taskGroupContexts"] == true;
@@ -374,6 +376,7 @@ impl App {
                 }
             }
             After::GroupResourceUsage(room) => self.show_group_resource_usage(&room, Some(&v)),
+            After::GroupWorkspaceUsage(room) => self.show_group_workspace_usage(&room, &v),
             After::PrivateGroupHandoff(expected) => {
                 if let Some((bot, entry)) = Entry::parse(&v["entry"])
                     && bot == expected

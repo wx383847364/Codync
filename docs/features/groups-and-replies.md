@@ -38,6 +38,7 @@ quotes itself.
 | `createStageGroup` | `{botId, requestId, name, goal, acceptance, leaderId, referencePrevious, handoffVersion, roles: [{botId, sourceRev, description, reuseProject}]}` | Creates a stage and its new bots in one transaction. `requestId` is a UUID. Identical retries return the live group, its first draft and `createdMembers`, the original ordered IDs. `sourceRev` binds the preview to the reviewed source settings. The lead is selected by its source bot ID and saved as its new bot ID. |
 | `stageDetails` | `{botId}` | Reads stage, delivery counts and pending items, handoff content, and the restorable first draft. |
 | `changeStage` | `{botId, action, markdown?, evidence?, previousVersion?, version?}` | `saveHandoff` writes an immutable Markdown snapshot. `accept` binds acceptance to its file ID. `close` and `reopen` control admissions. |
+| `groupWorkspaceUsage` | `{roomId}` | Returns each current member’s Codync-managed workspace size, a combined total, and shared-member markers. Directory paths are returned only for local calls. |
 | `stageUsage` | `{botId}` | Reads local delivery, attempt, observed ACP prompt, confirmed new session and process counts, provider-reported totals by backend/model, and coverage. |
 | `updateBot` | `{id, name?, members?, pinned?, hidden?, section?}` | A group can't become a bot or the reverse. `section`: a name, or `null` for none. |
 | `deleteBot` | `botId` | A group's bots stay. A deleted bot leaves its groups. |

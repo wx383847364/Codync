@@ -12,13 +12,15 @@ impl App {
     /// 只更新当前群的会话面板，关闭或切换群后忽略晚到结果。
     pub(in crate::tui) fn show_group_resource_usage(&mut self, room: &str, usage: Option<&Value>) {
         let local = self.on_this_computer;
-        let Some(Overlay::Fields(fields)) = self.overlays.last_mut() else { return };
-        let Submit::GroupContextOptions { room: viewed, directory, usage_notes, .. } = &mut fields.submit else {
-            return;
-        };
-        if viewed != room {
-            return;
-        }
+        // 工作区子页已打开时仍更新背后的同群资料，返回后能看到附件和 Token。
+        let details = self.overlays.iter_mut().rev().find_map(|overlay| {
+            let Overlay::Fields(fields) = overlay else { return None };
+            let Submit::GroupContextOptions { room: viewed, directory, usage_notes, .. } = &mut fields.submit else {
+                return None;
+            };
+            (viewed == room).then_some((directory, usage_notes, &mut fields.choices))
+        });
+        let Some((directory, usage_notes, choices)) = details else { return };
         let Some(usage) = usage else {
             *usage_notes = vec![tr("Could not refresh usage.").into_owned()];
             return;
@@ -27,7 +29,7 @@ impl App {
         let number = |field: &str| usage[field].as_u64().map_or_else(|| "—".into(), |n| n.to_string());
         let share = usage["share"].as_f64().map_or_else(|| "—".into(), |n| format!("{:.1}%", n * 100.0));
         *usage_notes = vec![
-            format!("{} · {} B", tr("Group resource storage"), number("resourceBytes")),
+            format!("{} · {} B", tr("Group attachments and shared files"), number("resourceBytes")),
             format!("{} · {} Token", tr("Group token usage"), number("groupTokens")),
             format!("{} · {share}", tr("Share of host usage")),
             tr("All conversations on this host: {tokens} Token").replace("{tokens}", &number("hostTokens")),
@@ -38,11 +40,31 @@ impl App {
         if local && directory.is_none() {
             *directory = usage["resourceDirectory"].as_str().map(str::to_owned);
             if directory.is_some() {
-                fields.choices.push(tr("Open folder").into_owned());
+                choices.push(tr("Open folder").into_owned());
             }
         }
     }
 
+    /// 更新同一个群的合计和已展开列表，离开群后忽略结果。
+    pub(in crate::tui) fn show_group_workspace_usage(&mut self, room: &str, report: &Value) {
+        for overlay in &mut self.overlays {
+            match overlay {
+                Overlay::Fields(fields) => {
+                    if let Submit::GroupContextOptions { room: viewed, workspaces, .. } = &mut fields.submit
+                        && viewed == room
+                    {
+                        *workspaces = Some(report.clone());
+                    }
+                }
+                Overlay::GroupWorkspaces { room: viewed, usage, .. } if viewed == room => {
+                    *usage = Some(report.clone());
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// 处理详情选择，打开工作区列表时保留背后的群资料。
     pub(in crate::tui) fn fields_key(&mut self, mut f: Box<Fields>, k: KeyEvent) -> Option<Overlay> {
         if f.saving {
             return if k.code == KeyCode::Esc { None } else { Some(Overlay::Fields(f)) };
@@ -138,14 +160,21 @@ impl App {
                     Reply::FieldsSaved,
                 );
             }
-            Submit::GroupContextOptions { room, members, directory, .. } => {
+            Submit::GroupContextOptions { room, members, directory, workspaces, workspaces_enabled, .. } => {
                 if let Some(basis) = [256_000, 512_000, 1_000_000].get(f.choice) {
                     self.call(
                         "setGroupContextBasis",
                         json!({"roomId":room,"basis":basis}),
                         super::After::GroupContexts(room.clone()),
                     );
-                } else if let Some((bot, action)) = members.get(f.choice - 3) {
+                } else if *workspaces_enabled && f.choice == 3 {
+                    f.saving = false;
+                    self.overlays.push(Overlay::GroupWorkspaces {
+                        room: room.clone(),
+                        usage: workspaces.clone(),
+                        cursor: 0,
+                    });
+                } else if let Some((bot, action)) = members.get(f.choice - 3 - usize::from(*workspaces_enabled)) {
                     if *action {
                         self.open_member_session(room.clone(), bot.clone());
                     } else {

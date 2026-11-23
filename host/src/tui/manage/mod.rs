@@ -238,6 +238,8 @@ pub enum Submit {
         members: Vec<(String, bool)>,
         directory: Option<String>,
         usage_notes: Vec<String>,
+        workspaces: Option<Value>,
+        workspaces_enabled: bool,
     },
     /// A bot's section (its id): a name, or empty for none.
     Section(String),
@@ -439,6 +441,9 @@ impl App {
         };
         let basis = snapshot["basis"].as_u64().unwrap_or(512_000);
         let mut choices: Vec<String> = ["256K", "512K", "1M"].into_iter().map(str::to_owned).collect();
+        if self.group_workspace_usage {
+            choices.push(super::l10n::tr("Member workspaces").into_owned());
+        }
         let mut members = Vec::new();
         for reading in snapshot["members"].as_array().into_iter().flatten() {
             let Some(bot) = reading["botId"].as_str() else { continue };
@@ -473,10 +478,15 @@ impl App {
                 members,
                 directory: None,
                 usage_notes: Vec::new(),
+                workspaces: None,
+                workspaces_enabled: self.group_workspace_usage,
             },
         })));
         if self.group_resource_usage {
-            self.call("groupResourceUsage", json!({"roomId":room}), After::GroupResourceUsage(room));
+            self.call("groupResourceUsage", json!({"roomId":room}), After::GroupResourceUsage(room.clone()));
+        }
+        if self.group_workspace_usage {
+            self.call("groupWorkspaceUsage", json!({"roomId":room}), After::GroupWorkspaceUsage(room));
         }
     }
 
