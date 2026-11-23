@@ -26,6 +26,7 @@ public struct ThreadView: View {
     @State var loadingEarlier = false
     @State private var groupContexts: GroupSessionContexts?
     @State private var inspectingContext: String?
+    @State private var reviewingContext: String?
     @State private var privateGroupReview: Entry?
     @Environment(\.accessibilityReduceMotion) var reduceMotion
 
@@ -71,6 +72,15 @@ public struct ThreadView: View {
             .readingConversation(botId)
             .groupContextUpdates(room: bot, model: model, snapshot: $groupContexts, failure: .constant(nil))
             .groupContextInspection(snapshot: groupContexts, inspecting: $inspectingContext, model: model)
+            .codyncSheet(isPresented: Binding(
+                // 入口只记录目标，关闭时释放该成员的摘要页。
+                get: { reviewingContext != nil }, set: { if !$0 { reviewingContext = nil } }
+            )) {
+                if let bot, let reviewingContext {
+                    GroupContexts(room: bot, members: model.members(of: bot), remove: { _ in /* 摘要页不修改群名单。 */ },
+                        canLeaveEditor: { true }, reviewBotId: reviewingContext)
+                }
+            }
             .onChange(of: model.voiceCallRequest, initial: true) { _, _ in
                 if model.takeVoiceCallRequest(for: botId) { startShortcutCall() }
             }
@@ -140,9 +150,13 @@ public struct ThreadView: View {
                 let label = reading?.used.flatMap { used in groupContextPercent(used, groupContexts?.basis ?? 512_000).map {
                     "\(groupContextCompact(used)) · \($0)"
                 }}
+                let waiting = ["approved", "switched"].contains(reading?.handoff?.phase ?? "")
+                let canReview = !waiting && (reading?.recommended == true || reading?.handoff?.phase == "draft")
                 ChatRow(entry: e, groupStart: groupStart, handoffPending: item.handoffPending, groupContextLabel: label,
                         contextModel: reading?.actualModelName, contextReasoning: reading?.reasoning,
-                        inspectContext: { inspectingContext = e.data.author }, chat: bot, openTrace: { showTrace = true },
+                        inspectContext: { inspectingContext = e.data.author },
+                        contextRecommended: reading?.recommended == true, contextWaiting: waiting,
+                        newSession: canReview ? { /* 原成员摘要编辑器保留普通群私聊确认边界。 */ reviewingContext = e.data.author } : nil, chat: bot, openTrace: { showTrace = true },
                         // An update card takes the composer's place, so there's nothing to reply with.
                         reply: e.isReplyable && model.mismatch == nil ? { reply(to: e) } : nil,
                         // In a group, the bot whose agent failed.

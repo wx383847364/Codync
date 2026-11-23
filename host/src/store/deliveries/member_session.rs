@@ -25,6 +25,7 @@ pub(crate) struct MemberSessionRequest {
 #[derive(Clone)]
 pub(crate) struct MemberContext {
     pub shared: bool,
+    basis: u64,
     pub backend: String,
     pub model: Option<String>,
     pub actual_model_name: Option<String>,
@@ -92,6 +93,7 @@ fn context(c: &Connection, room: &BotConfig, bot: &BotConfig) -> Result<MemberCo
         if matches { (snapshot["used"].as_u64(), snapshot["size"].as_u64().filter(|n| *n > 0)) } else { (None, None) };
     Ok(MemberContext {
         shared,
+        basis: display_basis(c, &room.id)?,
         backend: effective.backend,
         model: effective.model,
         actual_model_name: (matches
@@ -107,11 +109,20 @@ fn context(c: &Connection, room: &BotConfig, bot: &BotConfig) -> Result<MemberCo
     })
 }
 
-/// 50% 用实际窗口判断，整数运算不受显示精度或档位影响。
+/// 推荐按群显示档位的 70% 判断；实际任务预算仍由模型窗口预检。
 impl MemberContext {
+    /// 用未舍入的真实占用比较阈值，不把显示档位当作模型容量。
     pub fn recommend(&self) -> bool {
-        self.used.zip(self.size).is_some_and(|(used, size)| used >= size.div_ceil(2))
+        self.used.is_some_and(|used| u128::from(used) * 10 >= u128::from(self.basis) * 7)
     }
+}
+
+/// 推荐快照与准备摘要共用持久化档位，避免显示按钮后被旧阈值拒绝。
+fn display_basis(c: &Connection, room: &str) -> Result<u64> {
+    Ok(kv(c, &format!("group.context-basis.{room}"))?
+        .and_then(|v| v.parse::<u64>().ok())
+        .filter(|basis| matches!(basis, 256_000 | 512_000 | 1_000_000))
+        .unwrap_or(DEFAULT_BASIS))
 }
 
 /// 群操作始终通过同一事务重新读取成员和阶段状态。
@@ -339,9 +350,7 @@ impl Store {
         let room = config(&c, room_id)?;
         ensure!(room.is_group(), "Not a group conversation");
         let closed = crate::store::bots::stage_closed(&c, room_id)?;
-        let basis = kv(&c, &format!("group.context-basis.{room_id}"))?
-            .and_then(|v| v.parse::<u64>().ok())
-            .unwrap_or(DEFAULT_BASIS);
+        let basis = display_basis(&c, room_id)?;
         let mut members = Vec::new();
         for id in &room.members {
             let Ok(bot) = config(&c, id) else { continue };
@@ -416,6 +425,11 @@ impl Store {
             return Ok((waiting, Vec::new()));
         }
         ensure!(same_session(draft, &active) && active.recommend(), "The session has changed. Open the review again.");
+        // 所有调用方都必须保留未知窗口的旧独立会话，禁止保存不可恢复的零窗口摘要。
+        ensure!(
+            active.shared || draft.handoff.window > 0,
+            "The actual model window is unavailable. Wait for context usage to refresh."
+        );
         let key = request_key(bot, (!active.shared).then_some(&draft.room));
         let mut cards = Vec::new();
         let mut r = draft.clone();

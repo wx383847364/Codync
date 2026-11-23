@@ -696,21 +696,21 @@ fn group_handoff_recovery_keeps_its_replacement_and_deletion_settles_private_car
     assert_eq!(s.group_handoff(&id).unwrap().unwrap().phase, Phase::Superseded);
 }
 
-/// 显示档位不影响 50% 判断，独立群不会拿到同名执行器 ID 的私聊用量。
+/// 推荐跟随显示档位，独立群不会读取同名执行器 ID 的私聊用量。
 #[test]
 fn group_member_context_uses_the_correct_slot_and_actual_window() {
     let s = store();
     s.set_session("a", Some("same-id")).unwrap();
-    s.save_scoped_context("a", "claude", None, "same-id", Some(128_000), Some(256_000)).unwrap();
+    s.save_scoped_context("a", "claude", None, "same-id", Some(358_400), Some(1_000_000)).unwrap();
     let shared = s.group_session_contexts("g").unwrap();
     assert_eq!(shared["basis"], 512_000);
-    assert_eq!(shared["members"][0]["used"], 128_000);
+    assert_eq!(shared["members"][0]["used"], 358_400);
     assert_eq!(shared["members"][0]["recommended"], true);
 
     s.set_group_context_basis("g", 1_000_000).unwrap();
     let shared = s.group_session_contexts("g").unwrap();
     assert_eq!(shared["basis"], 1_000_000);
-    assert_eq!(shared["members"][0]["recommended"], true);
+    assert_eq!(shared["members"][0]["recommended"], false);
     assert!(s.set_group_context_basis("g", 400_000).is_err());
 
     let mut isolated = s.bot("g").unwrap().unwrap().config;
@@ -726,5 +726,28 @@ fn group_member_context_uses_the_correct_slot_and_actual_window() {
     let isolated = s.group_session_contexts("isolated").unwrap();
     assert_eq!(isolated["members"][0]["used"], 127_999);
     assert_eq!(isolated["members"][0]["recommended"], false);
-    assert_eq!(s.group_session_contexts("g").unwrap()["members"][0]["used"], 128_000);
+    assert_eq!(s.group_session_contexts("g").unwrap()["members"][0]["used"], 358_400);
+}
+
+/// 三档均按未四舍五入的真实用量判定 70%，未知窗口不妨碍准备主动摘要。
+#[test]
+fn group_recommendation_uses_display_threshold_without_changing_actual_window() {
+    let s = store();
+    s.set_session("a", Some("threshold-session")).unwrap();
+    for basis in [256_000, 512_000, 1_000_000] {
+        s.set_group_context_basis("g", basis).unwrap();
+        let threshold = basis * 7 / 10;
+        for (used, expected) in [(threshold - 1, false), (threshold, true)] {
+            s.save_scoped_context("a", "claude", None, "threshold-session", Some(used), Some(1_000_000)).unwrap();
+            let snapshot = s.group_session_contexts("g").unwrap();
+            assert_eq!(snapshot["members"][0]["recommended"], expected);
+            assert_eq!(snapshot["members"][0]["size"], 1_000_000);
+            assert_eq!(s.group_member_context("g", "a").unwrap().0.recommend(), expected);
+        }
+    }
+    s.set_group_context_basis("g", 256_000).unwrap();
+    s.save_scoped_context("a", "claude", None, "threshold-session", Some(333_800), None).unwrap();
+    assert_eq!(s.group_session_contexts("g").unwrap()["members"][0]["recommended"], true);
+    s.save_scoped_context("a", "claude", None, "threshold-session", None, Some(1_000_000)).unwrap();
+    assert_eq!(s.group_session_contexts("g").unwrap()["members"][0]["recommended"], false);
 }

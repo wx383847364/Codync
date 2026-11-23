@@ -13,6 +13,7 @@ struct GroupContexts: View {
     let members: [Bot]
     let remove: (String) -> Void
     let canLeaveEditor: () -> Bool
+    let reviewBotId: String?
     @State private var snapshot: GroupSessionContexts?
     @State private var inspecting: String?
     @Environment(\.dismissModal) private var dismiss
@@ -24,11 +25,12 @@ struct GroupContexts: View {
     @State private var refreshError: String?
 
     /// 成员增删使用编辑页的暂存名单，会话确认由 Host 处理。
-    init(room: Bot, members: [Bot], remove: @escaping (String) -> Void, canLeaveEditor: @escaping () -> Bool) {
+    init(room: Bot, members: [Bot], remove: @escaping (String) -> Void, canLeaveEditor: @escaping () -> Bool, reviewBotId: String? = nil) {
         self.room = room
         self.members = members
         self.remove = remove
         self.canLeaveEditor = canLeaveEditor
+        self.reviewBotId = reviewBotId
     }
 
     private struct Review: Identifiable {
@@ -42,6 +44,29 @@ struct GroupContexts: View {
 
     /// 在成员名单顶端设置全群显示档位。
     var body: some View {
+        Group {
+            if reviewBotId != nil {
+                summaryEditor
+            } else {
+                memberList
+            }
+        }
+        .groupContextUpdates(room: room, model: model, snapshot: $snapshot, failure: $refreshError)
+        .groupContextInspection(snapshot: snapshot, inspecting: $inspecting, model: model)
+        .task(id: reviewBotId) {
+            // 消息头只打开所选成员的摘要，复用成员页的准备与私聊导航。
+            if let reviewBotId { await open(reviewBotId, shared: false) }
+        }
+        .onDisappear { preparing?.cancel() }
+        .codyncSheet(isPresented: Binding(
+            // 消息头已有外层弹页，直接在页内编辑，避免嵌套相同摘要页。
+            get: { reviewBotId == nil && edit != nil },
+            set: { if !$0 { edit = nil } }
+        )) { summaryEditor }
+    }
+
+    /// 原成员列表继续编辑名单，摘要入口与消息头共用状态和确认方法。
+    private var memberList: some View {
         VStack(alignment: .leading, spacing: 7) {
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
@@ -70,28 +95,37 @@ struct GroupContexts: View {
             }
             if let error = error ?? refreshError, edit == nil { Text(error).font(.caption).foregroundStyle(Palette.danger) }
         }
-        .groupContextUpdates(room: room, model: model, snapshot: $snapshot, failure: $refreshError)
-        .groupContextInspection(snapshot: snapshot, inspecting: $inspecting, model: model)
-        .onDisappear {
-            // 设置页已关闭时，正在生成的摘要不得再导航到私聊。
-            preparing?.cancel()
-        }
-        .codyncSheet(item: $edit) { draft in
-            VStack(spacing: 0) {
-                ModalHeader("Open new session")
-                CardForm {
+    }
+
+    /// 成员页弹层和消息头弹页复用同一份摘要编辑器，失败时保留草稿。
+    private var summaryEditor: some View {
+        VStack(spacing: 0) {
+            ModalHeader("Open new session")
+            CardForm {
+                if let draft = edit {
                     CardSection(model.bots[draft.botId]?.name, footer: "The new session starts after the current turn.") {
                         TextField(L10n.tr("Summary for the new session"), text: Binding(
+                            // 修改只更新本页草稿，确认前不写入 Host。
                             get: { edit?.text ?? draft.text },
                             set: { edit?.text = $0 }), axis: .vertical).lineLimit(7...15)
                     }
-                    if let error { Text(error).font(.footnote).foregroundStyle(Palette.danger) }
-                    Button(L10n.tr("Confirm new session")) { Task { await confirm() } }
-                        .buttonStyle(.primary).disabled(busy || (edit?.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    Button(L10n.tr("Confirm new session")) {
+                        // 成功后关闭消息头弹页，成员页仍留在原名单。
+                        Task { await confirm() }
+                    }.buttonStyle(.primary).disabled(busy || draft.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                } else {
+                    Text(L10n.tr(busy ? "Summary for the new session" : "New session after this turn"))
+                        .foregroundStyle(Palette.secondary)
+                }
+                if let error {
+                    Text(error).font(.footnote).foregroundStyle(Palette.danger)
+                    if edit == nil, let reviewBotId {
+                        Button(L10n.tr("Retry")) { /* 关闭页面会取消重试，确认失败不能覆盖已编辑摘要。 */ preparing = Task { await open(reviewBotId, shared: false) } }
+                            .disabled(busy)
+                    }
                 }
             }
-            .background(Palette.background)
-        }
+        }.background(Palette.background)
     }
 
     /// 展示成员的用量，普通群的新开入口会转到该成员的私聊。
@@ -110,11 +144,12 @@ struct GroupContexts: View {
                     } else if canReview, let member {
                         Button(L10n.tr("Open new session")) {
                             // 只准备草稿，确认权留在摘要页面。
-                            preparing = Task { await open(member) }
+                            preparing = Task { await open(member.botId, shared: member.shared) }
                         }
                         .font(.caption2.weight(.semibold))
                         .padding(5)
-                        .background(Palette.background, in: RoundedRectangle(cornerRadius: 6))
+                        .foregroundStyle(Palette.warning)
+                        .background(Palette.warning.opacity(0.14), in: Capsule())
                         .disabled(busy || model.isOffline || (member.shared && !canLeaveEditor()))
                     }
                 }
@@ -132,7 +167,7 @@ struct GroupContexts: View {
                         if let used = member?.used {
                             GeometryReader { geometry in
                                 Capsule().fill(Palette.secondary.opacity(0.16)).overlay(alignment: .leading) {
-                                    Capsule().fill(AvatarPalette.color(bot.avatarColor))
+                                    Capsule().fill(member?.recommended == true ? Palette.warning : AvatarPalette.color(bot.avatarColor))
                                         .frame(width: geometry.size.width * CGFloat(min(1, Double(used) / Double(basis))))
                                 }
                             }.frame(height: 3)
@@ -163,27 +198,27 @@ struct GroupContexts: View {
     }
 
     /// 已有阻塞任务沿用原交接，共享摘要只在正确的私聊打开。
-    private func open(_ member: GroupSessionContexts.Member) async {
-        guard !busy, !member.shared || canLeaveEditor() else { return }
+    private func open(_ botId: String, shared: Bool) async {
+        guard !busy, !shared || canLeaveEditor() else { return }
         busy = true
         defer { busy = false }
         do {
             let response: GroupSessionContexts.Review = try await model.ready()
-                .call("prepareGroupMemberSession", ["roomId": room.id, "botId": member.botId])
+                .call("prepareGroupMemberSession", ["roomId": room.id, "botId": botId])
             guard !Task.isCancelled else { return }
             error = nil
             if let id = response.privateEntryId {
                 // 等待请求期间也可能编辑群资料，离开前再读一次暂存状态。
                 guard canLeaveEditor() else { return }
                 dismiss()
-                model.privateGroupHandoff = PrivateGroupHandoffTarget(botId: member.botId, entryId: id)
-                model.selection = member.botId
+                model.privateGroupHandoff = PrivateGroupHandoffTarget(botId: botId, entryId: id)
+                model.selection = botId
             } else if let delivery = response.deliveryId {
                 let draft = try await model.groupHandoff(delivery)
                 guard !Task.isCancelled else { return }
-                edit = Review(id: draft.revision, botId: member.botId, deliveryId: delivery, text: draft.text)
+                edit = Review(id: draft.revision, botId: botId, deliveryId: delivery, text: draft.text)
             } else if let text = response.text, let rev = response.revision {
-                edit = Review(id: rev, botId: member.botId, deliveryId: nil, text: text)
+                edit = Review(id: rev, botId: botId, deliveryId: nil, text: text)
             }
         } catch { if !Task.isCancelled { self.error = error.localizedDescription } }
     }
@@ -201,6 +236,7 @@ struct GroupContexts: View {
                     ["roomId": room.id, "botId": edit.botId, "revision": edit.id, "text": edit.text])
             }
             self.edit = nil
+            if reviewBotId != nil { dismiss() }
         } catch { self.error = error.localizedDescription }
     }
 }

@@ -261,3 +261,35 @@ async fn a_calls_conversation_takes_what_the_host_sent_beyond_the_loaded_chat() 
     );
     assert_eq!(call_lines(&app, &bot, &line), ["voice → bot: check git", "Mika: Clean."]);
 }
+
+/// 用量暂时未知的待确认交接仍在消息头提供直接目标入口，长模型名不会挤掉操作。
+#[tokio::test]
+async fn pending_handoff_keeps_the_header_action_without_usage() {
+    use crate::tui::app::Msg;
+    use serde_json::json;
+    let mut app = app_with_bots();
+    app.on_msg(Msg::Event(
+        json!({"type":"bot","bot":{"id":"g","name":"Crew","kind":"group","members":["a"],"status":"idle"}}),
+    ));
+    app.on_msg(Msg::Event(json!({"type":"entry","entry":{"id":"reply","botId":"g","seq":1,"kind":"agent","turn":1,"data":{"author":"a","text":"Done","final":true}}})));
+    app.group_session_contexts = true;
+    app.group_contexts = Some((
+        "g".into(),
+        json!({"basis":256_000,"members":[{"botId":"a","recommended":false,"handoff":{"phase":"draft"}}]}),
+    ));
+    let rendered = build_chat(&app, &app.bots["g"], 80);
+    assert!(
+        rendered
+            .buttons
+            .iter()
+            .any(|(_, _, _, click)| matches!(click, Click::MemberSession(room,bot) if room=="g" && bot=="a"))
+    );
+    app.group_contexts.as_mut().unwrap().1["members"][0]["used"] = json!(333_800);
+    app.group_contexts.as_mut().unwrap().1["members"][0]["actualModelName"] =
+        json!("A very long model display name for the narrow terminal");
+    let rendered = build_chat(&app, &app.bots["g"], 80);
+    let (row, x, width, _) =
+        rendered.buttons.iter().find(|(_, _, _, click)| matches!(click, Click::MemberSession(_, _))).unwrap();
+    assert!(usize::from(*x + *width) <= 80);
+    assert!(rendered.lines[*row].width() <= 80);
+}

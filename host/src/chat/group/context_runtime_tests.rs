@@ -632,7 +632,7 @@ async fn confirmed_group_handoff_resumes_the_original_delivery_and_archives_its_
     }
 }
 
-/// 执行中的主动确认要等本轮保存，随后只给当前独立群的下一条派工带交接。
+/// 达到显示基准 70% 后的主动确认要等本轮保存，再给当前独立群下一条派工带交接。
 #[tokio::test]
 async fn member_requests_new_session_after_current_group_turn_and_keeps_queued_work() {
     let (room, server) = context_room().await;
@@ -642,11 +642,20 @@ async fn member_requests_new_session_after_current_group_turn_and_keeps_queued_w
         "a",
         "group-script.json",
         &json!({"steps":[
-            {"reply":"seeded","usage":{"used":15_000,"size":30_000}},
-            {"reply":"FIRST TURN FINISHED","usage":{"used":16_000,"size":30_000}},
+            {"reply":"seeded","usage":{"used":358_400,"size":1_000_000}},
+            {"reply":"FIRST TURN FINISHED","usage":{"used":359_000,"size":1_000_000}},
             {"reply":"NEXT ASSIGNMENT FINISHED"}
         ]}),
     );
+    // 新的显示阈值高于自动整理目标，维护单独记账，不消耗本测试的任务步骤。
+    script(&room, "a", "group-compact.json", &json!({"usage":{"used":358_400,"size":1_000_000}}));
+    let prompts = || {
+        // 只计算实际派工，排除新阈值下可能出现的自动整理请求。
+        records(&room, "a", "prompt-requests.jsonl")
+            .into_iter()
+            .filter(|request| !request["prompt"][0]["text"].as_str().is_some_and(|text| text.starts_with("/compact")))
+            .collect::<Vec<_>>()
+    };
     let group = room.hub.create_group_session(&room.group, None).unwrap()["id"].as_str().unwrap().to_owned();
     let api = |method: &str, data: Value| {
         let hub = room.hub.clone();
@@ -657,12 +666,12 @@ async fn member_requests_new_session_after_current_group_turn_and_keeps_queued_w
     room.settle().await;
     let snapshot = api("groupSessionContexts", json!({"roomId":group})).await.unwrap();
     let member = snapshot["members"].as_array().unwrap().iter().find(|m| m["botId"] == "a").unwrap();
-    assert_eq!((member["used"].as_u64(), member["recommended"].as_bool()), (Some(15_000), Some(true)));
-    let original = records(&room, "a", "prompt-requests.jsonl")[0]["sessionId"].clone();
+    assert_eq!((member["used"].as_u64(), member["recommended"].as_bool()), (Some(358_400), Some(true)));
+    let original = prompts()[0]["sessionId"].clone();
 
     api("send", json!({"botId":group,"text":"@a BLOCK Finish the active assignment"})).await.unwrap();
     tokio::time::timeout(WAIT, async {
-        while records(&room, "a", "prompt-requests.jsonl").len() < 2 {
+        while prompts().len() < 2 {
             tokio::time::sleep(Duration::from_millis(30)).await;
         }
     })
@@ -677,12 +686,12 @@ async fn member_requests_new_session_after_current_group_turn_and_keeps_queued_w
     let awaiting = api("groupSessionContexts", json!({"roomId":group})).await.unwrap();
     let member = awaiting["members"].as_array().unwrap().iter().find(|m| m["botId"] == "a").unwrap();
     assert_eq!(member["handoff"]["phase"], "approved");
-    assert_eq!(records(&room, "a", "prompt-requests.jsonl").len(), 2);
+    assert_eq!(prompts().len(), 2);
     assert_eq!(records(&room, "a", "retirement.jsonl"), [] as [Value; 0]);
     script(&room, "a", "release", &json!(true));
     room.settle().await;
 
-    let prompts = records(&room, "a", "prompt-requests.jsonl");
+    let prompts = prompts();
     assert_eq!(prompts.len(), 3);
     assert_eq!(prompts[1]["sessionId"], original);
     assert_ne!(prompts[2]["sessionId"], original);
@@ -691,5 +700,54 @@ async fn member_requests_new_session_after_current_group_turn_and_keeps_queued_w
     let retired = records(&room, "a", "retirement.jsonl");
     assert_eq!(retired.len(), 1);
     assert_eq!(retired[0]["params"]["sessionId"], original);
+    close(room, server).await;
+}
+
+/// 已知用量但窗口缺失时只提示，不归档独立群旧会话；窗口恢复后仍能准备摘要。
+#[tokio::test]
+async fn unknown_window_keeps_the_existing_group_session_until_usage_recovers() {
+    let (room, server) = context_room().await;
+    script(&room, "a", "session-retirement.json", &json!({"nativeArchive":true}));
+    script(
+        &room,
+        "a",
+        "group-script.json",
+        &json!({"steps":[
+            {"reply":"unknown window","usage":{"used":358_400}},
+            {"reply":"known window","usage":{"used":358_400,"size":1_000_000}}
+        ]}),
+    );
+    let group = room.hub.create_group_session(&room.group, None).unwrap()["id"].as_str().unwrap().to_owned();
+    crate::api::dispatch(&room.hub, &Caller::Local, "send", json!({"botId":group,"text":"@a seed usage"}))
+        .await
+        .unwrap();
+    room.settle().await;
+    let original = records(&room, "a", "prompt-requests.jsonl")[0]["sessionId"].clone();
+    let error = crate::api::dispatch(
+        &room.hub,
+        &Caller::Local,
+        "prepareGroupMemberSession",
+        json!({"roomId":group,"botId":"a"}),
+    )
+    .await
+    .unwrap_err();
+    assert!(error.to_string().contains("actual model window is unavailable"), "{error}");
+    assert!(room.hub.store.queued_member_sessions("a").unwrap().is_empty());
+    assert_eq!(records(&room, "a", "retirement.jsonl"), [] as [Value; 0]);
+    crate::api::dispatch(&room.hub, &Caller::Local, "send", json!({"botId":group,"text":"@a refresh usage"}))
+        .await
+        .unwrap();
+    room.settle().await;
+    assert_eq!(records(&room, "a", "prompt-requests.jsonl")[1]["sessionId"], original);
+    let draft = crate::api::dispatch(
+        &room.hub,
+        &Caller::Local,
+        "prepareGroupMemberSession",
+        json!({"roomId":group,"botId":"a"}),
+    )
+    .await
+    .unwrap();
+    assert!(draft["revision"].is_string());
+    assert_eq!(records(&room, "a", "retirement.jsonl"), [] as [Value; 0]);
     close(room, server).await;
 }

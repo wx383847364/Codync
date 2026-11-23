@@ -63,7 +63,7 @@ internal fun groupContextPercent(used: Long?, size: Long): String? = used?.takeI
 
 /** 在群成员设置的现有名单显示上下文、档位和会话操作。 */
 @Composable internal fun GroupContexts(room: Bot, state: AppState, store: AppStore, members: List<Bot>,
-    remove: (String) -> Unit, canLeaveEditor: () -> Boolean) {
+    remove: (String) -> Unit, reviewBotId: String? = null, canLeaveEditor: () -> Boolean) {
     val scope = rememberCoroutineScope()
     val dismiss = LocalDismissModal.current
     val online = state.actualConnection is LinkState.Ready && state.mismatch == null
@@ -77,7 +77,34 @@ internal fun groupContextPercent(used: Long?, size: Long): String? = used?.takeI
     ObserveGroupContexts(room, state, store,
         update = { snapshot = it }, fail = { refreshError = it })
 
-    Column(Modifier.fillMaxWidth(),
+    /** 两处入口共用草稿准备和私聊导航，错误保留在当前编辑页。 */
+    suspend fun prepare(botId: String) {
+        busy = true
+        error = null
+        try {
+            val response = WireJson.decodeFromJsonElement<GroupSessionContexts.Review>(store.hostCall(
+                "prepareGroupMemberSession", body("roomId" to room.id, "botId" to botId)))
+            val entryId = response.privateEntryId
+            val deliveryId = response.deliveryId
+            if (entryId != null && canLeaveEditor()) {
+                dismiss()
+                store.openBot(botId, entryId)
+            } else if (entryId == null && response.phase !in listOf("approved", "switched")) {
+                val draft = if (deliveryId != null) WireJson.decodeFromJsonElement<GroupSessionContexts.Review>(
+                    store.hostCall("groupHandoff", body("deliveryId" to deliveryId))) else response
+                if (draft.text != null && draft.revision != null) review = GroupReview(
+                    botId, deliveryId, requireNotNull(draft.revision), requireNotNull(draft.text))
+            }
+        } catch (cancelled: CancellationException) { throw cancelled }
+        catch (failure: Exception) { error = failure.localizedMessage }
+        finally { busy = false }
+    }
+    LaunchedEffect(room.id, reviewBotId) {
+        // 消息头直接编辑指定成员的摘要，不必先进入成员管理。
+        if (reviewBotId != null) prepare(reviewBotId)
+    }
+
+    if (reviewBotId == null) Column(Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(5.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
             Column(Modifier.weight(1f)) {
@@ -112,27 +139,7 @@ internal fun groupContextPercent(used: Long?, size: Long): String? = used?.takeI
                 GroupContextRow(bot, state.bots, member, basis, busy || !online || (member?.shared == true && !canLeaveEditor()),
                     { inspecting = bot.id }, { remove(bot.id) }) {
                     // 阻塞派工保留原身份，共享摘要在对应的私聊展示。
-                    scope.launch {
-                        busy = true
-                        error = null
-                        try {
-                            val response = WireJson.decodeFromJsonElement<GroupSessionContexts.Review>(store.hostCall(
-                                "prepareGroupMemberSession", body("roomId" to room.id, "botId" to bot.id)))
-                            val entryId = response.privateEntryId
-                            val deliveryId = response.deliveryId
-                            if (entryId != null && canLeaveEditor()) {
-                                dismiss()
-                                store.openBot(bot.id, entryId)
-                            } else if (entryId == null && response.phase !in listOf("approved", "switched")) {
-                                val draft = if (deliveryId != null) WireJson.decodeFromJsonElement<GroupSessionContexts.Review>(
-                                    store.hostCall("groupHandoff", body("deliveryId" to deliveryId))) else response
-                                if (draft.text != null && draft.revision != null) review = GroupReview(
-                                    bot.id, deliveryId, requireNotNull(draft.revision), requireNotNull(draft.text))
-                            }
-                        } catch (cancelled: CancellationException) { throw cancelled }
-                        catch (failure: Exception) { error = failure.localizedMessage }
-                        finally { busy = false }
-                    }
+                    scope.launch { prepare(bot.id) }
                 }
             }
         }
@@ -142,7 +149,8 @@ internal fun groupContextPercent(used: Long?, size: Long): String? = used?.takeI
         if (review == null) (error ?: refreshError)?.let { Text(it, style = Type.caption, color = Palette.danger) }
     }
     GroupContextInspection(snapshot, members, inspecting) { inspecting = it }
-    CodyncSheet(review != null, { review = null }) {
+    // 成员页弹层和消息头弹页共用编辑内容，确认失败保留用户原文。
+    val summaryEditor: @Composable () -> Unit = {
         val draft = review
         if (draft != null) Column {
             ModalHeader("Open new session")
@@ -164,6 +172,7 @@ internal fun groupContextPercent(used: Long?, size: Long): String? = used?.takeI
                                 else body("roomId" to room.id, "botId" to draft.botId)
                             store.hostCall(method, JsonObject(target + body("revision" to draft.revision, "text" to draft.text)))
                             review = null
+                            if (reviewBotId != null) dismiss()
                         } catch (cancelled: CancellationException) { throw cancelled }
                         catch (failure: Exception) { error = failure.localizedMessage }
                         finally { busy = false }
@@ -171,7 +180,22 @@ internal fun groupContextPercent(used: Long?, size: Long): String? = used?.takeI
                 }
             }
         }
+        if (draft == null) Column {
+            ModalHeader("Open new session")
+            Text(tr(if (busy) "Summary for the new session" else "New session after this turn"), Modifier.padding(16.dp),
+                style = Type.footnote, color = Palette.secondary)
+        }
+        if (draft == null && error != null) Column(Modifier.padding(16.dp)) {
+            Text(requireNotNull(error), style = Type.caption, color = Palette.danger)
+            if (reviewBotId != null) PrimaryButton("Retry", enabled = !busy) {
+                // 准备失败时保留原目标，可再次请求摘要。
+                scope.launch { prepare(reviewBotId) }
+            }
+        }
+
     }
+    if (reviewBotId != null) summaryEditor()
+    else CodyncSheet(review != null, { review = null }, content = summaryEditor)
 }
 
 /** 从消息标签或成员名单查看精确读数，避免在聊天中同时展开成员管理。 */
@@ -210,8 +234,8 @@ internal fun groupContextPercent(used: Long?, size: Long): String? = used?.takeI
                 if (waiting) {
                     Text(tr("New session after this turn"), style = Type.caption, color = Palette.secondary)
                 } else if (canReview) {
-                    Text(tr("Open new session"), Modifier.clip(RoundedCornerShape(6.dp)).background(Palette.background)
-                        .clickable(enabled = !disabled, role = Role.Button, onClick = open).padding(5.dp), style = Type.caption.medium, color = Palette.accent)
+                    Text(tr("Open new session"), Modifier.clip(RoundedCornerShape(6.dp)).background(Palette.warning.copy(alpha = 0.14f))
+                        .clickable(enabled = !disabled, role = Role.Button, onClick = open).padding(5.dp), style = Type.caption.medium, color = Palette.warning)
                 }
             }
             Column(Modifier.fillMaxWidth().clickable(enabled = member != null, onClick = inspect),
@@ -228,7 +252,7 @@ internal fun groupContextPercent(used: Long?, size: Long): String? = used?.takeI
                     // 进度条封顶，文本仍显示真实的显示基准占比。
                     Box(Modifier.fillMaxWidth().height(3.dp).clip(RoundedCornerShape(4.dp)).background(Palette.secondary.copy(alpha = 0.18f))) {
                         Box(Modifier.fillMaxWidth((used.toFloat() / basis).coerceIn(0f, 1f)).height(3.dp)
-                            .background(AvatarPalette.tint(bot.avatarColor)))
+                            .background(if (member.recommended) Palette.warning else AvatarPalette.tint(bot.avatarColor)))
                     }
                 }
             }

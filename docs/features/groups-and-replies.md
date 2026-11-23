@@ -122,8 +122,8 @@ reference and resumes the original dispatch. There is no silent session reset.
 The member list reads the current execution slot's reported token count on the Host.
 The desktop shows it in the conversation's details sidebar, phones show it in group
 settings, and the terminal shows it in the members panel. A room saves its display
-basis independently of the agent's actual window. At 50% of the actual window, or when
-a dispatch has a capacity handoff, the member action opens the review. An isolated
+basis independently of the agent's actual window. At 70% of the selected display basis, or when
+a dispatch has a capacity handoff, the member row and latest message header open the same review. An isolated
 group can edit and confirm it in the desktop sidebar or the mobile member page.
 A shared session opens its review in the member's private chat.
 Confirmation of a proactive handoff is persisted before the actor returns to its queue.
