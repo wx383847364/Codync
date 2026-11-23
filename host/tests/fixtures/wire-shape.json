@@ -74,6 +74,7 @@
     "event:bot.bot.startedAt": "null",
     "event:bot.bot.status": "string",
     "event:bot.bot.storageError": "null",
+    "event:bot.bot.taskRoleCopyable": "bool",
     "event:bot.bot.unread": "number",
     "event:bot.bot.workingChat": "null",
     "event:bot.rev": "number",
@@ -254,6 +255,7 @@
     "hello.signKey": "string",
     "hello.stageGroups": "bool",
     "hello.stageRoster": "bool",
+    "hello.taskGroupContexts": "bool",
     "hello.version": "string",
     "hello.workspaceFileSearch": "bool"
   }
