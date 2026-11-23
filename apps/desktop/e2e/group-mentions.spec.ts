@@ -39,7 +39,9 @@ test('shows group resources and reported token usage in details', async () => {
     await page.locator('.roster-row', { hasText: name }).click()
     await page.locator('.title-pill').click()
     const usage = page.getByRole('region', { name: 'Resources and usage' })
-    await expect(usage.getByText('0 B', { exact: true })).toBeVisible()
+    // 新增的工作区合计也可能为 0 B，原用例继续只校验群附件。
+    const attachments = usage.locator('.details-group-usage-row', { hasText: 'Group attachments and shared files' })
+    await expect(attachments.getByText('0 B', { exact: true })).toBeVisible()
     await expect(usage.getByText('No usage recorded', { exact: true })).toBeVisible()
     const open = usage.getByRole('button', { name: /Open (in Finder|folder)/ })
     await expect(open).toHaveCount(0)
@@ -50,7 +52,7 @@ test('shows group resources and reported token usage in details', async () => {
     })
     await page.getByRole('button', { name: 'Close details' }).click()
     await page.locator('.title-pill').click()
-    await expect(usage.getByText('14 B', { exact: true })).toBeVisible()
+    await expect(attachments.getByText('14 B', { exact: true })).toBeVisible()
     await expect(open).toBeEnabled()
     await open.click()
     await expect(open).toBeEnabled()
@@ -76,6 +78,69 @@ test('shows group resources and reported token usage in details', async () => {
     await setPref(page, 'appLanguage', 'en').catch(() => {})
     for (const botId of ids) await api(page, 'deleteBot', { botId }).catch(() => {})
     rmSync(cwd, { recursive: true, force: true })
+    await browser.close()
+  }
+})
+
+/** 从真实 Host 读取排序后的空间，展开并滚动到最后一个成员。 */
+test('member workspaces stay collapsed by default and scroll inside the card', async () => {
+  const { browser, page } = await attach()
+  const tag = Date.now()
+  const title = `Workspaces ${tag}`
+  const members: { id: string; name: string; cwd: string }[] = []
+  const groups: string[] = []
+  try {
+    for (const size of [8, 16, 64, 32, 48, 24]) {
+      const { bot } = await api<{ bot: (typeof members)[number] }>(page, 'createBot', {
+        name: `Member ${size} ${tag}`, backend: 'opencode', connectors: [], skills: [], notify: false,
+      })
+      members.push(bot)
+      writeFileSync(join(bot.cwd, 'workspace.bin'), Buffer.alloc(size * 4096, size))
+    }
+    const { bot: room } = await api<{ bot: { id: string } }>(page, 'createBot', {
+      name: title, kind: 'group', members: members.map(member => member.id),
+    })
+    groups.push(room.id)
+    const { bot: shared } = await api<{ bot: { id: string } }>(page, 'createBot', {
+      name: `Shared workspace ${tag}`, kind: 'group', members: [members[2]!.id],
+    })
+    groups.push(shared.id)
+    const resource = await api<{ resourceBytes: number }>(page, 'groupResourceUsage', { roomId: room.id })
+    expect(resource.resourceBytes).toBe(0)
+    const report = await api<{ totalBytes: number; members: { name: string; bytes: number; shared: boolean; directory: string }[] }>(
+      page, 'groupWorkspaceUsage', { roomId: room.id },
+    )
+    expect(report.totalBytes).toBe([8, 16, 64, 32, 48, 24].reduce((a, b) => a + b) * 4096)
+    expect(report.members.map(member => member.name)).toEqual([64, 48, 32, 24, 16, 8].map(size => `Member ${size} ${tag}`))
+    expect(report.members[0]).toMatchObject({ shared: true, directory: members[2]!.cwd })
+
+    await page.locator('.roster-row', { hasText: title }).click()
+    await page.locator('.title-pill').click()
+    const button = page.getByRole('button', { name: /Member workspaces/ })
+    const list = page.getByRole('list', { name: 'Member workspaces' })
+    await expect(button).toHaveAttribute('aria-expanded', 'false')
+    await expect(list).toHaveCount(0)
+    await button.click()
+    await expect(list.getByRole('listitem')).toHaveCount(6)
+    await expect(list.getByRole('listitem').first()).toContainText('Shared across groups')
+    await expect(list.getByRole('button', { name: 'Open folder' })).toHaveCount(6)
+    // 真实滚轮在成员列表内移动，末行可见且外层详情页位置不变。
+    await list.scrollIntoViewIfNeeded()
+    const parent = page.locator('.details-scroll')
+    const outer = await parent.evaluate(element => element.scrollTop)
+    await list.hover()
+    await page.mouse.wheel(0, 180)
+    await expect.poll(() => list.evaluate(element => element.scrollTop)).toBeGreaterThan(0)
+    expect(await parent.evaluate(element => element.scrollTop)).toBe(outer)
+    await expect(list.getByRole('listitem').last()).toBeInViewport()
+    await button.click()
+    await expect(list).toHaveCount(0)
+  } finally {
+    for (const id of groups) await api(page, 'deleteBot', { botId: id }).catch(() => {})
+    for (const bot of members) {
+      await api(page, 'deleteBot', { botId: bot.id }).catch(() => {})
+      rmSync(bot.cwd, { recursive: true, force: true })
+    }
     await browser.close()
   }
 })

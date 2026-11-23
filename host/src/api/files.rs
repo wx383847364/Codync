@@ -64,6 +64,60 @@ pub(super) async fn group_usage(hub: &Arc<Hub>, room: &str, local: bool) -> Resu
     .await?
 }
 
+/// 按群成员统计托管工作区。只给本机返回目录，避免向远程设备透露文件系统路径。
+pub(super) async fn group_workspaces(hub: &Arc<Hub>, room: &str, local: bool) -> Result<Value> {
+    use std::collections::HashSet;
+    use std::time::{Duration, Instant};
+
+    static SCAN: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
+    let rows = hub.store.bots()?;
+    let group = rows
+        .iter()
+        .find(|row| !row.deleted && row.config.id == room && row.config.is_group())
+        .ok_or_else(|| anyhow!("group conversation not found"))?;
+    let current: HashSet<_> = group.config.members.iter().collect();
+    let shared: HashSet<_> = rows
+        .iter()
+        .filter(|row| !row.deleted && row.config.is_group() && row.config.id != room)
+        .flat_map(|row| row.config.members.iter())
+        .collect();
+    let targets: Vec<_> = rows
+        .iter()
+        .filter(|row| !row.deleted && !row.config.is_group() && current.contains(&row.config.id))
+        .map(|row| (row.config.id.clone(), (row.config.name.clone(), shared.contains(&row.config.id))))
+        .collect();
+    let permit = SCAN.acquire().await?;
+    tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        // 每个成员都有自己的时间份额，大目录超时也不会让排在后面的成员失去扫描机会。
+        let count = u32::try_from(targets.len()).unwrap_or(u32::MAX).max(1);
+        let slot = (Duration::from_secs(3) / count).min(Duration::from_secs(1));
+        let mut members: Vec<_> = targets
+            .into_iter()
+            .map(|(id, (name, shared))| {
+                let (bytes, exists) = crate::agent::workspace::storage(&id, Instant::now() + slot);
+                let directory = (local && exists).then(|| crate::agent::workspace::path(&id));
+                (bytes, name, id, shared, directory)
+            })
+            .collect();
+        members.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)).then_with(|| a.2.cmp(&b.2)));
+        let total = members.iter().try_fold(0u64, |total, row| row.0.map(|bytes| total.saturating_add(bytes)));
+        let members: Vec<_> = members
+            .into_iter()
+            .map(|(bytes, name, id, shared, directory)| {
+                let mut member = json!({"botId":id,"name":name,"bytes":bytes,"shared":shared});
+                if let Some(directory) = directory {
+                    member["directory"] = json!(directory);
+                }
+                member
+            })
+            .collect();
+        json!({"totalBytes":total,"members":members})
+    })
+    .await
+    .map_err(Into::into)
+}
+
 /// 图片资格检查仅接受已有附件 ID 或消息文件 ID，绝不扫描正文中的路径。
 pub async fn info(hub: &Arc<Hub>, body: &Value) -> Result<Value> {
     static READS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(2);

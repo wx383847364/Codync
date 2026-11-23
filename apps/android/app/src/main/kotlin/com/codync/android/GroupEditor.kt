@@ -14,6 +14,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -30,8 +32,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.testTagsAsResourceId
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -46,6 +51,9 @@ import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.longOrNull
 import java.text.NumberFormat
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
 
 /**
@@ -182,16 +190,21 @@ import kotlinx.serialization.json.jsonPrimitive
     val number = NumberFormat.getIntegerInstance()
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Text(tr("Resources and usage"), style = Type.subheadline.semibold, color = Palette.text)
+        usage?.let { report ->
+            Column(Modifier.fillMaxWidth().background(Palette.surface, RoundedCornerShape(13.dp)).padding(12.dp)) {
+                val bytes = report["resourceBytes"]?.jsonPrimitive?.longOrNull
+                GroupUsageReading("Group attachments and shared files", bytes?.let(::formatBytes) ?: tr("Unavailable"), "folder")
+            }
+        }
+        if (state.hello?.get("groupWorkspaceUsage")?.jsonPrimitive?.booleanOrNull == true) {
+            GroupWorkspaceUsage(roomId, state, store, online)
+        }
         Column(Modifier.fillMaxWidth().background(Palette.surface, RoundedCornerShape(13.dp)).padding(12.dp),
             verticalArrangement = Arrangement.spacedBy(9.dp)) {
             val report = usage
             if (report == null) {
                 Text(tr(if (failed || !online) "Unavailable" else "Loading…"), style = Type.footnote, color = Palette.secondary)
             } else {
-                val bytes = report["resourceBytes"]?.jsonPrimitive?.longOrNull
-                GroupUsageReading("Group resource storage", bytes?.let(::formatBytes)
-                    ?: tr("Unavailable"), "folder")
-                Box(Modifier.fillMaxWidth().height(1.dp).background(Palette.accentDim))
                 val tokens = report["groupTokens"]?.jsonPrimitive?.longOrNull
                 val share = report["share"]?.jsonPrimitive?.doubleOrNull
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
@@ -231,6 +244,68 @@ import kotlinx.serialization.json.jsonPrimitive
         Column {
             Text(tr(label), style = Type.footnote, color = Palette.text)
             Text(value, style = Type.callout.semibold, color = Palette.text)
+        }
+    }
+}
+
+
+/** 工作区容量由 Host 汇总；成员较多时在卡片内部单独滚动。 */
+@Composable private fun GroupWorkspaceUsage(roomId: String, state: AppState, store: AppStore, online: Boolean) {
+    var usage by remember(roomId) { mutableStateOf<JsonObject?>(null) }
+    var failed by remember(roomId) { mutableStateOf(false) }
+    var expanded by remember(roomId) { mutableStateOf(false) }
+    val context = LocalContext.current
+    val members = state.bots.firstOrNull { it.id == roomId }?.members
+    LaunchedEffect(roomId, members, online) {
+        // 读取新成员前移除旧数据，失败时也不会显示已退出的成员。
+        usage = null
+        failed = false
+        if (online) {
+            try {
+                usage = store.hostCall("groupWorkspaceUsage", body("roomId" to roomId)) as JsonObject
+                failed = false
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: Exception) {
+                failed = true
+            }
+        }
+    }
+    // Android 的系统格式化器支持 GB；Host 未能读到的目录显示不可用。
+    val total = usage?.get("totalBytes")?.jsonPrimitive?.longOrNull
+    val label = total?.let { android.text.format.Formatter.formatShortFileSize(context, it) }
+        ?: tr(if (usage == null && online && !failed) "Loading…" else "Unavailable")
+    Disclosure(expanded, { expanded = !expanded },
+        Modifier.fillMaxWidth().background(Palette.surface, RoundedCornerShape(13.dp)).padding(12.dp),
+        label = {
+            Symbol("folder", size = 18.dp, tint = Palette.secondary)
+            Column(Modifier.weight(1f).padding(horizontal = 8.dp)) {
+                Text(tr("Member workspaces"), style = Type.footnote.semibold, color = Palette.text)
+                Text(tr("Includes project files and build caches"), style = Type.caption, color = Palette.secondary)
+            }
+            Text(label, style = Type.footnote.semibold, color = Palette.text)
+        }) {
+        val rows = usage?.get("members")?.jsonArray.orEmpty()
+        if (rows.isNotEmpty()) {
+            LazyColumn(Modifier.fillMaxWidth().heightIn(max = 176.dp).semantics { testTagsAsResourceId = true }.testTag("member-workspace-list")) {
+                // 复用 Host 已排序的成员身份，列表中的行不会随刷新错位。
+                items(rows, key = { it.jsonObject.getValue("botId").jsonPrimitive.content }) { item ->
+                    val row = item.jsonObject
+                    Box(Modifier.fillMaxWidth().height(1.dp).background(Palette.accentDim))
+                    Row(Modifier.fillMaxWidth().heightIn(min = 43.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f).padding(end = 8.dp)) {
+                            Text(row["name"]?.jsonPrimitive?.contentOrNull.orEmpty(), style = Type.footnote,
+                                color = Palette.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            if (row["shared"]?.jsonPrimitive?.booleanOrNull == true) {
+                                Text(tr("Shared across groups"), style = Type.caption, color = Palette.secondary)
+                            }
+                        }
+                        val bytes = row["bytes"]?.jsonPrimitive?.longOrNull
+                        Text(bytes?.let { android.text.format.Formatter.formatShortFileSize(context, it) } ?: tr("Unavailable"),
+                            style = Type.footnote, color = Palette.text)
+                    }
+                }
+            }
         }
     }
 }

@@ -210,12 +210,19 @@ private struct GroupResourceUsageView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text(L10n.tr("Resources and usage")).font(.subheadline.weight(.semibold))
+            if let usage {
+                reading("Group attachments and shared files", usage.resourceBytes.map {
+                    ByteCountFormatter.string(fromByteCount: $0, countStyle: .file)
+                } ?? L10n.tr("Unavailable"), icon: "folder")
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(12)
+                .background(Palette.surface, in: RoundedRectangle(cornerRadius: 13))
+            }
+            if model.hello?.groupWorkspaceUsage == true {
+                GroupWorkspaceUsageView(roomId: roomId, online: online, members: model.bots[roomId]?.members ?? [])
+            }
             VStack(alignment: .leading, spacing: 10) {
                 if let usage {
-                    reading("Group resource storage", usage.resourceBytes.map {
-                        ByteCountFormatter.string(fromByteCount: $0, countStyle: .file)
-                    } ?? L10n.tr("Unavailable"), icon: "folder")
-                    Divider()
                     HStack(alignment: .top) {
                         reading("Group token usage", usage.groupTokens.map { "\($0.formatted()) Token" }
                             ?? L10n.tr("No usage recorded"), icon: "chart.bar")
@@ -279,6 +286,99 @@ private struct GroupResourceUsageView: View {
             guard !Task.isCancelled else { return }
             usage = result
             failed = false
+        } catch {
+            if !Task.isCancelled { failed = true }
+        }
+    }
+}
+
+
+/// 显示成员托管目录的占用。手机只读统计，目录入口由本机桌面提供。
+private struct GroupWorkspaceUsageView: View {
+    private struct Usage: Decodable {
+        struct Member: Decodable, Identifiable {
+            let botId: String
+            let name: String
+            let bytes: Int64?
+            let shared: Bool
+            /// 列表以 Host 的 Bot 身份为键，避免同名成员串行。
+            var id: String { botId }
+        }
+        let totalBytes: Int64?
+        let members: [Member]
+    }
+
+    @Environment(BotStore.self) private var model
+    @State private var usage: Usage?
+    @State private var failed = false
+    @State private var expanded = false
+    @ScaledMetric(relativeTo: .footnote) private var rowHeight: CGFloat = 44
+    let roomId: String
+    let online: Bool
+    let members: [String]
+
+    /// 默认显示合计。展开后可在有限高度内浏览成员。
+    var body: some View {
+        Disclosure(isExpanded: $expanded) {
+            if let rows = usage?.members, !rows.isEmpty {
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        // 使用 Host 给出的排序和共享状态。
+                        ForEach(rows) { member in
+                            Divider()
+                            HStack {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(member.name).lineLimit(1)
+                                    if member.shared {
+                                        Text(L10n.tr("Shared across groups")).font(.caption2).foregroundStyle(Palette.secondary)
+                                    }
+                                }
+                                Spacer(minLength: 8)
+                                Text(size(member.bytes)).monospacedDigit()
+                            }
+                            .font(.footnote)
+                            .frame(minHeight: rowHeight - 1)
+                        }
+                    }
+                }
+                .frame(height: min(176, CGFloat(rows.count) * rowHeight))
+                .scrollBounceBehavior(.basedOnSize)
+                .accessibilityIdentifier("member-workspace-list")
+            }
+        } label: {
+            Image(systemName: "folder").frame(width: 28).accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(L10n.tr("Member workspaces")).font(.footnote.weight(.semibold))
+                Text(L10n.tr("Includes project files and build caches")).font(.caption2).foregroundStyle(Palette.secondary)
+            }
+            Spacer(minLength: 4)
+            Text(usage == nil && online && !failed ? L10n.tr("Loading…") : size(usage?.totalBytes))
+                .font(.footnote.weight(.semibold)).monospacedDigit()
+        }
+        .padding(12)
+        .background(Palette.surface, in: RoundedRectangle(cornerRadius: 13))
+        // 成员或连接状态变化才请求，Host 对重复读取复用扫描数据。
+        .task(id: [online.description] + members) { await load() }
+    }
+
+    /// 统一处理未知读数和文件容量单位。
+    private func size(_ bytes: Int64?) -> String {
+        guard let bytes else { return L10n.tr("Unavailable") }
+        return ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
+    }
+
+    /// 旧连接的响应不会覆盖新名单。
+    private func load() async {
+        // 名单变化时撤下旧读数，避免失败后留着已退出的成员。
+        usage = nil
+        failed = false
+        guard online else { return }
+        do {
+            let result: Usage = try await model.ready().call("groupWorkspaceUsage", ["roomId": roomId])
+            if !Task.isCancelled {
+                usage = result
+                failed = false
+            }
         } catch {
             if !Task.isCancelled { failed = true }
         }
