@@ -22,7 +22,9 @@ When a group reply shows a member's current context usage, its label also shows 
 
 ## Check resources and token usage
 
-On desktop, iPhone, and Android, select the group title and look below the member list for **Resources and usage**. In the terminal, select **Member context** from the chat header. Storage includes attachments uploaded to this group and files bots publish with the group’s file-sharing action. Workspace files and bot libraries are outside that total. Choose **Open in Finder** on the Mac running the Host to inspect the group's resource directory.
+On desktop, iPhone, and Android, select the group title and look below the member list for **Resources and usage**. In the terminal, select **Member context** from the chat header. **Group attachments and shared files** includes uploads and files published with the group’s file-sharing action. Choose **Open in Finder** on the Mac running the Host to inspect that directory.
+
+**Member workspaces** shows the combined size of the current members' Codync-managed workspaces. Expand it to see members by size and scroll if the list is long. Shared members are marked because their workspace can appear in more than one group. The list includes previously created Codync-managed directories for members who now use an external project folder. External project folders stay outside the total. On the computer running the Host, open a member's workspace from its row.
 
 The token total uses recorded input and output tokens for this group, including separately reported input cache reads and writes. Reasoning tokens are not added separately because they can already be part of the reported output. Its share compares that total with the usage recorded across all conversations on the same Host. **Partial usage records** means older activity or some agent usage reports are missing.
 

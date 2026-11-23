@@ -338,6 +338,12 @@ pub enum Overlay {
         targets: Vec<(serde_json::Value, String)>,
         cursor: usize,
     },
+    /// 默认在群选项中显示合计，进入此弹层时用方向键滚动成员。
+    GroupWorkspaces {
+        room: String,
+        usage: Option<serde_json::Value>,
+        cursor: usize,
+    },
     Help(Editor),
     LeadAgent(usize),
     Confirm(Confirm),

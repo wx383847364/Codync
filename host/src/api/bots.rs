@@ -425,6 +425,9 @@ pub(super) async fn call(hub: &Arc<Hub>, caller: &Caller, method: &str, b: Value
         "groupResourceUsage" => {
             super::files::group_usage(hub, str_arg(&b, "roomId")?, matches!(caller, Caller::Local)).await?
         }
+        "groupWorkspaceUsage" => {
+            super::files::group_workspaces(hub, str_arg(&b, "roomId")?, matches!(caller, Caller::Local)).await?
+        }
         "groupSessionContexts" => hub.store.group_session_contexts(str_arg(&b, "roomId")?)?,
         "setGroupContextBasis" => {
             let room = str_arg(&b, "roomId")?;

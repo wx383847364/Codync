@@ -92,6 +92,32 @@ impl App {
         let keep = match top {
             Overlay::Goto(g) => self.goto_key(g, k),
             Overlay::GroupGuidance { targets, cursor } => self.group_guidance_key(targets, cursor, k.code),
+            Overlay::GroupWorkspaces { room, usage, mut cursor } => {
+                let members = usage.as_ref().and_then(|value| value["members"].as_array());
+                let last = members.map_or(0, |rows| rows.len().saturating_sub(1));
+                match k.code {
+                    KeyCode::Esc | KeyCode::Char('q') => return,
+                    KeyCode::Down | KeyCode::Char('j') => cursor = (cursor + 1).min(last),
+                    KeyCode::Up | KeyCode::Char('k') => cursor = cursor.saturating_sub(1),
+                    KeyCode::Enter if self.on_this_computer => {
+                        if let Some(path) =
+                            members.and_then(|rows| rows.get(cursor)).and_then(|row| row["directory"].as_str())
+                        {
+                            // 路径来自本机 Host，失败时沿用现有文件入口反馈。
+                            use crate::analytics::reported::{FileLinkAction, FileLinkOutcome, Reported};
+                            let outcome = if crate::shell::open(std::ffi::OsStr::new(path)) {
+                                FileLinkOutcome::Ok
+                            } else {
+                                self.flash("Could not open the workspace folder.");
+                                FileLinkOutcome::Failed
+                            };
+                            self.track(Reported::FileLinkAction { action: FileLinkAction::Open, outcome });
+                        }
+                    }
+                    _ => {}
+                }
+                Some(Overlay::GroupWorkspaces { room, usage, cursor })
+            }
             Overlay::Help(mut e) => {
                 if k.code == KeyCode::Esc || k.code == KeyCode::Char('?') && e.text.is_empty() {
                     None
