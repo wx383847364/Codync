@@ -242,6 +242,7 @@
     "hello.groupResourceUsage": "bool",
     "hello.groupSessionContexts": "bool",
     "hello.groupSessions": "bool",
+    "hello.groupWorkspaceUsage": "bool",
     "hello.home": "string",
     "hello.hostId": "string",
     "hello.icons": "object",

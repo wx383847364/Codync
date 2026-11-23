@@ -65,6 +65,9 @@ pub(super) fn overlay(buf: &mut Buffer, area: Rect, app: &mut App, top: &Overlay
                 t.dim.patch(t.panel),
             );
         }
+        Overlay::GroupWorkspaces { usage, cursor, .. } => {
+            super::usage::group_workspaces(buf, area, usage.as_ref(), *cursor, app.on_this_computer);
+        }
         Overlay::Help(filter) => help(buf, area, filter),
         Overlay::LeadAgent(scroll) => super::lead_agent::lead_agent(buf, area, *scroll),
         Overlay::Confirm(c) => {

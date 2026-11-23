@@ -1,9 +1,9 @@
-import { useContext, useEffect, useState } from 'react'
+import { useContext, useEffect, useId, useState } from 'react'
 import { hasLibrary } from '@shared/artifacts'
 import { isGroup, isWorking, type Bot, type BotSessionUsage } from '@shared/models'
 import { AgentIcon } from '../../components/AgentIcon'
 import { BotAvatar, GroupAvatar } from '../../components/Avatar'
-import { Button, CardSection, Disclosure, IconButton, RowLabel, Switch, TabChoice } from '../../components/Controls'
+import { Button, CardSection, Disclosure, IconButton, Reveal, RowLabel, Switch, TabChoice } from '../../components/Controls'
 import { LeadAgentBadge } from '../../components/LeadAgentBadge'
 import { Icon } from '../../components/Icon'
 import { HStack, VStack } from '../../components/Stack'
@@ -285,12 +285,6 @@ function GroupResourceUsage({ group }: { group: Bot }) {
     setOpening(false)
   }
 
-  /** 用十进制存储单位，且完整值仍可从数值的提示文字查看。 */
-  function bytes(value: number) {
-    const unit = Math.min(4, Math.floor(Math.log10(Math.max(1, value)) / 3))
-    return `${(value / 1000 ** unit).toLocaleString(undefined, { maximumFractionDigits: 2 })} ${['B', 'KB', 'MB', 'GB', 'TB'][unit]}`
-  }
-
   const unavailable = tr(!online || failed ? 'Unavailable' : 'Loading…')
   const share = usage?.share == null ? '—' : usage.share.toLocaleString(undefined, { style: 'percent', maximumFractionDigits: 1 })
   const compact = new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 })
@@ -300,13 +294,16 @@ function GroupResourceUsage({ group }: { group: Bot }) {
       <div className="details-group-usage-row">
         <span className="details-usage-glyph"><Icon name="folder" size={16} /></span>
         <div>
-          <div>{tr('Group resource storage')}</div>
+          <div>{tr('Group attachments and shared files')}</div>
           <strong title={usage?.resourceBytes?.toLocaleString()}>{usage?.resourceBytes == null ? usage ? tr('Unavailable') : unavailable : bytes(usage.resourceBytes)}</strong>
         </div>
         {directory && <Button kind="secondary" disabled={!online || opening} className="details-usage-action" onClick={() => void openDirectory()}>
           {tr(window.codync.platform === 'darwin' ? 'Open in Finder' : 'Open folder')} <Icon name="arrow.up.right" size={12} />
         </Button>}
       </div>
+    </div>
+    {store.hello?.groupWorkspaceUsage && <GroupWorkspaceUsage group={group} />}
+    <div className="details-group-usage-card">
       <div className="details-group-usage-row">
         <span className="details-usage-glyph usage"><Icon name="chart.bar" size={16} /></span>
         <div>
@@ -325,4 +322,82 @@ function GroupResourceUsage({ group }: { group: Bot }) {
       </div>
     </div>
   </section>
+}
+
+
+type WorkspaceUsage = {
+  totalBytes: number | null
+  members: { botId: string; name: string; bytes: number | null; shared: boolean; directory?: string }[]
+}
+
+/** 用十进制存储单位，且完整值仍可从数值的提示文字查看。 */
+function bytes(value: number) {
+  const unit = Math.min(4, Math.floor(Math.log10(Math.max(1, value)) / 3))
+  return `${(value / 1000 ** unit).toLocaleString(undefined, { maximumFractionDigits: 2 })} ${['B', 'KB', 'MB', 'GB', 'TB'][unit]}`
+}
+
+/** 工作区用独立请求，只在资料页可见或成员变更时读取 Host 的缓存。 */
+function GroupWorkspaceUsage({ group }: { group: Bot }) {
+  const store = useStore()
+  const app = useContext(AppContext)
+  const storeRef = useStoreRef()
+  const local = app?.local === storeRef && store.isLoopback
+  const visible = useGroupContexts()?.panelVisible ?? true
+  const tr = useTr()
+  const online = !store.isOffline && !store.mismatch
+  const listId = useId()
+  const membership = group.members.join('|')
+  const [usage, setUsage] = useState<WorkspaceUsage | null>(null)
+  const [failed, setFailed] = useState(false)
+  const [expanded, setExpanded] = useState(false)
+
+  useEffect(() => {
+    // 名单变更时先撤下旧行，避免失败后继续提供已移除成员的目录。
+    setUsage(null)
+    setFailed(false)
+    if (!online || !visible) return
+    let current = true
+    // 群切换或成员名单变化时，忽略上一次请求迟到的结果。
+    void store.ready().then(c => c.call<WorkspaceUsage>('groupWorkspaceUsage', { roomId: group.id })).then(
+      (result) => { if (current) { setUsage(result); setFailed(false) } },
+      () => { if (current) setFailed(true) },
+    )
+    return () => { current = false }
+  }, [store, group.id, membership, online, visible])
+
+  /** 只打开本机 Host 返回的成员托管工作区。 */
+  async function openWorkspace(directory: string) {
+    const outcome = await window.codync.fileLinks.act(store.computer.id, directory, 'open').catch(() => 'failed' as const)
+    analytics.track({ event: 'file_link_action', action: 'open', outcome })
+    if (outcome !== 'ok') store.setError(tr('Could not open the workspace folder.'))
+  }
+
+  const total = usage?.totalBytes == null
+    ? tr(usage || failed || !online ? 'Unavailable' : 'Loading…')
+    : bytes(usage.totalBytes)
+  return <div className="details-group-usage-card details-workspaces">
+    <button type="button" className="details-workspace-heading" aria-expanded={expanded} aria-controls={expanded && usage?.members.length ? listId : undefined} onClick={() => setExpanded(!expanded)}>
+      <span className="details-usage-glyph"><Icon name="folder" size={16} /></span>
+      <span className="details-workspace-label">
+        <span className="details-workspace-title">{tr('Member workspaces')} <span className={`disclosure-chevron${expanded ? ' open' : ''}`}><Icon name="chevron.right" size={10} /></span></span>
+        <small>{tr('Includes project files and build caches')}</small>
+      </span>
+      <strong>{total}</strong>
+    </button>
+    <Reveal show={expanded}>
+      {usage?.members.length ? <ul id={listId} className="details-workspace-list" tabIndex={0} aria-label={tr('Member workspaces')}>
+        {usage.members.map(member => {
+          const directory = local ? member.directory : undefined
+          return <li key={member.botId}>
+            <span className="details-workspace-label">
+              <span className="details-workspace-name" title={member.name}>{member.name}</span>
+              {member.shared && <small>{tr('Shared across groups')}</small>}
+            </span>
+            <span>{member.bytes == null ? tr('Unavailable') : bytes(member.bytes)}</span>
+            {directory && <IconButton icon="folder" title={tr('Open folder')} disabled={!online} onClick={() => void openWorkspace(directory)} />}
+          </li>
+        })}
+      </ul> : null}
+    </Reveal>
+  </div>
 }

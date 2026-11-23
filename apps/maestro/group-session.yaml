@@ -59,6 +59,17 @@ onFlowComplete:
 - assertVisible: ${output.alpha}
 - assertVisible: ${output.beta}
 - scrollUntilVisible:
+    element: "Member workspaces"
+    direction: DOWN
+- assertNotVisible:
+    id: "member-workspace-list"
+- tapOn: "Member workspaces"
+- assertVisible:
+    id: "member-workspace-list"
+- tapOn: "Member workspaces"
+- assertNotVisible:
+    id: "member-workspace-list"
+- scrollUntilVisible:
     element: "Delete group chat"
     direction: DOWN
 - tapOn: "Delete group chat"

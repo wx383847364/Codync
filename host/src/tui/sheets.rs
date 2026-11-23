@@ -395,7 +395,20 @@ pub fn fields(buf: &mut Buffer, area: Rect, f: &Fields) {
         Submit::GroupContextOptions { usage_notes, .. } => usage_notes.as_slice(),
         _ => &[],
     };
-    let h = if tall { 20 } else { u(f.inputs.len() * 2 + usize::from(f.choices.len() > 1) * 2 + 8 + usage.len()) };
+    // 工作区合计独占一行，成员详情留在可滚动子页。
+    let workspaces = match &f.submit {
+        Submit::GroupContextOptions { workspaces: Some(report), .. } => Some(report),
+        _ => None,
+    };
+    let h = if tall {
+        20
+    } else {
+        u(f.inputs.len() * 2
+            + usize::from(f.choices.len() > 1) * 2
+            + 8
+            + usage.len()
+            + usize::from(workspaces.is_some()))
+    };
     let r = centered(area, 84, h);
     let title = tr(&f.title);
     let note = tr(&f.note);
@@ -405,6 +418,13 @@ pub fn fields(buf: &mut Buffer, area: Rect, f: &Fields) {
     y += 2;
     for note in usage {
         put(buf, inner.x, y, inner.width, &truncate(note, usize::from(inner.width)), t.dim.patch(t.panel));
+        y += 1;
+    }
+    if let Some(report) = workspaces {
+        let bytes =
+            report["totalBytes"].as_u64().map_or_else(|| tr("Unavailable").into_owned(), super::view::workspace_size);
+        let line = format!("{} · {bytes}", tr("Member workspaces"));
+        put(buf, inner.x, y, inner.width, &line, t.dim.patch(t.panel));
         y += 1;
     }
     let label_w = 18u16;

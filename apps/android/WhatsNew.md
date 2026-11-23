@@ -10,9 +10,11 @@ else a generic "Bug fixes and improvements" line. Delete old sections.
 ## 2.54.0
 
 ### zh-Hant
+- 群組詳情可依占用查看成員工作區，成員較多時可在卡片內捲動。
 - 可徹底刪除群聊、專屬機器人、聊天記錄和資源，並保留已複製的會話與共用機器人。
 
 ### en-US
+- See members’ workspace sizes in group details and scroll through longer lists inside the card.
 - Permanently delete a group chat, its exclusive bots, history and resources, while keeping copied chats and shared bots.
 
 ## 2.50.0
