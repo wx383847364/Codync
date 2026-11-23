@@ -109,6 +109,7 @@ pub struct Goto {
 
 pub enum ConfirmAct {
     Delete(String),
+    DeleteGroup(String),
     /// Keeps a bot's harness's own memory on beside Codync's.
     KeepHarnessMemory(String),
     DeleteRoutine(String, String),

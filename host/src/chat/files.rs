@@ -129,7 +129,7 @@ pub(crate) fn open_regular(path: &Path) -> Result<File> {
     Ok(file)
 }
 
-/// 在阻塞线程复制稳定的本地文件，复制期间变更的源文件不发布。
+/// 在阻塞线程复制稳定的本地文件，调用者提供已建立的快照目录。
 pub fn snapshot(
     root: &Path,
     cwd: &Path,
@@ -158,14 +158,17 @@ pub fn snapshot(
 
 /// 手工确认的交接以同一不可变快照格式保存，不需要另建临时源文件。
 pub(crate) fn snapshot_bytes(root: &Path, display: &str, mut bytes: &[u8]) -> Result<Snapshot> {
+    std::fs::create_dir_all(root).context("creating the shared file folder")?;
     write_snapshot(root, uuid::Uuid::new_v4(), name(display)?, &mut bytes, &AtomicBool::new(false), |_, _| Ok(()))
 }
 
 /// 复制已发布的固定文件，保留引用 ID，并核对新群副本的字节和哈希。
 pub(crate) fn copy_shared(room: &str, next: &str, meta: &SharedFile) -> Result<Snapshot> {
     let mut input = open_regular(&readable_path(room, meta)?)?;
+    let target = root(next);
+    std::fs::create_dir_all(&target).context("creating the shared file folder")?;
     let saved = write_snapshot(
-        &root(next),
+        &target,
         uuid::Uuid::parse_str(&meta.id)?,
         name(&meta.name)?,
         &mut input,
@@ -210,7 +213,8 @@ fn write_snapshot<R: std::io::Read>(
     cancelled: &AtomicBool,
     check: impl FnOnce(&mut R, u64) -> Result<()>,
 ) -> Result<Snapshot> {
-    std::fs::create_dir_all(root).context("creating the shared file folder")?;
+    // 后台只写已有目录。群删除之后，即使复制任务迟到也无法重新创建资源目录。
+    ensure!(!cancelled.load(Ordering::Acquire), "file sharing cancelled");
     let id = id.to_string();
     let final_path = path(root, &id)?;
     let partial = final_path.with_extension("partial");

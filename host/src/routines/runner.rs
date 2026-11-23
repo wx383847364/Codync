@@ -172,6 +172,17 @@ impl Routines {
         Ok(())
     }
 
+    /// 彻底删除 Bot 时移除专属例行任务、运行历史和重试记录。
+    pub(crate) fn purge_bot(&self, store: &Store, bot: &str) -> Result<()> {
+        self.change(store, |state| {
+            state.routines.retain(|routine| routine.bot_id != bot);
+            state.runs.retain(|run| run.bot_id != bot);
+            Ok(())
+        })?;
+        self.release(bot);
+        Ok(())
+    }
+
     /// Rewrites routine `id`'s instruction as `to` while it still reads `from`, the host's own words.
     pub fn reword(&self, store: &Store, id: &str, from: &str, to: &str) -> Result<()> {
         self.change(store, |s| {

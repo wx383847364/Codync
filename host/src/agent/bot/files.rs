@@ -77,6 +77,13 @@ impl Actor {
         let lane = self.lane.clone();
         let delivery_id = self.active_delivery.as_ref().map(|active| active.delivery.id.clone());
         let root = files::root(&lane.chat);
+        // 建目录与删除互斥；复制本身留在后台，迟到的任务不会重建该目录。
+        if let Err(error) = self.hub.with_live_bot(&lane.chat, |_| Ok(std::fs::create_dir_all(&root)?)) {
+            self.files.pending.retain(|flag| !Arc::ptr_eq(flag, &cancelled));
+            self.file_share_event(&lane.chat, "failed", "storage");
+            let _ = reply.send(Err(error));
+            return;
+        }
         let cwd = PathBuf::from(&self.cfg.cwd);
         let tx = self.files.tx.clone();
         tokio::spawn(async move {

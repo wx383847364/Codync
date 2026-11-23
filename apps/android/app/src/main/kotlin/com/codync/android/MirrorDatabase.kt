@@ -84,6 +84,10 @@ class MirrorDatabase(context: Context, directory: File, computerId: String) :
         }
     }
 
+    /** 恢复草稿时核对已经持久化的删除标记，避免断电留下旧草稿。 */
+    @Synchronized fun deletedBotIds(): Set<String> =
+        rows(readableDatabase, "SELECT id FROM bots WHERE deleted=1") { it }.toSet()
+
     @Synchronized fun snapshot(): MirrorSnapshot {
         val db = readableDatabase
         val icons = icons()

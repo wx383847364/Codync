@@ -164,7 +164,7 @@ impl Hub {
     /// 保存终态、结果及派生投递，失败由 actor 保留内存结果重试。
     pub fn complete_delivery(
         &self,
-        id: &str,
+        delivery: &Delivery,
         status: Status,
         text: Option<&str>,
         detail: Option<&str>,
@@ -172,6 +172,11 @@ impl Hub {
         guidance: &[(String, crate::store::deliveries::Guidance)],
     ) -> Result<()> {
         let _guard = self.emit_lock.locked();
+        // 群已清空时迟到的执行结果自然结束，让共享成员可以接着处理别的群。
+        if self.store.bot(&delivery.room_id)?.is_some_and(|row| row.deleted) {
+            return Ok(());
+        }
+        let id = &delivery.id;
         let outcome = serde_json::to_value(status)?;
         let cards = self.store.complete_delivery(id, status, text, detail, turn, guidance)?;
         if cards.is_empty() {

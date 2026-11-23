@@ -62,16 +62,11 @@ onFlowComplete:
     element: "Delete group chat"
     direction: DOWN
 - tapOn: "Delete group chat"
-- runFlow:
-    when:
-      platform: iOS
-    commands:
-      - tapOn: "Delete bot and its conversation"
-- runFlow:
-    when:
-      platform: Android
-    commands:
-      - tapOn: "Delete group chat"
+- assertVisible: "Delete only group chat"
+- tapOn: "Delete group and its bots"
+- extendedWaitUntil:
+    notVisible: "${output.group} 1"
+    timeout: 15000
 # 从同一个来源群建立下一阶段，预览范围后用新角色打开空白群。
 - extendedWaitUntil:
     visible: "${output.group}"

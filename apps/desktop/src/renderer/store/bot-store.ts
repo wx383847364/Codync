@@ -258,7 +258,13 @@ export class BotStore extends BotSending {
     this.perform((c) => c.call('reorderBots', { ids }), true)
   }
 
-  delete(bot: Bot) {
+  /** 普通删除延续现有的即时更新，彻底删除的范围由 Host 广播确认。 */
+  delete(bot: Bot, purgeGroup = false) {
+    if (purgeGroup) {
+      // 等待 Host 广播被删除的群和成员，界面不自行推断哪些 Bot 是共享的。
+      this.perform((c) => c.call('purgeGroup', { botId: bot.id }), true)
+      return
+    }
     this.composerDrafts.removeBot(bot.id)
     this.bots.delete(bot.id)
     this.entries.delete(bot.id)

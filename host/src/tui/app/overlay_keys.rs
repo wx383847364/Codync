@@ -102,11 +102,20 @@ impl App {
                     Some(Overlay::Help(e))
                 }
             }
+            // 普通删除使用 Return。Shift+X 只在显示彻底删除选项的确认框有效。
             Overlay::Confirm(c) => match k.code {
+                KeyCode::Char('X') if matches!(&c.act, ConfirmAct::DeleteGroup(_)) => {
+                    if let ConfirmAct::DeleteGroup(id) = &c.act {
+                        self.call("purgeGroup", json!({"botId": id}), After::Nothing);
+                    }
+                    None
+                }
                 KeyCode::Enter => {
                     let changed = After::Sheet(Reply::Changed);
                     match &c.act {
-                        ConfirmAct::Delete(id) => self.call("deleteBot", json!({"botId": id}), After::Nothing),
+                        ConfirmAct::Delete(id) | ConfirmAct::DeleteGroup(id) => {
+                            self.call("deleteBot", json!({"botId": id}), After::Nothing);
+                        }
                         ConfirmAct::KeepHarnessMemory(id) => {
                             self.call("updateBot", json!({"id": id, "harnessMemory": true}), changed);
                         }

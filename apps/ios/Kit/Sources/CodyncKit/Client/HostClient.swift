@@ -239,8 +239,9 @@ public extension HostClient {
         let _: Empty = try await call("updateBot", body)
     }
 
-    func deleteBot(_ id: String) async throws {
-        let _: Empty = try await call("deleteBot", ["botId": id])
+    /// 将明确选择的删除范围送给 Host，彻底删除使用独立方法。
+    func deleteBot(_ id: String, purgeGroup: Bool = false) async throws {
+        let _: Empty = try await call(purgeGroup ? "purgeGroup" : "deleteBot", ["botId": id])
     }
 
     /// The roster as the user dragged it, top first.

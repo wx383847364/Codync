@@ -126,8 +126,30 @@ import kotlinx.serialization.json.jsonPrimitive
         }
     }
     val group = state.bots.firstOrNull { it.id == draft.id }
-    CodyncDialog("Delete ${group?.name ?: "group chat"}?", confirmDelete, { confirmDelete = false }, "Its bots and their own chats stay.") {
-        listOf(DialogAction("Delete group chat", destructive = true) { group?.let { store.deleteBot(it) { dismiss() } } })
+    DeleteBotDialog(group.takeIf { confirmDelete }, state.supportsGroupPurge, { confirmDelete = false }) { target, purge ->
+        store.deleteBot(target, purge) { dismiss() }
+    }
+}
+
+/** 群设置和列表使用同一确认框，由 Host 清理用户明确选中的范围。 */
+@Composable internal fun DeleteBotDialog(bot: Bot?, supportsPurge: Boolean, onDismiss: () -> Unit, remove: (Bot, Boolean) -> Unit) {
+    val group = bot?.kind == "group"
+    val canPurge = group && supportsPurge
+    val message = when {
+        canPurge -> "Full deletion removes the conversation, exclusive bots and their resources. Copied chats, shared bots and external projects stay."
+        group -> "Its bots and their own chats stay."
+        else -> "Files it changed on your computer stay as they are."
+    }
+    CodyncDialog("Delete ${bot?.name ?: "bot"}?", bot != null, onDismiss, message) {
+        // 回调捕获目标，弹窗会先清除选中状态再执行动作。
+        buildList {
+            if (bot != null) {
+                add(DialogAction(if (group) "Delete only group chat" else "Delete bot and its conversation", destructive = true) {
+                    remove(bot, false)
+                })
+                if (canPurge) add(DialogAction("Delete group and its bots", destructive = true) { remove(bot, true) })
+            }
+        }
     }
 }
 

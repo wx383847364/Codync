@@ -176,6 +176,11 @@ export class BotMirror extends Observable {
     return this.hello?.stageGroups === true
   }
 
+  /** Host 明确支持彻底删除，旧 Host 只显示原删除操作。 */
+  get hasGroupPurge() {
+    return this.hello?.purgeGroup === true
+  }
+
   /** The user picks the lead (`setLead`) and may delete it: an older host refuses both. */
   get hasLeadChoice() {
     return this.hostVersion !== null && !isBelow(this.hostVersion.version, LEAD_CHOICE_HOST)

@@ -3,9 +3,15 @@
 use super::{BotStatus, Hub, Runtime};
 use crate::LockExt;
 use crate::store::BotConfig;
-use anyhow::{Result, anyhow, ensure};
+use anyhow::{Context, Result, anyhow, ensure};
 use serde::Deserialize;
 use serde_json::{Value, json};
+use std::collections::HashSet;
+use std::path::{Component, Path, PathBuf};
+use std::sync::Arc;
+use std::time::Duration;
+
+const PURGE_PENDING: &str = "group.purge.pending.";
 
 /// 新会话的显式成员选择。省略整个对象时沿用来源群配置。
 #[derive(Deserialize)]
@@ -76,13 +82,158 @@ impl Hub {
             })
             .unwrap_or_else(|| cfg.name.trim().to_owned());
         let rows = self.store.bots()?;
-        let names: std::collections::HashSet<_> = rows.iter().map(|row| row.config.name.as_str()).collect();
+        let names: HashSet<_> = rows.iter().map(|row| row.config.name.as_str()).collect();
         // 已删除群的编号仍占用。手工取过的名字只占用自身的编号。
         let name = (1..=names.len() + 1)
             .map(|number| format!("{base} {number}"))
             .find(|name| !names.contains(name.as_str()))
             .ok_or_else(|| anyhow!("group session number exhausted"))?;
         Ok((base, name))
+    }
+
+    /// 只删除来源群和本群独用的成员。引用同一 ID 的其他群和独立副本继续可用。
+    pub(crate) async fn purge_group(self: &Arc<Self>, id: &str) -> Result<()> {
+        let _purge = self.group_purge.lock().await;
+        let key = format!("{PURGE_PENDING}{id}");
+        let ids = {
+            let _emit = self.emit_lock.locked();
+            if let Some(saved) = self.store.kv_read(&key)? {
+                // 事务已提交时沿用原范围，不重新读取已清空的群和成员配置。
+                serde_json::from_str::<Vec<String>>(&saved)?
+            } else {
+                let rows = self.store.bots()?;
+                let group =
+                    rows.iter().find(|row| row.config.id == id && row.config.is_group()).context("group not found")?;
+                if group.deleted {
+                    return Ok(());
+                }
+                let shared: HashSet<_> = rows
+                    .iter()
+                    .filter(|row| !row.deleted && row.config.is_group() && row.config.id != id)
+                    .flat_map(|row| group_purge_members(&row.config))
+                    .collect();
+                let candidates: HashSet<_> = group_purge_members(&group.config).collect();
+                let mut ids = vec![id.to_owned()];
+                ids.extend(rows.iter().filter_map(|row| {
+                    // 已从群移除的专属角色也属于本群。独立复制使用新 ID，不会进入此范围。
+                    let cfg = &row.config;
+                    (!cfg.is_group() && !shared.contains(&cfg.id) && candidates.contains(&cfg.id))
+                        .then(|| cfg.id.clone())
+                }));
+                for (id, deleted) in ids.iter().zip(self.store.purge_group(&ids, &key)?) {
+                    let rev = deleted.rev;
+                    let _ = self.events.send(json!({"type":"bot","rev":rev,"bot":{"id":id,"deleted":true,"rev":rev}}));
+                    self.delivery_entries(&deleted.cards);
+                    self.stop_delivery_turns(&deleted.cancelled);
+                }
+                ids
+            }
+        };
+
+        let mut tasks = Vec::new();
+        for id in &ids {
+            self.team.end_turn(id);
+            if let Some(handle) = self.bots.locked().remove(id) {
+                let _ = handle.tx.send(crate::agent::bot::Cmd::Shutdown);
+                tasks.push(handle.task);
+            }
+            self.dev_servers.forget_bot(&self.store, id);
+        }
+        // 等执行者退出后再清盘，防止关闭期间把附件、私有内存或工作区重新写出来。
+        // 同时等待各个 actor，超时后结束尚未退出的任务。
+        futures::future::join_all(tasks.into_iter().map(|mut task| async move {
+            if tokio::time::timeout(Duration::from_secs(5), &mut task).await.is_err() {
+                task.abort();
+                let _ = task.await;
+            }
+        }))
+        .await;
+        {
+            let mut runtime = self.runtime.locked();
+            for id in &ids {
+                runtime.remove(id);
+            }
+        }
+        crate::network::publish(self);
+        crate::usage::bots_changed(self);
+        let hub = self.clone();
+        tokio::task::spawn_blocking(move || hub.finish_group_purge(&key, &ids))
+            .await?
+            .context("Group deleted. Resource cleanup will be retried when the host restarts.")
+    }
+
+    /// 进程中断后补做已提交删除的清盘，失败仍留待下一次启动或重试。
+    pub(super) fn resume_group_purges(&self) {
+        for key in self.store.kv_prefix(PURGE_PENDING) {
+            let result = (|| -> Result<()> {
+                let Some(saved) = self.store.kv_read(&key)? else { return Ok(()) };
+                self.finish_group_purge(&key, &serde_json::from_str::<Vec<String>>(&saved)?)
+            })();
+            if let Err(error) = result {
+                tracing::warn!(%error, "couldn't finish deleting a group's resources");
+            }
+        }
+    }
+
+    /// 删除 Host 专属目录；仍被存活 Bot 使用的工作区保存下来。
+    fn finish_group_purge(&self, key: &str, ids: &[String]) -> Result<()> {
+        for id in ids {
+            self.routines.purge_bot(&self.store, id)?;
+        }
+        // 等正在记录的私有记忆落盘后再清理。先释放记忆锁，避免与发布锁反向获取。
+        crate::chat::memory::files::wait_for_writers();
+        let staged = self.detach_purged_folders(ids)?;
+        for path in staged {
+            remove_purged_folder(&path)?;
+        }
+        self.store.finish_group_purge(ids, key)
+    }
+
+    /// 在配置发布锁内断开旧目录，只持锁完成检查和同层重命名。递归删除在锁外执行。
+    fn detach_purged_folders(&self, ids: &[String]) -> Result<Vec<PathBuf>> {
+        let _emit = self.emit_lock.locked();
+        let workspaces: Vec<_> = self
+            .store
+            .bots()?
+            .into_iter()
+            .filter(|row| !row.deleted && !row.config.cwd.is_empty())
+            .map(|row| resolved_path(Path::new(&row.config.cwd)))
+            .collect();
+        let mut staged = Vec::new();
+        for id in ids {
+            let mut components = Path::new(id).components();
+            ensure!(
+                matches!(components.next(), Some(Component::Normal(part)) if part == id.as_str())
+                    && components.next().is_none(),
+                "invalid bot storage ID"
+            );
+            let root = crate::service::data_dir().join("bots").join(id);
+            let resolved_root = resolved_path(&root);
+            let detached = root.with_file_name(format!(".purging-{id}"));
+            // 上次执行可能在改名后中断，即使共享项目配置已变更也先认领旧暂存目录。
+            staged.push(detached.clone());
+            if workspaces.iter().any(|path| path.starts_with(&resolved_root)) {
+                // 整棵目录若是存活项目使用的链接，保留链接入口。
+                if root.is_symlink() {
+                    continue;
+                }
+                for name in ["files", "artifacts", "uploads", "bot-memory"] {
+                    let path = root.join(name);
+                    let resolved = resolved_path(&path);
+                    let destination = path.with_file_name(format!(".purging-{name}"));
+                    if !workspaces
+                        .iter()
+                        .any(|workspace| workspace == &resolved_root || workspace.starts_with(&resolved))
+                    {
+                        detach_purged_folder(&path, &destination)?;
+                    }
+                    staged.push(destination);
+                }
+            } else {
+                detach_purged_folder(&root, &detached)?;
+            }
+        }
+        Ok(staged)
     }
 
     /// A group is busy while one of its members works in it: that member's status and activity.
@@ -146,12 +297,80 @@ impl Hub {
     }
 }
 
+/// 当前成员和创建时拥有的角色一致参与归属判断，已移除的专属角色仍归其原群。
+fn group_purge_members(group: &BotConfig) -> impl Iterator<Item = &String> {
+    let owned = group.stage.as_ref().map_or(&group.group_session_owned_members, |stage| &stage.owned_members);
+    group.members.iter().chain(owned)
+}
+
+/// 比较实际路径，目录暂不存在时仍保留配置中的路径约束。
+fn resolved_path(path: &Path) -> PathBuf {
+    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+}
+
+/// 确定的暂存名使进程在改名后中断时仍能找到待删目录。
+fn detach_purged_folder(path: &Path, destination: &Path) -> Result<()> {
+    match std::fs::rename(path, destination) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error).context("couldn't detach group resources"),
+    }
+}
+
+/// 已清理目录允许重试，其他磁盘错误返回给调用方并保留清理记录。
+fn remove_purged_folder(path: &Path) -> Result<()> {
+    match std::fs::remove_dir_all(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error).context("couldn't delete group resources"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::hub::Hub;
     use crate::remote::identity::Identity;
     use crate::store::{BotConfig, Store};
     use serde_json::json;
+
+    /// 独立群仍拥有已移除的复制角色；符号链接复用的工作区也要保留。
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn purge_keeps_another_groups_owned_role_and_its_workspace_alias() {
+        use crate::agent::workspace;
+        use std::os::unix::fs::symlink;
+
+        let id = uuid::Uuid::new_v4().to_string();
+        let workspace = workspace::path(&id);
+        let dir = std::env::temp_dir().join(format!("codync-purge-alias-{id}"));
+        std::fs::create_dir_all(&workspace).unwrap();
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(workspace.join("work.txt"), "shared project").unwrap();
+        let alias = dir.join("project");
+        symlink(&workspace, &alias).unwrap();
+        let hub = Hub::new(
+            Store::open(std::path::Path::new(":memory:")).unwrap(),
+            "groups-test".into(),
+            Identity::load_or_create(&dir).unwrap(),
+            "test".into(),
+            0,
+        );
+        for config in [
+            json!({"id":id,"name":"Source bot","backend":"opencode","cwd":workspace}),
+            json!({"id":"copy","name":"Copied bot","backend":"opencode","cwd":alias}),
+            json!({"id":"source","name":"Source","kind":"group","members":[id,"copy"]}),
+            json!({"id":"other","name":"Other","kind":"group","groupSessionOwnedMembers":["copy"]}),
+        ] {
+            hub.store.save_bot(&serde_json::from_value::<BotConfig>(config).unwrap()).unwrap();
+        }
+        hub.purge_group("source").await.unwrap();
+        assert!(hub.store.bot(&id).unwrap().unwrap().deleted);
+        assert!(!hub.store.bot("copy").unwrap().unwrap().deleted);
+        assert!(!hub.store.bot("other").unwrap().unwrap().deleted);
+        assert_eq!(std::fs::read_to_string(alias.join("work.txt")).unwrap(), "shared project");
+        std::fs::remove_dir_all(workspace.parent().unwrap()).unwrap();
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     /// 同时复制来源群时分别提交编号，新群仍以来源成员顺序和设置打开。
     #[tokio::test]

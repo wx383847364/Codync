@@ -238,6 +238,7 @@ public struct Hello: Codable, Sendable {
     /// Host 支持创建具有独立模型会话的群。
     public var groupSessions: Bool?
     public var stageGroups: Bool?
+    public var purgeGroup: Bool?
     public var taskGroupContexts: Bool?
     public var groupMemberPicker: Bool?
     public var optionalStageSetup: Bool?

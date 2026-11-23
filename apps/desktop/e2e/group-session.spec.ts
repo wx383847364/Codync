@@ -490,3 +490,49 @@ test('capacity handoffs continue the original group dispatch in a new session', 
     rmSync(workspace, { recursive: true, force: true })
   }
 })
+
+/** 群确认框明确区分两种操作，完整删除后另一群仍能打开。 */
+test('full group deletion removes the exclusive bot and keeps the copied group', async () => {
+  const { browser, page } = await attach()
+  const name = `Purge crew ${Date.now()}`
+  const ids: string[] = []
+  /** 在可见侧栏打开指定群的删除确认框。 */
+  const confirm = async (group: Group) => {
+    await page.locator(`[data-roster-row$="/${group.id}"]`).click({ button: 'right' })
+    await page.getByRole('menuitem', { name: 'Delete', exact: true }).click()
+    return page.getByRole('alertdialog', { name: `Delete ${group.name}?` })
+  }
+  try {
+    const bots = []
+    for (const role of ['Exclusive', 'Shared']) {
+      const { bot } = await api<{ bot: Group }>(page, 'createBot', {
+        name: `${name} ${role}`, backend: 'opencode', skills: [], connectors: [],
+      })
+      bots.push(bot)
+      ids.unshift(bot.id)
+    }
+    const [exclusive, shared] = bots as [Group, Group]
+    const { bot: source } = await api<{ bot: Group }>(page, 'createBot', { name, kind: 'group', members: [exclusive.id, shared.id] })
+    ids.unshift(source.id)
+    const { bot: copy } = await api<{ bot: Group }>(page, 'createGroupSession', { botId: source.id, selection: { members: [shared.id] } })
+    ids.unshift(copy.id)
+
+    const dialog = await confirm(source)
+    await expect(dialog.getByRole('button', { name: 'Delete only group chat' })).toBeVisible()
+    await dialog.getByRole('button', { name: 'Cancel' }).click()
+    await expect(page.locator(`[data-roster-row$="/${source.id}"]`)).toBeVisible()
+    await (await confirm(source)).getByRole('button', { name: 'Delete group and its bots' }).click()
+    await expect(page.locator(`[data-roster-row$="/${source.id}"]`)).toHaveCount(0)
+    await expect(page.locator(`[data-roster-row$="/${exclusive.id}"]`)).toHaveCount(0)
+    await expect(page.locator(`[data-roster-row$="/${shared.id}"]`)).toBeVisible()
+    await page.locator(`[data-roster-row$="/${copy.id}"]`).click()
+    await expect(page.locator('.roster-row[aria-current=true]')).toContainText(copy.name)
+    await (await confirm(copy)).getByRole('button', { name: 'Delete only group chat' }).click()
+    await expect(page.locator(`[data-roster-row$="/${copy.id}"]`)).toHaveCount(0)
+    await expect(page.locator(`[data-roster-row$="/${shared.id}"]`)).toBeVisible()
+  } finally {
+    // 清理只涉及此用例创建的沙箱数据。
+    for (const id of ids) await api(page, 'deleteBot', { botId: id }).catch(() => {})
+    await browser.close()
+  }
+})

@@ -6,6 +6,14 @@ any left). tools/asc-submit.py reads the released version's section;
 a version without one gets a generic "Bug fixes and improvements" line. Delete old sections.
 -->
 
+## 2.54.0
+
+### zh-Hant
+- 可徹底刪除群聊、專屬機器人、聊天記錄和資源，並保留已複製的會話與共用機器人。
+
+### en-US
+- Permanently delete a group chat, its exclusive bots, history and resources, while keeping copied chats and shared bots.
+
 ## 2.50.0
 
 ### zh-Hant

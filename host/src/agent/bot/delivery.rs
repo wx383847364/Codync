@@ -331,15 +331,18 @@ impl Actor {
                         };
                         let result = self.start_turn(Lane::main(&delivery.room_id), &[], &prompt, false, done_tx).await;
                         if let Err(error) = result {
-                            if self
+                            let cancelled = self
                                 .hub
                                 .store
                                 .delivery(&id)
-                                .ok()
-                                .flatten()
-                                .is_some_and(|d| d.status == Status::Cancelled)
-                            {
-                                // 已持久取消且尚未发送的投递不是启动失败，不留下错误状态。
+                                .is_ok_and(|row| row.is_some_and(|d| d.status == Status::Cancelled));
+                            let purged = self
+                                .hub
+                                .store
+                                .bot(&delivery.room_id)
+                                .is_ok_and(|row| row.is_some_and(|room| room.deleted));
+                            if cancelled || purged {
+                                // 清空群可能已移除投递行。取消前尚未发送的任务不算成员启动失败。
                                 self.finish_delivery(Status::Cancelled, None, None);
                                 self.turn = None;
                                 self.hub.team.end_turn(&self.cfg.id);
@@ -419,7 +422,7 @@ impl Actor {
         pending.attempts += 1;
         pending.next = Instant::now() + Duration::from_secs(3);
         match self.hub.complete_delivery(
-            &pending.active.delivery.id,
+            &pending.active.delivery,
             pending.status,
             pending.text.as_deref(),
             pending.detail.as_deref(),

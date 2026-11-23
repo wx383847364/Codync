@@ -596,6 +596,7 @@ export interface Hello {
   /** 主机支持创建具有独立模型会话的群。 */
   groupSessions?: boolean
   stageGroups?: boolean
+  purgeGroup?: boolean
   taskGroupContexts?: boolean
   groupMemberPicker?: boolean
   optionalStageSetup?: boolean

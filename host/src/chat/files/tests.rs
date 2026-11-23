@@ -2,9 +2,10 @@ use super::*;
 
 struct Temp(PathBuf);
 impl Temp {
+    /// 为直接测试快照写入预建目标目录，与线上调用约束一致。
     fn new() -> Self {
         let path = std::env::temp_dir().join(format!("codync-files-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&path).unwrap();
+        std::fs::create_dir_all(path.join("snapshots")).unwrap();
         Self(path)
     }
 }

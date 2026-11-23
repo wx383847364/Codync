@@ -269,7 +269,7 @@ impl Store {
                 // 共享群切换后，私聊摘要始终等待下一条私聊消息。
                 tx.execute(
                     "INSERT INTO kv(k,v) VALUES(?1,?2) ON CONFLICT(k) DO UPDATE SET v=excluded.v",
-                    params![private_key(&d.target_bot_id), handoff.text],
+                    params![private_key(&d.target_bot_id), private_value(&d.room_id, &handoff.text)],
                 )?;
             }
             handoff.phase = Phase::Switched;
@@ -335,6 +335,22 @@ pub(super) fn discard(c: &Connection, d: &Delivery) -> Result<Option<Entry>> {
 /// 普通群的私聊摘要只供下一条私聊用户消息读取。
 pub(crate) fn private_key(bot: &str) -> String {
     format!("group.handoff.private.{bot}")
+}
+
+/// 保存源群，用于清理只属于该群的私聊交接提示。
+pub(super) fn private_value(room: &str, text: &str) -> String {
+    json!({"room":room,"text":text}).to_string()
+}
+
+/// 新记录包含源群，旧版已经保存的纯文本仍能带入下一条私聊。
+pub(crate) fn private_text(value: String) -> String {
+    if let Ok(record) = serde_json::from_str::<Value>(&value)
+        && record["room"].is_string()
+        && let Some(text) = record["text"].as_str()
+    {
+        return text.to_owned();
+    }
+    value
 }
 
 /// 在同一事务记录旧会话和停泊会话，再移除活跃引用。

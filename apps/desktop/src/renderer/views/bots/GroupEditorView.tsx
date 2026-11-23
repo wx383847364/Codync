@@ -7,6 +7,7 @@ import { Dialog, ModalHeader, SheetPage, useDismiss } from '../../components/Ove
 import { VStack } from '../../components/Stack'
 import { Text } from '../../components/Text'
 import { useStore } from '../../store/context'
+import type { BotStore } from '../../store/bot-store'
 import { errorText } from './drafts'
 import { AutoTextArea } from './parts'
 import './bots.css'
@@ -115,29 +116,34 @@ export function GroupEditorView({ group }: { group: Bot }) {
           ) : null}
         </div>
       </div>
-      <DeleteBotDialog bot={confirmDelete} onClose={() => setConfirmDelete(null)} onDeleted={dismiss} />
+      <DeleteBotDialog store={store} bot={confirmDelete} onClose={() => setConfirmDelete(null)} onDeleted={dismiss} />
     </SheetPage>
   )
 }
 
-/** The one "Delete <bot>?" confirmation (kit `deleteBotConfirmation`). */
-function DeleteBotDialog({ bot, onClose, onDeleted }: { bot: Bot | null; onClose: () => void; onDeleted: () => void }) {
-  const store = useStore()
+/** 群编辑器和侧栏共用删除确认，完整删除由 Host 决定实际范围。 */
+export function DeleteBotDialog({ store, bot, onClose, onDeleted }: {
+  store: BotStore | undefined; bot: Bot | null; onClose: () => void; onDeleted?: () => void
+}) {
   const tr = useTr()
+  const group = bot !== null && isGroup(bot)
+  const canPurge = group && store?.hasGroupPurge === true
+  const message = canPurge
+    ? 'Full deletion removes the conversation, exclusive bots and their resources. Copied chats, shared bots and external projects stay.'
+    : group ? 'Its bots and their own chats stay.' : 'Files it changed on your computer stay as they are.'
+  /** 提交用户明确选择的范围，再关闭发起操作的设置页。 */
+  const remove = (purge: boolean) => {
+    if (bot) store?.delete(bot, purge)
+    onDeleted?.()
+  }
   return (
     <Dialog
       open={bot !== null}
-      title={`Delete ${bot?.name ?? 'bot'}?`}
-      message={tr(bot && isGroup(bot) ? 'Its bots and their own chats stay.' : 'Files it changed on your computer stay as they are.')}
+      title={tr('Delete {name}?').replaceAll('{name}', () => bot?.name ?? 'bot')}
+      message={tr(message)}
       actions={[
-        {
-          title: 'Delete bot and its conversation',
-          destructive: true,
-          action: () => {
-            if (bot) store.delete(bot)
-            onDeleted()
-          },
-        },
+        { title: group ? 'Delete only group chat' : 'Delete bot and its conversation', destructive: true, action: () => remove(false) },
+        ...(canPurge ? [{ title: 'Delete group and its bots', destructive: true, action: () => remove(true) }] : []),
       ]}
       onClose={onClose}
     />

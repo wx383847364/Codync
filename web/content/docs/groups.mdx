@@ -66,7 +66,14 @@ Open the group's settings to change it:
 
 In the editor you can rename the group, add or remove members, and fill in **What this group works on**. Every member reads that line, so use it to say what the room is for.
 
-**Delete group chat** removes the group and its conversation. Its bots stay. If you delete a bot, it leaves every group it was in.
+The deletion confirmation offers two actions:
+
+- **Delete only group chat** removes the group conversation and keeps its bots and their own conversations.
+- **Delete group and its bots** permanently removes the group, its conversation, bots exclusive to that group, and their Codync resources, including uploaded files, artifacts and private workspaces. Copied chats and bots, members shared with another group, and folders outside Codync's managed storage stay.
+
+In the terminal, press `x` to open the confirmation, then press Enter to delete the group chat or Shift+X for full deletion. Full deletion appears once the connected host supports it.
+
+If you delete a bot individually, it leaves every group it was in.
 
 ## Who answers
 

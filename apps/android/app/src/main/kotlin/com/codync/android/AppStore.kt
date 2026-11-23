@@ -89,6 +89,8 @@ class AppStore internal constructor(
         }
         draftBook = book
         refresh()
+        // 删除标记可能已经提交，而另一个草稿文件尚未来得及保存。
+        withContext(Dispatchers.IO) { requireNotNull(database).deletedBotIds() }.let { clearDeletedChatDrafts(it) }
         mutableState.update { it.copy(loading = false) }
     }
 
