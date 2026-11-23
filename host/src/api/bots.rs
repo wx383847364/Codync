@@ -196,6 +196,13 @@ pub(super) async fn call(hub: &Arc<Hub>, caller: &Caller, method: &str, b: Value
             hub.delete_bot(str_arg(&b, "botId")?)?;
             json!({})
         }
+        "purgeGroup" => {
+            let id = str_arg(&b, "botId")?.to_owned();
+            let hub = hub.clone();
+            // 客户端断开后仍完成已确认的删除和清盘。
+            tokio::spawn(async move { hub.purge_group(&id).await }).await??;
+            json!({})
+        }
         // The user makes this bot the lead, in place of the one before.
         "setLead" => {
             crate::chat::lead::set(hub, str_arg(&b, "botId")?)?;
@@ -208,14 +215,17 @@ pub(super) async fn call(hub: &Arc<Hub>, caller: &Caller, method: &str, b: Value
         // One chunk of a file for a later `send` (`attachments`); base64 `data` at `offset`.
         "upload" => {
             use base64::Engine as _;
-            let row = hub.store.bot(str_arg(&b, "botId")?)?.filter(|r| !r.deleted);
-            let root = crate::chat::uploads::root(&row.ok_or_else(|| anyhow!("unknown bot"))?.config);
+            let bot = str_arg(&b, "botId")?.to_owned();
+            let hub = hub.clone();
             let (id, name) = (str_arg(&b, "uploadId")?.to_owned(), str_arg(&b, "name")?.to_owned());
             let data =
                 base64::engine::general_purpose::STANDARD.decode(str_arg(&b, "data")?).context("invalid data")?;
             let (offset, done) = (b["offset"].as_u64().unwrap_or(0), b["done"] == true);
             let attachment = tokio::task::spawn_blocking(move || {
-                crate::chat::uploads::append(&root, &id, &name, offset, &data, done)
+                hub.with_live_bot(&bot, |cfg| {
+                    // 分片落盘前重新检查对话仍存在。
+                    crate::chat::uploads::append(&crate::chat::uploads::root(cfg), &id, &name, offset, &data, done)
+                })
             })
             .await??;
             json!({"attachment": attachment})

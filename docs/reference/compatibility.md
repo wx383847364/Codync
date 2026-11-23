@@ -57,6 +57,8 @@ An empty `stage.leaderId` denotes a newly created stage without a lead, whose un
 messages go to all members. Earlier clients still show the stage prompt to choose a recipient
 with `@` for these new stages. An explicit `@` continues to select the addressed members.
 
+Hosts that advertise `purgeGroup` accept the `purgeGroup` method with a `botId`. The existing `deleteBot` method continues to remove a group chat while keeping its bots.
+
 ## Changing what crosses the wire
 
 The policy is to move people forward rather than carry old formats: a breaking change ships

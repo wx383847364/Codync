@@ -176,7 +176,9 @@ private suspend fun AppStore.consumeEvents(active: EncryptedChannel, cursor: Lon
             }
             withContext(Dispatchers.IO) { requireNotNull(database).apply(batch) }
             refresh()
-            receiveArtifacts(batch)
+            val deleted = batch.filterIsInstance<MirrorEvent.BotChanged>().filter { it.bot.deleted }.map { it.bot.id }.toSet()
+            clearDeletedChatDrafts(deleted)
+            receiveArtifacts(batch, deleted)
             receiveNetwork(batch)
             hearCalls(batch)
             acknowledgeVisible(readAfter(batch, state.value.readingChats))

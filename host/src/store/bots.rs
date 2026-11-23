@@ -27,6 +27,8 @@ fn parse_bot((id, cfg, rev, deleted, session_id, read_rev, config_rev): RawBot) 
     }
 }
 
+mod purge;
+
 const BOT_COLS: &str = "id, config, rev, deleted, session_id, read_rev, config_rev";
 const SAVE_BOT: &str = "INSERT INTO bots(id, rev, config) VALUES(?1, ?2, ?3)
      ON CONFLICT(id) DO UPDATE SET rev = ?2, config = ?3 WHERE deleted = 0";
@@ -47,6 +49,48 @@ fn save_bots_on(tx: &Connection, cfgs: &[BotConfig], creation: Option<(&str, &st
     if let Some((key, value)) = creation {
         tx.execute("INSERT INTO kv(k,v) VALUES(?1,?2)", [key, value])?;
     }
+    Ok(())
+}
+
+/// 在调用者事务内删除机器人数据，并保留客户端同步需要的删除标记。
+fn delete_bot_on(c: &Connection, id: &str) -> Result<(i64, Vec<super::deliveries::Delivery>, Vec<super::Entry>)> {
+    let rev = next_rev(c)?;
+    // 删除标记与取消持久投递同事务提交，封住取消后再次入队的窗口。
+    c.execute("UPDATE bots SET rev = ?2, deleted = 1, session_id = NULL WHERE id = ?1", params![id, rev])?;
+    let (cancelled, cards) = super::deliveries::cancel_for_deletion(c, id)?;
+    c.execute("DELETE FROM entries WHERE bot_id = ?1", [id])?;
+    delete_bot_resources_on(c, id)?;
+    Ok((rev, cancelled, cards))
+}
+
+/// 删除机器人专属的记忆、会话引用和作品，执行者退出后可再次清扫迟到写入。
+fn delete_bot_resources_on(c: &Connection, id: &str) -> Result<()> {
+    codync_mem::store::drop_bot(c, id)?;
+    // Its dreaming bookmark, notices' revisions and the record of its moved memory.
+    c.execute("DELETE FROM kv WHERE k GLOB ?1", [format!("memory.*{id}*")])?;
+    // 清理成员的所有独立会话，以及被删除群在其他成员名下的会话槽。
+    c.execute(
+        "DELETE FROM kv WHERE k GLOB ?1 OR k GLOB ?2",
+        [format!("lane.session.{id}@*"), super::run_session_key("*", &super::group_session_slot(id, "*"))],
+    )?;
+    // Its fallback chain's place and each agent's parked session (`agent::bot::fallback::park`).
+    c.execute(
+        "DELETE FROM kv WHERE k GLOB ?1 OR k GLOB ?2",
+        [format!("fallback.*.{id}"), format!("fallback.*.{id}.*")],
+    )?;
+    // 会话占用与原会话一起保留，删除机器人时移除其快照。
+    c.execute(
+        "DELETE FROM kv WHERE k GLOB ?1 OR k GLOB ?2",
+        [format!("session.scoped-usage.{id}.*"), format!("group.member-session.{id}.*")],
+    )?;
+    c.execute("DELETE FROM kv WHERE k=?1", [format!("group.context-basis.{id}")])?;
+    // ponytail: snapshots of replaced sessions stay until the bot goes; prune by session if kv grows.
+    c.execute(
+        "DELETE FROM kv WHERE k GLOB ?1 OR k GLOB ?2",
+        [format!("context.{id}.*"), format!("context.epoch.{id}.*")],
+    )?;
+    // Its artifacts' details (`chat::artifacts`).
+    c.execute("DELETE FROM kv WHERE k GLOB ?1", [format!("artifact.{id}.*")])?;
     Ok(())
 }
 
@@ -153,40 +197,10 @@ impl Store {
     /// 删除标记、相关投递取消和存活群卡片在同一事务提交，返回提交后需要发布的变化。
     pub fn delete_bot(&self, id: &str) -> Result<(i64, Vec<super::deliveries::Delivery>, Vec<super::Entry>)> {
         let mut db = self.db.locked();
-        let c = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-        let rev = next_rev(&c)?;
-        // 删除标记与取消持久投递同事务提交，封住取消后再次入队的窗口。
-        c.execute("UPDATE bots SET rev = ?2, deleted = 1, session_id = NULL WHERE id = ?1", params![id, rev])?;
-        let (cancelled, cards) = super::deliveries::cancel_for_deletion(&c, id)?;
-        c.execute("DELETE FROM entries WHERE bot_id = ?1", [id])?;
-        codync_mem::store::drop_bot(&c, id)?;
-        // Its dreaming bookmark, notices' revisions and the record of its moved memory.
-        c.execute("DELETE FROM kv WHERE k GLOB ?1", [format!("memory.*{id}*")])?;
-        // 清理成员的所有独立会话，以及被删除群在其他成员名下的会话槽。
-        c.execute(
-            "DELETE FROM kv WHERE k GLOB ?1 OR k GLOB ?2",
-            [format!("lane.session.{id}@*"), super::run_session_key("*", &super::group_session_slot(id, "*"))],
-        )?;
-        // Its fallback chain's place and each agent's parked session (`agent::bot::fallback::park`).
-        c.execute(
-            "DELETE FROM kv WHERE k GLOB ?1 OR k GLOB ?2",
-            [format!("fallback.*.{id}"), format!("fallback.*.{id}.*")],
-        )?;
-        // 会话占用与原会话一起保留，删除机器人时移除其快照。
-        c.execute(
-            "DELETE FROM kv WHERE k GLOB ?1 OR k GLOB ?2",
-            [format!("session.scoped-usage.{id}.*"), format!("group.member-session.{id}.*")],
-        )?;
-        c.execute("DELETE FROM kv WHERE k=?1", [format!("group.context-basis.{id}")])?;
-        // ponytail: snapshots of replaced sessions stay until the bot goes; prune by session if kv grows.
-        c.execute(
-            "DELETE FROM kv WHERE k GLOB ?1 OR k GLOB ?2",
-            [format!("context.{id}.*"), format!("context.epoch.{id}.*")],
-        )?;
-        // Its artifacts' details (`chat::artifacts`).
-        c.execute("DELETE FROM kv WHERE k GLOB ?1", [format!("artifact.{id}.*")])?;
-        c.commit()?;
-        Ok((rev, cancelled, cards))
+        let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let result = delete_bot_on(&tx, id)?;
+        tx.commit()?;
+        Ok(result)
     }
 
     /// 新建主会话时一次提交主会话与parked会话清理；失败不允许actor清除旧内存会话。
@@ -222,9 +236,11 @@ impl Store {
         Ok(())
     }
 
+    /// 基础会话只保存到仍可使用的机器人。
     pub fn set_session(&self, id: &str, session: Option<&str>) -> Result<()> {
         let c = self.db.locked();
-        c.execute("UPDATE bots SET session_id = ?2 WHERE id = ?1", params![id, session])?;
+        // 执行者可能正在处理关闭前最后一条 ACP 响应，不能覆盖同步墓碑。
+        c.execute("UPDATE bots SET session_id = ?2 WHERE id = ?1 AND deleted=0", params![id, session])?;
         Ok(())
     }
 

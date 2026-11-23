@@ -11,10 +11,13 @@ import kotlinx.serialization.json.*
 
 private fun AppStore.updateArtifacts(change: (ArtifactCache) -> ArtifactCache) = mutableState.update { it.copy(artifacts = change(it.artifacts)) }
 
-/** The `artifact` events in a batch: details only, a card or viewer showing the artifact reads its new HTML. */
-internal fun AppStore.receiveArtifacts(events: List<MirrorEvent>) {
-    val artifacts = events.filterIsInstance<MirrorEvent.ArtifactChanged>().map { it.artifact }
-    if (artifacts.isNotEmpty()) updateArtifacts { cache -> artifacts.fold(cache, ArtifactCache::upsert) }
+/** 同步作品细节，并清除删除聊天的缓存内容和文件列表。 */
+internal fun AppStore.receiveArtifacts(events: List<MirrorEvent>, deleted: Set<String>) {
+    val artifacts = events.filterIsInstance<MirrorEvent.ArtifactChanged>().map { it.artifact }.filterNot { it.botId in deleted }
+    if (artifacts.isEmpty() && deleted.isEmpty()) return
+    mutableState.update { state ->
+        state.copy(artifacts = artifacts.fold(state.artifacts.removeBots(deleted), ArtifactCache::upsert), library = state.library - deleted)
+    }
 }
 
 /**
@@ -25,7 +28,11 @@ fun AppStore.loadLibrary(botId: String) = action("library:$botId") {
     val response = ready().call("library", body("botId" to botId)).jsonObject
     val items = response.getValue("items").jsonArray.mapNotNull { (it as? JsonObject)?.let(LibraryItem::decode) }
     val artifacts = items.filterIsInstance<LibraryItem.ArtifactItem>().map { it.artifact }
-    mutableState.update { it.copy(library = it.library + (botId to items), artifacts = artifacts.fold(it.artifacts, ArtifactCache::upsert)) }
+    mutableState.update {
+        // 列表返回时对应聊天可能已被另一个设备删除。
+        if (it.bots.none { bot -> bot.id == botId }) it
+        else it.copy(library = it.library + (botId to items), artifacts = artifacts.fold(it.artifacts, ArtifactCache::upsert))
+    }
 }
 
 /**
@@ -44,15 +51,23 @@ fun AppStore.loadArtifact(botId: String, id: String, announced: Long = 0) {
     }
 }
 
+/** 读取作品内容并确认读取期间聊天仍存在。 */
 private suspend fun AppStore.readArtifact(botId: String, id: String): String {
     val (artifact, html) = HostFiles(ready()).readArtifact(botId, id)
+    // 完成时若聊天已被同步删除，释放已返回的 HTML。
+    check(state.value.bots.any { it.id == botId }) { "This chat was deleted." }
     updateArtifacts { it.store(artifact, html) }
     return html
 }
 
+/** 重命名回执只更新仍可打开的聊天。 */
 fun AppStore.renameArtifact(botId: String, id: String, title: String) = action("rename-artifact:$id") {
     val response = ready().call("renameArtifact", buildJsonObject { put("botId", botId); put("artifactId", id); put("title", title) }).jsonObject
-    updateArtifacts { it.upsert(Artifact.decode(response.getValue("artifact"))) }
+    val artifact = Artifact.decode(response.getValue("artifact"))
+    mutableState.update {
+        // 已删除的聊天不能被正在返回的重命名结果重新放入缓存。
+        if (it.bots.none { bot -> bot.id == botId }) it else it.copy(artifacts = it.artifacts.upsert(artifact))
+    }
 }
 
 /** The system share sheet with the artifact's newest HTML as `<title>.html`. */

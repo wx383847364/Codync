@@ -136,6 +136,10 @@ fn call_event(method: &str, b: &Value, p: &mut Map<String, Value>) -> Option<Eve
             p.insert("removed".into(), b["to"].as_str().is_none_or(|t| t.trim().is_empty()).into());
             Event::SectionRenamed
         }
+        "purgeGroup" => {
+            p.insert("scope".into(), "group_and_bots".into());
+            Event::BotDeleted
+        }
         "deleteBot" => Event::BotDeleted,
         "searchWorkspaceFiles" => Event::WorkspaceFilesSearched,
         "send" => {

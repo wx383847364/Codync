@@ -105,6 +105,7 @@ pub struct Hub {
     pub events: broadcast::Sender<Value>,
     /// Held across "mutate store + broadcast" so events leave in rev order.
     emit_lock: Mutex<()>,
+    group_purge: tokio::sync::Mutex<()>,
     bots: Mutex<HashMap<String, BotHandle>>,
     runtime: Mutex<HashMap<String, Runtime>>,
     pub phone_clients: AtomicUsize,
@@ -157,6 +158,7 @@ impl Hub {
             port,
             events,
             emit_lock: Mutex::new(()),
+            group_purge: tokio::sync::Mutex::new(()),
             bots: Mutex::default(),
             runtime: Mutex::default(),
             phone_clients: AtomicUsize::new(0),
@@ -184,6 +186,7 @@ impl Hub {
         self.store.interrupt_usage_attempts()?;
         crate::chat::memory::import_old_memory(self);
         self.routines.restore(&self.store)?;
+        self.resume_group_purges();
         crate::market::turn_on_installed_once(&self.store)?;
         for row in self.store.bots()? {
             if row.deleted {

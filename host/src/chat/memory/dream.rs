@@ -194,6 +194,7 @@ fn today() -> String {
     chrono::Local::now().format("%Y-%m-%d").to_string()
 }
 
+/// 运行可能跨越删除请求，保留的书签和梦境记录只能写入存活身份。
 async fn run(hub: &Arc<Hub>, bot_id: &str) -> Result<Ran> {
     let Some(cfg) = hub.store.bot(bot_id)?.filter(|b| !b.deleted).map(|b| b.config) else {
         return Ok(Ran::Done { more: false });
@@ -215,7 +216,7 @@ async fn run(hub: &Arc<Hub>, bot_id: &str) -> Result<Ran> {
     let tidy = tidy_due(&hub.store, bot_id);
     let worth = messages.iter().any(|m| m.from_user && m.text.iter().any(|run| codync_mem::evidence::substantive(run)));
     if !worth && !review && !tidy {
-        set_bookmark(&hub.store, bot_id, last_seq)?;
+        hub.with_live_bot(bot_id, |_| set_bookmark(&hub.store, bot_id, last_seq))?;
         return Ok(Ran::Done { more });
     }
 
@@ -237,21 +238,24 @@ async fn run(hub: &Arc<Hub>, bot_id: &str) -> Result<Ran> {
             return Ok(Ran::Later);
         }
     }
-    set_bookmark(&hub.store, bot_id, last_seq)?;
-    if review {
-        hub.store.kv_set(&reviewed_key(bot_id), &today)?;
-    }
-    // A run that moved lines out changed MEMORY.md, so the next one tidies on; one that moved none waits for a change.
-    for layer in &snapshot.layers {
-        mark_tidied(&hub.store, snapshot.layer_bot(layer.shared), layer.content.as_deref().unwrap_or_default())?;
-    }
+    hub.with_live_bot(bot_id, |_| {
+        set_bookmark(&hub.store, bot_id, last_seq)?;
+        if review {
+            hub.store.kv_set(&reviewed_key(bot_id), &today)?;
+        }
+        // 若这轮挪走了行，则留给后续轮继续整理；否则等待文件的新改动。
+        for layer in &snapshot.layers {
+            mark_tidied(&hub.store, snapshot.layer_bot(layer.shared), layer.content.as_deref().unwrap_or_default())?;
+        }
+        Ok(())
+    })?;
     Ok(Ran::Done { more })
 }
 
 /// Writes a run's files over what it saw, and logs it. False when a file changed meanwhile: what was written stays,
-/// and the rest waits for the next run.
+/// 只为存活 Bot 建立梦境记录，文件仍通过记忆写锁核对删除状态。
 fn write(hub: &Hub, cfg: &BotConfig, edits: &Edits) -> Result<bool> {
-    let dream = hub.store.memory_write(|c, now, _| dream::begin(c, &cfg.id, now))?;
+    let dream = hub.with_live_bot(&cfg.id, |_| hub.store.memory_write(|c, now, _| dream::begin(c, &cfg.id, now)))?;
     let writer = super::files::Writer { author: Author::Dream, bot: Some(cfg), cause: Cause::Dream, message: None };
     let mut whole = true;
     for edit in &edits.files {
@@ -266,28 +270,31 @@ fn write(hub: &Hub, cfg: &BotConfig, edits: &Edits) -> Result<bool> {
                 break;
             }
         };
-        hub.store.memory_write(|c, now, _| {
-            dream::record_file(c, dream, version.id)?;
-            if edit.name != MAIN {
-                return Ok(());
-            }
-            for line in edits.removed.iter().filter(|l| l.bot == edit.bot) {
-                dream::record_line(c, dream, false, &line.text)?;
-            }
-            for line in edits.added.iter().filter(|l| l.bot == edit.bot) {
-                dream::record_line(c, dream, true, &line.text)?;
-                // A review's rewrite stays its writer's, and isn't reviewed again; a new line is dreaming's.
-                let (author, author_bot) = match &line.rewrites {
-                    Some(fact) => {
-                        dream::mark_reviewed(c, layer, &line.text)?;
-                        (fact.author, fact.author_bot.clone())
-                    }
-                    None => (Author::Dream, Some(cfg.id.clone())),
-                };
-                let fact = Fact { text: line.text.clone(), author, author_bot, message: line.message.clone(), at: now };
-                mf::set_origin(c, layer, &fact)?;
-            }
-            Ok(())
+        hub.with_live_bot(&cfg.id, |_| {
+            hub.store.memory_write(|c, now, _| {
+                dream::record_file(c, dream, version.id)?;
+                if edit.name != MAIN {
+                    return Ok(());
+                }
+                for line in edits.removed.iter().filter(|l| l.bot == edit.bot) {
+                    dream::record_line(c, dream, false, &line.text)?;
+                }
+                for line in edits.added.iter().filter(|l| l.bot == edit.bot) {
+                    dream::record_line(c, dream, true, &line.text)?;
+                    // A review's rewrite stays its writer's, and isn't reviewed again; a new line is dreaming's.
+                    let (author, author_bot) = match &line.rewrites {
+                        Some(fact) => {
+                            dream::mark_reviewed(c, layer, &line.text)?;
+                            (fact.author, fact.author_bot.clone())
+                        }
+                        None => (Author::Dream, Some(cfg.id.clone())),
+                    };
+                    let fact =
+                        Fact { text: line.text.clone(), author, author_bot, message: line.message.clone(), at: now };
+                    mf::set_origin(c, layer, &fact)?;
+                }
+                Ok(())
+            })
         })?;
     }
     hub.store.memory_write(|c, _, _| dream::discard_if_empty(c, dream))?;

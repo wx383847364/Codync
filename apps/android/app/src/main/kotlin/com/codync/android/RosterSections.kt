@@ -87,6 +87,10 @@ internal val AppState.supportsGroupMemberPicker: Boolean
 internal val AppState.supportsStageGroups: Boolean
     get() = hello?.get("stageGroups")?.jsonPrimitive?.booleanOrNull == true
 
+/** 仅在 Host 明确支持彻底删除时提供该选项。 */
+internal val AppState.supportsGroupPurge: Boolean
+    get() = hello?.get("purgeGroup")?.jsonPrimitive?.booleanOrNull == true
+
 /** Section controls show only for a host that keeps sections; before its `hello` (offline) they stay hidden. */
 internal val AppState.supportsSections: Boolean
     get() = hello?.text("version")?.let { !AppVersion.isBelow(it, SECTIONS_HOST) } == true

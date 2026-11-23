@@ -363,7 +363,13 @@ extension BotStore {
         }, op)
     }
 
-    public func delete(_ bot: Bot) {
+    /// 普通删除即时更新，彻底删除只根据 Host 的同步消息清除对应群和成员。
+    public func delete(_ bot: Bot, purgeGroup: Bool = false) {
+        if purgeGroup {
+            // Host 统一解析共享成员，只处理它确认删除的身份。
+            perform(replay: true) { try await $0.deleteBot(bot.id, purgeGroup: true) }
+            return
+        }
         removeComposerDrafts(for: bot.id)
         bots[bot.id] = nil
         entries[bot.id] = nil

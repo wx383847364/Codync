@@ -15,18 +15,31 @@ private struct DeleteBotConfirmation: ViewModifier {
     let onDeleted: () -> Void
     @Environment(BotStore.self) private var model
 
+    /// 展示用户可选的删除范围。较旧的 Host 只显示原操作。
     func body(content: Content) -> some View {
-        content.codyncDialog(
+        let isGroup = bot?.isGroup == true
+        let canPurge = isGroup && model.supportsGroupPurge
+        let message = canPurge
+            ? "Full deletion removes the conversation, exclusive bots and their resources. Copied chats, shared bots and external projects stay."
+            : isGroup ? "Its bots and their own chats stay." : "Files it changed on your computer stay as they are."
+        return content.codyncDialog(
             "Delete \(bot?.name ?? "bot")?",
             isPresented: Binding(get: { bot != nil }, set: { if !$0 { bot = nil } }),
-            message: bot?.isGroup == true ? "Its bots and their own chats stay." : "Files it changed on your computer stay as they are."
+            message: message
         ) {
-            // Captured now: the dialog clears `bot` before running the action.
-            let target = bot
-            return [DialogAction("Delete bot and its conversation", destructive: true) {
-                if let target { model.delete(target) }
+            // 捕获当前目标，弹窗会在执行动作前清除绑定。
+            guard let target = bot else { return [] }
+            var actions = [DialogAction(isGroup ? "Delete only group chat" : "Delete bot and its conversation", destructive: true) {
+                model.delete(target)
                 onDeleted()
             }]
+            if canPurge {
+                actions.append(DialogAction("Delete group and its bots", destructive: true) {
+                    model.delete(target, purgeGroup: true)
+                    onDeleted()
+                })
+            }
+            return actions
         }
     }
 }

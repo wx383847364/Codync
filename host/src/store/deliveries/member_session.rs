@@ -1,6 +1,6 @@
 //! 群成员的实时上下文、显示基准和主动新开会话请求。
 
-use super::handoff::{GroupHandoff, Phase, active_session, archive_context, private_key, projection};
+use super::handoff::{GroupHandoff, Phase, active_session, archive_context, private_key, private_value, projection};
 use super::{Status, completion};
 use crate::LockExt;
 use crate::store::{BotConfig, Entry, EntryKind, Store, group_session_slot};
@@ -61,6 +61,17 @@ pub(super) fn scoped_generation(
     } else {
         None
     })
+}
+
+/// 有效会话仍归属存活 Bot 和群，迟到的 ACP 用量不能复活已删除会话。
+fn context_owner_exists(c: &Connection, bot: &str, slot: Option<&str>) -> Result<bool> {
+    let room = slot.and_then(crate::store::slotted_group);
+    Ok(c.query_row(
+        "SELECT EXISTS(SELECT 1 FROM bots WHERE id=?1 AND deleted=0)
+                AND (?2 IS NULL OR EXISTS(SELECT 1 FROM bots WHERE id=?2 AND deleted=0))",
+        params![bot, room],
+        |row| row.get(0),
+    )?)
 }
 
 /// 同一个成员卡展示和主动请求读取同一份真实快照。
@@ -213,6 +224,9 @@ impl Store {
         let key = usage_key(bot, backend, slot);
         let mut db = self.db.locked();
         let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if !context_owner_exists(&tx, bot, slot)? {
+            return Ok(());
+        }
         let latest: Value = kv(&tx, &key)?.map(|v| serde_json::from_str(&v)).transpose()?.unwrap_or_default();
         let generation = (latest["session"].as_str() == Some(sid))
             .then(|| latest["generation"].as_str())
@@ -268,13 +282,20 @@ impl Store {
 
     /// 新开会话会更换内部版本，即使执行器复用了同一字符串 ID。
     pub(crate) fn reset_scoped_context(&self, bot: &str, backend: &str, slot: Option<&str>, sid: &str) -> Result<()> {
-        self.kv_set(
-            &usage_key(bot, backend, slot),
-            &json!({
-                "session":sid, "generation":uuid::Uuid::new_v4().to_string(), "used":null, "size":null
-            })
-            .to_string(),
-        )
+        let db = self.db.locked();
+        if context_owner_exists(&db, bot, slot)? {
+            db.execute(
+                "INSERT INTO kv(k,v) VALUES(?1,?2) ON CONFLICT(k) DO UPDATE SET v=excluded.v",
+                params![
+                    usage_key(bot, backend, slot),
+                    json!({
+                        "session":sid, "generation":uuid::Uuid::new_v4().to_string(), "used":null, "size":null
+                    })
+                    .to_string()
+                ],
+            )?;
+        }
+        Ok(())
     }
 
     /// 为容量交接记录当前会话同槽、同后端的真实版本。
@@ -504,7 +525,7 @@ impl Store {
             if r.handoff.slot.is_none() {
                 tx.execute(
                     "INSERT INTO kv(k,v) VALUES(?1,?2) ON CONFLICT(k) DO UPDATE SET v=excluded.v",
-                    params![private_key(bot), r.handoff.text],
+                    params![private_key(bot), private_value(&r.room, &r.handoff.text)],
                 )?;
             }
             current.handoff.phase = Phase::Switched;

@@ -205,12 +205,11 @@ private class ComputerRoster(private val context: Context, val key: String) {
         val store = accounts.store(computer)
         if (state != null && store != null) StageDetailsEditor(group.id, state, store)
     }
-    val deleting = confirmDelete?.second
-    CodyncDialog("Delete ${deleting?.name ?: "bot"}?", deleting != null, { confirmDelete = null },
-        message = if (deleting?.kind == "group") "Its bots and their own chats stay." else "Files it changed on your computer stay as they are.") {
-        listOf(DialogAction(if (deleting?.kind == "group") "Delete group chat" else "Delete bot and its conversation", destructive = true) {
-            confirmDelete?.let { (id, bot) -> accounts.store(id)?.deleteBot(bot) {} }
-        })
+    val target = confirmDelete
+    val supportsPurge = states.firstOrNull { it.computer.id == target?.first }?.supportsGroupPurge == true
+    // 群归属哪台电脑，删除请求就发给哪台电脑。
+    DeleteBotDialog(target?.second, supportsPurge, { confirmDelete = null }) { bot, purge ->
+        target?.first?.let { accounts.store(it)?.deleteBot(bot, purge) {} }
     }
     SectionNameDialog(naming) { naming = null }
 }

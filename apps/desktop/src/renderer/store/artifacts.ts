@@ -15,14 +15,28 @@ export class Artifacts {
   readonly html = new Map<string, ArtifactHTML>()
   readonly failed = new Map<string, string>()
   private reading = new Map<string, Promise<ArtifactHTML>>()
+  private deletedBots = new Set<string>()
   private changed: () => void
   constructor(changed: () => void) { this.changed = changed }
 
+  /** 新事件和旧请求只可修改仍存在的聊天资源。 */
   upsert(artifact: Artifact) {
+    if (this.deletedBots.has(artifact.botId)) return
     const known = this.byId.get(artifact.id)
     if (known && known.updatedAt > artifact.updatedAt) return
     this.byId.set(artifact.id, artifact)
     this.changed()
+  }
+
+  /** 删除聊天时释放其已读取的作品和 HTML，并拦截迟到的读取。 */
+  removeBot(botId: string) {
+    this.deletedBots.add(botId)
+    for (const [id, artifact] of this.byId) {
+      if (artifact.botId !== botId) continue
+      this.byId.delete(id)
+      this.html.delete(id)
+      this.failed.delete(id)
+    }
   }
 
   /** The chat's Library (`library`); its artifacts join the ones known here. */
@@ -95,8 +109,10 @@ export class Artifacts {
     return read
   }
 
+  /** 下载完成后核对仍属存活聊天，避免回填或导出已删除的 HTML。 */
   private async read(client: HostClient, botId: string, id: string): Promise<ArtifactHTML> {
     const { artifact, bytes } = await readArtifactHTML((offset) => client.readArtifact(botId, id, offset))
+    if (this.deletedBots.has(botId)) throw new Error(trNow('This chat was deleted.'))
     const read = { updatedAt: artifact.updatedAt, sha256: artifact.sha256, bytes }
     this.html.set(id, read)
     this.upsert(artifact)
