@@ -1,20 +1,95 @@
 import { test, expect } from '@playwright/test'
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { randomUUID } from 'node:crypto'
 import { DatabaseSync } from 'node:sqlite'
 import { join } from 'node:path'
 import { homedir, tmpdir } from 'node:os'
-import { api, attach, sandbox, steerBot, typeMessage } from './sandbox.ts'
+import { api, attach, sandbox, setPref, steerBot, typeMessage } from './sandbox.ts'
 
 type History = { entries: { kind: string; data: { final?: boolean; text?: string; mentions?: { botId: string; start: number; end: number }[] } }[] }
+
+
+/** 用真实上传和 ACP 实报验证 A 版的占用、占比与系统文件入口。 */
+test('shows group resources and reported token usage in details', async () => {
+  const { browser, page } = await attach()
+  const cwd = join(tmpdir(), `codync-group-usage-${randomUUID()}`)
+  const ids: string[] = []
+  try {
+    mkdirSync(cwd)
+    const model = { id: 'model', category: 'model', type: 'select', currentValue: 'fixture-sol',
+      options: [{ value: 'fixture-sol', name: 'Fixture Sol' }] }
+    const effort = { id: 'reasoning_effort', category: 'thought_level', type: 'select', currentValue: 'medium',
+      options: [{ value: 'low', name: 'Low' }, { value: 'medium', name: 'Medium' }] }
+    writeFileSync(join(cwd, 'session-options.json'), JSON.stringify([model, effort]))
+    writeFileSync(join(cwd, 'group-script.json'), JSON.stringify({ steps: [
+      { reply: 'Usage fixture response', resultUsage: { inputTokens: 300, outputTokens: 200 },
+        usage: { used: 8000, size: 256000 } },
+      { reply: 'Usage fixture response with lower effort', sessionOptionUpdate: [model, { ...effort, currentValue: 'low' }],
+        usage: { used: 8000, size: 256000 } },
+    ] }))
+    const name = `Storage Room ${Date.now()}`
+    const member = (await api<{ bot: { id: string } }>(page, 'createBot', {
+      name: `Usage Tester ${Date.now()}`, backend: 'custom', cwd,
+      command: `python3 -u '${join(__dirname, '../../../host/tests/fixtures/team_agent.py')}'`,
+      connectors: [], skills: [], notify: false,
+    })).bot.id
+    ids.push(member)
+    const roomId = (await api<{ bot: { id: string } }>(page, 'createBot', { name, kind: 'group', members: [member] })).bot.id
+    ids.unshift(roomId)
+    await page.locator('.roster-row', { hasText: name }).click()
+    await page.locator('.title-pill').click()
+    const usage = page.getByRole('region', { name: 'Resources and usage' })
+    await expect(usage.getByText('0 B', { exact: true })).toBeVisible()
+    await expect(usage.getByText('No usage recorded', { exact: true })).toBeVisible()
+    const open = usage.getByRole('button', { name: /Open (in Finder|folder)/ })
+    await expect(open).toHaveCount(0)
+
+    await api(page, 'upload', {
+      botId: roomId, uploadId: randomUUID(), name: 'example.txt',
+      data: Buffer.from('group resource').toString('base64'), done: true,
+    })
+    await page.getByRole('button', { name: 'Close details' }).click()
+    await page.locator('.title-pill').click()
+    await expect(usage.getByText('14 B', { exact: true })).toBeVisible()
+    await expect(open).toBeEnabled()
+    await open.click()
+    await expect(open).toBeEnabled()
+    await expect(page.getByText('Could not open the group resource folder.', { exact: true })).toHaveCount(0)
+
+    const before = await api<{ hostTokens: number | null }>(page, 'groupResourceUsage', { roomId })
+    await api(page, 'send', { botId: roomId, text: 'Read the usage for this group.' })
+    await expect(usage.getByText('500 Token', { exact: true })).toBeVisible({ timeout: 15_000 })
+    const expected = 500 / ((before.hostTokens ?? 0) + 500)
+    const progress = usage.getByRole('progressbar', { name: 'Share of host usage' })
+    expect(Number(await progress.getAttribute('aria-valuenow'))).toBeCloseTo(expected * 100)
+    await page.getByRole('button', { name: 'Close details' }).click()
+    const modelLabel = page.locator('.group-context-chip + .group-context-model')
+    await expect(modelLabel).toHaveText('Fixture SolMedium')
+    await api(page, 'send', { botId: roomId, text: 'Check the lower setting.' })
+    await expect(page.getByText('Usage fixture response with lower effort', { exact: true })).toBeVisible()
+    // 新回复沿用同一读数，只展示在该成员最新的一组标题上。
+    await expect(modelLabel).toHaveCount(1)
+    await expect(modelLabel).toHaveText('Fixture SolLow')
+    await setPref(page, 'appLanguage', 'zh')
+    await expect(modelLabel).toHaveText('Fixture Sol低')
+  } finally {
+    await setPref(page, 'appLanguage', 'en').catch(() => {})
+    for (const botId of ids) await api(page, 'deleteBot', { botId }).catch(() => {})
+    rmSync(cwd, { recursive: true, force: true })
+    await browser.close()
+  }
+})
 
 /** 用真实群聊并行回合验证单独暂停、切换聊天和继续原任务。 */
 test('pauses just one running group delivery and resumes its original session', async () => {
   const { browser, page } = await attach()
+  const hadThinkingDetails = await page.evaluate(() => localStorage.getItem('showThinkingDetails') === 'true')
   const suffix = Date.now()
   const workspace = join(tmpdir(), `codync-group-pause-${suffix}`)
   const names = [`PauseAlpha${suffix}`, `PauseBeta${suffix}`]
   const ids: string[] = []
   try {
+    await setPref(page, 'showThinkingDetails', true)
     for (const [index, name] of names.entries()) {
       const cwd = join(workspace, String(index))
       mkdirSync(cwd, { recursive: true })
@@ -37,8 +112,21 @@ test('pauses just one running group delivery and resumes its original session', 
     const first = page.getByRole('group', { name: names[0], exact: true })
     const second = page.getByRole('group', { name: names[1], exact: true })
     await expect(second.getByRole('button', { name: 'Pause', exact: true })).toBeVisible()
-    await first.getByRole('button', { name: 'Pause', exact: true }).click()
+    const pause = first.getByRole('button', { name: 'Pause', exact: true })
+    const taskIcons = first.locator('.working-action-row').locator('svg, canvas, span[style*="mask-image"]')
+    // 系统蒙版和 Lucide 回退都必须显示实心方块，避免控件退回空心圆。
+    await expect(pause.locator('span[style*="stop.fill"], svg rect[fill="currentColor"]')).toHaveCount(1)
+    await expect(taskIcons).toHaveCount(1)
+    // 详情入口仍可通过状态文字展开，且不会为任务行增加第二个图标。
+    const details = first.locator('.working-toggle')
+    await details.click()
+    await expect(details).toHaveAttribute('aria-expanded', 'true')
+    await expect(taskIcons).toHaveCount(1)
+    await pause.click()
     await expect(first.getByText(/Paused/)).toBeVisible()
+    const resume = first.getByRole('button', { name: 'Continue', exact: true })
+    await expect(resume.locator('span[style*="play.fill"], svg polygon[fill="currentColor"], svg path[fill="currentColor"]')).toHaveCount(1)
+    await expect(taskIcons).toHaveCount(1)
     await expect(second.getByRole('button', { name: 'Pause', exact: true })).toBeVisible()
     writeFileSync(join(workspace, '1', 'release'), '')
     await expect(page.getByText(`Result from ${names[1]}`, { exact: true })).toBeVisible()
@@ -73,6 +161,7 @@ test('pauses just one running group delivery and resumes its original session', 
     await expect(first.getByRole('button', { name: 'Continue', exact: true })).toHaveCount(0)
   } finally {
     // 失败时也清理沙箱里本测试的群、成员和夹具文件。
+    await setPref(page, 'showThinkingDetails', hadThinkingDetails)
     for (const id of ids) await api(page, 'deleteBot', { botId: id }).catch(() => {})
     rmSync(workspace, { recursive: true, force: true })
     await browser.close()

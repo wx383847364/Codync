@@ -9,6 +9,8 @@ struct ChatRow: View {
     let groupStart: Bool
     var handoffPending = false
     var groupContextLabel: String?
+    var contextModel: String?
+    var contextReasoning: String?
     var inspectContext: (() -> Void)?
     /// The bot or group the chat belongs to.
     let chat: Bot?
@@ -37,7 +39,7 @@ struct ChatRow: View {
             .padding(.top, groupStart ? 12 : 4)
         case "agent":
             VStack(alignment: .leading, spacing: 4) {
-                if chat?.isGroup == true, groupStart { AuthorLabel(botId: entry.data.author, handoffPending: handoffPending, groupContextLabel: groupContextLabel, inspectContext: inspectContext) }
+                if chat?.isGroup == true, groupStart { AuthorLabel(botId: entry.data.author, handoffPending: handoffPending, groupContextLabel: groupContextLabel, contextModel: contextModel, contextReasoning: contextReasoning, inspectContext: inspectContext) }
                 AgentBubble(entry: entry, openTrace: openTrace, reply: reply, openArtifact: openArtifact)
                 ReactionsRow(entry: entry)
                     .padding(.leading, chat?.isGroup == true ? 34 : 0)
@@ -91,6 +93,8 @@ struct AuthorLabel: View {
     var name: String?
     var handoffPending = false
     var groupContextLabel: String?
+    var contextModel: String?
+    var contextReasoning: String?
     var inspectContext: (() -> Void)?
     @Environment(BotStore.self) private var model
 
@@ -106,6 +110,16 @@ struct AuthorLabel: View {
                     .font(.caption.monospacedDigit()).foregroundStyle(Palette.secondary)
                     .padding(.horizontal, 6).padding(.vertical, 2)
                     .background(Palette.bubbleAgent, in: Capsule()).buttonStyle(.plain)
+                    .fixedSize(horizontal: true, vertical: false)
+                if let contextModel {
+                    Text(contextModel).font(.caption.weight(.medium)).foregroundStyle(Palette.secondary).lineLimit(1)
+                    if let contextReasoning {
+                        Text(L10n.tr(contextReasoning)).font(.caption2.weight(.medium)).foregroundStyle(Palette.secondary)
+                            .padding(.horizontal, 4).padding(.vertical, 1)
+                            .background(Palette.surface, in: RoundedRectangle(cornerRadius: 4))
+                            .fixedSize()
+                    }
+                }
             }
             if handoffPending && model.hello?.groupSessionContexts != true {
                 Text(L10n.tr("Session switch needs confirmation")).font(.caption).foregroundStyle(Palette.warning)
@@ -362,7 +376,7 @@ private struct WorkingIndicator: View {
                 } else {
                     status
                 }
-                if let pause { IconButton("Pause", systemImage: "pause.fill", action: pause) }
+                if let pause { IconButton("Pause", systemImage: "stop.fill", action: pause) }
             }
             if open {
                 WorkingSteps(steps: steps)
@@ -382,7 +396,9 @@ private struct WorkingIndicator: View {
     private var status: some View {
         let activity = L10n.tr(bot.activity.isEmpty ? "Working…" : bot.activity)
         return HStack(spacing: 8) {
-            ThinkingOrb(state: bot.needsInput ? .listening : .working, size: 16, color: bot.needsInput ? Palette.warning : Palette.secondary)
+            if pause == nil {
+                ThinkingOrb(state: bot.needsInput ? .listening : .working, size: 16, color: bot.needsInput ? Palette.warning : Palette.secondary)
+            }
             HStack(spacing: 0) {
                 if member { Text("\(bot.name): ") }
                 // 空间紧张时先缩短成员名，给活动留出位置。
@@ -397,7 +413,7 @@ private struct WorkingIndicator: View {
                     .font(.footnote.monospacedDigit())
                     .foregroundStyle(Palette.tertiary)
             }
-            if details {
+            if details && pause == nil {
                 Image(systemName: "chevron.right")
                     .font(.caption2.weight(.semibold))
                     .foregroundStyle(Palette.tertiary)
@@ -486,7 +502,8 @@ struct ReactionsRow: View {
 /// elsewhere in the chat skips it.
 extension ChatRow: @MainActor Equatable {
     static func == (a: Self, b: Self) -> Bool {
-        a.entry == b.entry && a.groupStart == b.groupStart && a.handoffPending == b.handoffPending && a.groupContextLabel == b.groupContextLabel && a.chat?.isGroup == b.chat?.isGroup
+        a.entry == b.entry && a.groupStart == b.groupStart && a.handoffPending == b.handoffPending && a.groupContextLabel == b.groupContextLabel
+            && a.contextModel == b.contextModel && a.contextReasoning == b.contextReasoning && a.chat?.isGroup == b.chat?.isGroup
             && a.chat?.isWorking == b.chat?.isWorking && (a.reply == nil) == (b.reply == nil)
     }
 }

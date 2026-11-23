@@ -2,6 +2,12 @@ import * as L from 'lucide'
 
 type IconNode = L.IconNode
 
+/** 复用 Lucide 的轮廓生成实心任务控件图标。 */
+function filled(icon: IconNode): IconNode {
+  // 路径沿用原图形坐标，颜色随按钮文字变化。
+  return icon.map(([tag, attrs]) => [tag, { ...attrs, fill: 'currentColor' }])
+}
+
 // Lucide has no brand marks (its Apple is the fruit): the filled logo, from Simple Icons (CC0).
 const appleLogo: IconNode = [
   [
@@ -148,6 +154,7 @@ const map: Record<string, IconNode> = {
   'pin.fill': L.Pin,
   'pin.slash': L.PinOff,
   'play.circle': L.CirclePlay,
+  'play.fill': filled(L.Play),
   plus: L.Plus,
   'plus.circle': L.CirclePlus,
   'point.3.connected.trianglepath.dotted': L.Waypoints,
@@ -176,7 +183,7 @@ const map: Record<string, IconNode> = {
   star: L.Star,
   'star.fill': L.Star,
   'stop.circle': L.CircleStop,
-  'stop.fill': L.Square,
+  'stop.fill': filled(L.Square),
   terminal: L.Terminal,
   'text.bubble': L.MessageSquareText,
   tray: L.Inbox,

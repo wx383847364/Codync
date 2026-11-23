@@ -2036,5 +2036,18 @@
   "The queued task will start with this summary.": "待機中のタスクはこの要約を使って開始します。",
   "Your next message starts a fresh session carrying this summary.": "次のメッセージから、この要約を引き継いだ新しいセッションになります。",
   "This task may exceed the available context. Review what will carry over, then start a new session with the button or /new, or try the current session.": "このタスクは残りのコンテキストに収まらない可能性があります。引き継ぎ内容を確認して、新しいセッションを開始するか、現在のセッションで試してください。 /new でも要約を引き継いで開始できます。",
-  "Opening a new session with this summary.": "この要約で新しいセッションを開いています。"
+  "Opening a new session with this summary.": "この要約で新しいセッションを開いています。",
+  "Resources and usage": "リソースと使用量",
+  "Group resource storage": "グループのストレージ使用量",
+  "Group token usage": "グループのトークン使用量",
+  "Share of host usage": "ホスト全体に占める割合",
+  "All conversations on this host: {tokens} Token": "このホストの全会話：{tokens} トークン",
+  "No usage recorded": "使用記録なし",
+  "Partial usage records": "一部の使用記録のみ",
+  "Could not refresh usage.": "使用量を更新できませんでした。",
+  "Could not open the group resource folder.": "リソースフォルダを開けませんでした。",
+  "Open in Finder": "Finderで開く",
+  "Open folder": "フォルダを開く",
+  "Low": "低",
+  "High": "高"
 }

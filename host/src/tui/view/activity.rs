@@ -42,11 +42,11 @@ pub(super) fn activity(out: &mut Built, app: &App, bot: &Bot, entries: &[&Entry]
             if !row.spans.is_empty() {
                 out.lines.push(std::mem::take(&mut row));
             }
-            let label = activity_label(app, member, width.saturating_sub(12), true);
+            let label = activity_label(app, member, width.saturating_sub(14), true, true);
             delivery_row(out, bot, task, label, width, true);
             continue;
         }
-        let label = Line::from(activity_label(app, member, width, true));
+        let label = Line::from(activity_label(app, member, width, true, false));
         if !row.spans.is_empty() {
             if row.width() + label.width() + 2 > width {
                 out.lines.push(std::mem::take(&mut row));
@@ -57,7 +57,7 @@ pub(super) fn activity(out: &mut Built, app: &App, bot: &Bot, entries: &[&Entry]
         row.spans.extend(label.spans);
     }
     if members.is_empty() {
-        row = Line::from(activity_label(app, bot, width, false));
+        row = Line::from(activity_label(app, bot, width, false, false));
     }
     if details {
         // 终端详情按群回合展开，入口移到成员标签下方的群提示行。
@@ -109,7 +109,7 @@ pub(super) fn held_deliveries(out: &mut Built, app: &App, bot: &Bot, width: usiz
         let name = app.author_name(Some(&task.target_bot_id));
         let status = tr(if task.status == "paused" { "Paused" } else { "Continuing…" });
         let text = format!(" {name} · {status} · {}", task.preview);
-        let label = Span::styled(truncate(&text, width.saturating_sub(if action { 14 } else { 0 })), t.secondary);
+        let label = Span::styled(truncate(&text, width.saturating_sub(if action { 16 } else { 0 })), t.secondary);
         delivery_row(out, bot, task, vec![label], width, action);
     }
 }
@@ -125,9 +125,9 @@ fn delivery_row(
 ) {
     let mut line = Line::from(label);
     if action {
-        let label = tr(if task.status == "started" { "Pause" } else { "Continue" });
+        let (symbol, label) = if task.status == "started" { ("■", "Pause") } else { ("▶", "Continue") };
         let start = line.width();
-        line.spans.push(Span::styled(format!(" [{label}]"), theme().bold));
+        line.spans.push(Span::styled(format!(" [{symbol} {}]", tr(label)), theme().bold));
         out.buttons.push((
             out.lines.len(),
             u(start),
@@ -164,8 +164,8 @@ pub(super) fn delivery_controls(buf: &mut Buffer, area: Rect, app: &App, tasks: 
     }
 }
 
-/// 生成一行活动标签，为状态和用时预留空间，长名称优先截断。
-fn activity_label(app: &App, bot: &Bot, width: usize, member: bool) -> Vec<Span<'static>> {
+/// 生成活动标签，有派工操作时由行末按钮提供唯一图标。
+fn activity_label(app: &App, bot: &Bot, width: usize, member: bool, has_action: bool) -> Vec<Span<'static>> {
     let t = theme();
     let text = if bot.activity.is_empty() { tr("Working…") } else { tr(&bot.activity) };
     if !member {
@@ -180,7 +180,7 @@ fn activity_label(app: &App, bot: &Bot, width: usize, member: bool) -> Vec<Span<
     let text = truncate(text.as_ref(), room.saturating_sub(super::super::md::width(&name)));
     let (mark, style) = if bot.status == Status::NeedsInput { ("◆", t.amber) } else { (spin(app), t.secondary) };
     vec![
-        Span::styled(format!(" {mark} "), style),
+        Span::styled(if has_action { " ".into() } else { format!(" {mark} ") }, style),
         Span::styled(format!("{name}: "), name_style(&bot.color)),
         Span::styled(text, style),
         Span::styled(format!(" {timer}"), t.dim),

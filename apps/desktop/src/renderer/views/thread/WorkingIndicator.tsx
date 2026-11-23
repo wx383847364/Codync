@@ -23,7 +23,7 @@ export function WorkingIndicator({ bot, entries, group, action }: { bot: Bot; en
   const tone = waiting ? 'attention' : 'secondary'
   const status = (
     <HStack as="span" gap={8}>
-      <ThinkingOrb state={waiting ? 'listening' : 'working'} size={16} color={waiting ? 'var(--warning)' : 'var(--secondary)'} />
+      {action ? null : <ThinkingOrb state={waiting ? 'listening' : 'working'} size={16} color={waiting ? 'var(--warning)' : 'var(--secondary)'} />}
       {member ? (
         <HStack as="span" grow className="working-label">
           <Text size="subheadline" tone={tone} truncate>{bot.name}:&nbsp;</Text>
@@ -31,7 +31,7 @@ export function WorkingIndicator({ bot, entries, group, action }: { bot: Bot; en
         </HStack>
       ) : <Text size="subheadline" tone={tone} truncate grow>{activity}</Text>}
       {bot.startedAt ? <Timer since={bot.startedAt} /> : null}
-      {details ? (
+      {details && !action ? (
         <span className={`disclosure-chevron${open ? ' open' : ''}`}>
           <Icon name="chevron.right" size={10} weight="semibold" />
         </span>

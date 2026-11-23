@@ -248,6 +248,13 @@ fn entry_lines(
                             snapshot["basis"].as_u64().unwrap_or(512_000),
                         );
                         head.push(Span::styled(format!(" · {reading}"), t.secondary));
+                        // 和用量共用原有显示条件，未知档位保持空白。
+                        if let Some(model) = member["actualModelName"].as_str() {
+                            let effort = member["reasoning"]
+                                .as_str()
+                                .map_or_else(String::new, |level| format!(" {}", tr(level)));
+                            head.push(Span::styled(format!(" · {model}{effort}"), t.secondary));
+                        }
                     }
                 } else {
                     head.push(Span::styled(" · 待确认新开会话", t.amber));

@@ -236,6 +236,8 @@ pub enum Submit {
     GroupContextOptions {
         room: String,
         members: Vec<(String, bool)>,
+        directory: Option<String>,
+        usage_notes: Vec<String>,
     },
     /// A bot's section (its id): a name, or empty for none.
     Section(String),
@@ -456,6 +458,7 @@ impl App {
                 members.push((bot.to_owned(), true));
             }
         }
+        let room = room.clone();
         self.overlays.push(super::app::Overlay::Fields(Box::new(Fields {
             title: "Member context".into(),
             note: "← → choose a display basis or inspect a member. ↵ confirms.".into(),
@@ -465,8 +468,16 @@ impl App {
             cursor: 0,
             error: None,
             saving: false,
-            submit: Submit::GroupContextOptions { room: room.clone(), members },
+            submit: Submit::GroupContextOptions {
+                room: room.clone(),
+                members,
+                directory: None,
+                usage_notes: Vec::new(),
+            },
         })));
+        if self.group_resource_usage {
+            self.call("groupResourceUsage", json!({"roomId":room}), After::GroupResourceUsage(room));
+        }
     }
 
     /// 查看任何成员的精确用量和真实窗口，不受推荐阈值影响。

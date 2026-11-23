@@ -27,6 +27,8 @@ pub(crate) struct MemberContext {
     pub shared: bool,
     pub backend: String,
     pub model: Option<String>,
+    pub actual_model_name: Option<String>,
+    pub reasoning: Option<String>,
     pub slot: Option<String>,
     pub session: Option<String>,
     pub generation: Option<String>,
@@ -81,6 +83,11 @@ fn context(c: &Connection, room: &BotConfig, bot: &BotConfig) -> Result<MemberCo
         shared,
         backend: effective.backend,
         model: effective.model,
+        actual_model_name: (matches
+            && !matches!(snapshot["modelId"].as_str(), Some("default" | "Default" | "default[]")))
+        .then(|| snapshot["modelName"].as_str().map(str::to_owned))
+        .flatten(),
+        reasoning: matches.then(|| snapshot["reasoning"].as_str().map(str::to_owned)).flatten(),
         slot,
         session,
         generation,
@@ -211,12 +218,52 @@ impl Store {
             .then(|| latest["generation"].as_str())
             .flatten()
             .map_or_else(|| uuid::Uuid::new_v4().to_string(), str::to_owned);
+        let mut snapshot = if latest["session"].as_str() == Some(sid) { latest } else { json!({}) };
+        snapshot["session"] = json!(sid);
+        snapshot["generation"] = json!(generation);
+        snapshot["used"] = json!(used);
+        snapshot["size"] = json!(size);
         tx.execute(
             "INSERT INTO kv(k,v) VALUES(?1,?2) ON CONFLICT(k) DO UPDATE SET v=excluded.v",
-            params![key, json!({"session":sid,"generation":generation,"used":used,"size":size}).to_string()],
+            params![key, snapshot.to_string()],
         )?;
         tx.commit()?;
         Ok(())
+    }
+
+    /// 同槽位且会话一致才更新模型配置；保留用量和内部版本。
+    pub(crate) fn save_scoped_selection(
+        &self,
+        bot: &str,
+        backend: &str,
+        slot: Option<&str>,
+        sid: &str,
+        selection: &Value,
+        replace: bool,
+    ) -> Result<bool> {
+        let key = usage_key(bot, backend, slot);
+        let db = self.db.locked();
+        let Some(raw) = kv(&db, &key)? else { return Ok(false) };
+        let mut snapshot: Value = serde_json::from_str(&raw)?;
+        if snapshot["session"].as_str() != Some(sid) {
+            return Ok(false);
+        }
+        let model_changed = selection["modelId"].is_string() && selection["modelId"] != snapshot["modelId"];
+        let prev = snapshot.clone();
+        if replace || selection["modelId"].is_string() {
+            snapshot["modelId"] = selection["modelId"].clone();
+            if replace || model_changed || selection["modelName"].is_string() {
+                snapshot["modelName"] = selection["modelName"].as_str().or(selection["modelId"].as_str()).into();
+            }
+        }
+        if replace || model_changed || selection.get("reasoning").is_some() {
+            snapshot["reasoning"] = selection["reasoning"].clone();
+        }
+        if snapshot == prev {
+            return Ok(false);
+        }
+        db.execute("UPDATE kv SET v=?2 WHERE k=?1", params![key, snapshot.to_string()])?;
+        Ok(true)
     }
 
     /// 新开会话会更换内部版本，即使执行器复用了同一字符串 ID。
@@ -289,7 +336,8 @@ impl Store {
             };
             let recommended = usage.recommend();
             members.push(json!({"botId":id, "hasSession":usage.session.is_some(),"used":usage.used,"size":usage.size,
-                "shared":usage.shared,"recommended":recommended && !closed,"handoff":handoff}));
+                "shared":usage.shared,"recommended":recommended && !closed,"handoff":handoff,
+                "actualModelName":usage.actual_model_name,"reasoning":usage.reasoning}));
         }
         Ok(json!({"basis":basis,"members":members}))
     }

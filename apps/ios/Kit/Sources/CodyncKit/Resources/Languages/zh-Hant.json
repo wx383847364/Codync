@@ -2036,5 +2036,18 @@
   "The queued task will start with this summary.": "佇列中的任務將帶著這份摘要開始。",
   "Your next message starts a fresh session carrying this summary.": "你的下一則訊息將帶著這份摘要開啟新會話。",
   "This task may exceed the available context. Review what will carry over, then start a new session with the button or /new, or try the current session.": "此任務可能超出剩餘上下文。請查看將帶入的內容，再開啟新會話或嘗試目前的會話。 也可以用 /new 帶著摘要開啟新會話。",
-  "Opening a new session with this summary.": "正在帶著這份摘要開啟新會話。"
+  "Opening a new session with this summary.": "正在帶著這份摘要開啟新會話。",
+  "Resources and usage": "資源與用量",
+  "Group resource storage": "群組資源占用",
+  "Group token usage": "本群組累計用量",
+  "Share of host usage": "本機用量占比",
+  "All conversations on this host: {tokens} Token": "本機所有對話累計 {tokens} Token",
+  "No usage recorded": "暫無統計",
+  "Partial usage records": "部分記錄",
+  "Could not refresh usage.": "無法重新整理用量。",
+  "Could not open the group resource folder.": "無法開啟群組資源資料夾。",
+  "Open in Finder": "在 Finder 中開啟",
+  "Open folder": "開啟資料夾",
+  "Low": "低",
+  "High": "高"
 }

@@ -56,6 +56,7 @@ pub enum After {
     },
     StageUsage(String),
     GroupContexts(String),
+    GroupResourceUsage(String),
     PrivateGroupHandoff(String),
     Connectors,
     Skills,

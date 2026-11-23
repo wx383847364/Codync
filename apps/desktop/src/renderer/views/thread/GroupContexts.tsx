@@ -18,6 +18,8 @@ type MemberContext = {
   hasSession: boolean
   used?: number | null
   size?: number | null
+  actualModelName?: string | null
+  reasoning?: string | null
   shared: boolean
   recommended: boolean
   handoff?: Review | null
@@ -25,6 +27,7 @@ type MemberContext = {
 type Snapshot = { basis: Basis; members: MemberContext[] }
 type Draft = { botId: string; revision: string; deliveryId?: string; text: string }
 type Context = {
+  panelVisible: boolean
   snapshot: Snapshot | null
   disabled: boolean
   error: string | null
@@ -161,7 +164,7 @@ export function GroupContexts({ room, panelVisible, children }: {
     setError(null)
   }
 
-  return <Current.Provider value={roomId ? { snapshot, inspect: setInspected, disabled: busy || !online, error: error ?? refreshError,
+  return <Current.Provider value={roomId ? { panelVisible, snapshot, inspect: setInspected, disabled: busy || !online, error: error ?? refreshError,
     review, setBasis, openReview, updateReview, closeReview, confirm } : null}>
     {children}
     <Sheet open={current != null} onClose={() => setInspected(null)} width={420}>
@@ -271,13 +274,20 @@ export function GroupContextReview() {
   </section>
 }
 
-/** 名字旁只放当前用量，和成员列表用同一档位。 */
+/** 保持原用量标签的出现条件，紧接着显示会话确认的模型和推理档。 */
 export function GroupContextChip({ botId }: { botId?: string | null }) {
+  const tr = useTr()
   const state = useContext(Current)
   const snapshot = state?.snapshot
   const member = snapshot?.members.find(row => row.botId === botId)
   if (!state || !snapshot || !member || member.used == null) return null
-  return <button type="button" className="group-context-chip" onClick={() => state.inspect(member.botId)}>
-    {compact(member.used)} · {percentage(member.used, snapshot.basis)}
-  </button>
+  return <>
+    <button type="button" className="group-context-chip" onClick={() => { /* 只点用量打开当前会话详情。 */ state.inspect(member.botId) }}>
+      {compact(member.used)} · {percentage(member.used, snapshot.basis)}
+    </button>
+    {member.actualModelName && <span className="group-context-model">
+      <span title={member.actualModelName}>{member.actualModelName}</span>
+      {member.reasoning && <span className="group-context-effort">{tr(member.reasoning)}</span>}
+    </span>}
+  </>
 }

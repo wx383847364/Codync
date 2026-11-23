@@ -1,7 +1,6 @@
 import { useLayoutEffect, useRef } from 'react'
 import { isGroup, type Bot, type Entry } from '@shared/models'
 import { IconButton } from '../../components/Controls'
-import { Icon } from '../../components/Icon'
 import { usePresence } from '../../components/Overlay'
 import { HStack } from '../../components/Stack'
 import { Text } from '../../components/Text'
@@ -36,7 +35,7 @@ export function WorkingTransition({ bots, chat, entries }: { bots: Bot[]; chat: 
             // 暂停按钮绑定这次执行的身份，独立于步骤的展开按钮。
             const task = controls.find((row) => row.status === 'started' && row.targetBotId === bot.id)
             return <WorkingIndicator key={`${bot.id}:${bot.startedAt ?? 0}`} bot={bot} entries={entries} group={group} action={task
-              ? <IconButton title="Pause" icon="pause.fill" disabled={!!store.mismatch} onClick={() => store.setDeliveryPaused(chat.id, task.deliveryId, task.startedAt, true)} />
+              ? <IconButton title="Pause" icon="stop.fill" disabled={!!store.mismatch} onClick={() => store.setDeliveryPaused(chat.id, task.deliveryId, task.startedAt, true)} />
               : undefined} />
           })}
           {indicator?.held.map((task) => {
@@ -47,7 +46,6 @@ export function WorkingTransition({ bots, chat, entries }: { bots: Bot[]; chat: 
             return <div key={task.deliveryId} className="group-working-member">
               <div className="working working-with-action" role="group" aria-label={name}>
                 <HStack className="working-action-row" gap={8} align="center">
-                  <Icon name={paused ? 'pause.fill' : 'clock'} size={16} />
                   <Text tone="secondary" size="subheadline" truncate grow title={task.preview}>{name} · {status}{task.preview ? ` · ${task.preview}` : ''}</Text>
                   {paused ? (
                     // 继续后由 Host 更新该任务的等待或执行状态。

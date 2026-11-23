@@ -35,6 +35,35 @@ pub async fn read(hub: &Arc<Hub>, body: &Value) -> Result<Value> {
     Ok(json!({"data": base64::engine::general_purpose::STANDARD.encode(data), "size": size}))
 }
 
+/// 校验群身份后读取用量与文件占用，只有本机调用会收到目录路径。
+pub(super) async fn group_usage(hub: &Arc<Hub>, room: &str, local: bool) -> Result<Value> {
+    let group = hub
+        .store
+        .bot(room)?
+        .filter(|row| !row.deleted && row.config.is_group())
+        .ok_or_else(|| anyhow!("group conversation not found"))?
+        .config;
+    let hub = hub.clone();
+    // 磁盘访问与数据库汇总离开异步线程。远程客户端只接收数值。
+    tokio::task::spawn_blocking(move || {
+        let mut usage = hub.store.group_token_usage(&group.id)?;
+        match files::group_resources(&group) {
+            Ok((bytes, directory)) => {
+                usage["resourceBytes"] = json!(bytes);
+                if local {
+                    usage["resourceDirectory"] = json!(directory);
+                }
+            }
+            Err(error) => {
+                tracing::warn!(%error, "could not read group resources");
+                usage["resourceBytes"] = Value::Null;
+            }
+        }
+        Ok::<_, anyhow::Error>(usage)
+    })
+    .await?
+}
+
 /// 图片资格检查仅接受已有附件 ID 或消息文件 ID，绝不扫描正文中的路径。
 pub async fn info(hub: &Arc<Hub>, body: &Value) -> Result<Value> {
     static READS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(2);

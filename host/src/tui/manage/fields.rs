@@ -4,10 +4,45 @@ use crossterm::event::{KeyCode, KeyEvent};
 use serde_json::{Value, json};
 
 use super::super::app::{App, Editor, Entry, Overlay};
+use super::super::l10n::tr;
 use super::market::connector_inputs;
 use super::{Fields, Input, Reply, Submit, ctrl, newline};
 
 impl App {
+    /// 只更新当前群的会话面板，关闭或切换群后忽略晚到结果。
+    pub(in crate::tui) fn show_group_resource_usage(&mut self, room: &str, usage: Option<&Value>) {
+        let local = self.on_this_computer;
+        let Some(Overlay::Fields(fields)) = self.overlays.last_mut() else { return };
+        let Submit::GroupContextOptions { room: viewed, directory, usage_notes, .. } = &mut fields.submit else {
+            return;
+        };
+        if viewed != room {
+            return;
+        }
+        let Some(usage) = usage else {
+            *usage_notes = vec![tr("Could not refresh usage.").into_owned()];
+            return;
+        };
+        // 未知数字保留破折号，群组及 Host 的范围来自同一快照。
+        let number = |field: &str| usage[field].as_u64().map_or_else(|| "—".into(), |n| n.to_string());
+        let share = usage["share"].as_f64().map_or_else(|| "—".into(), |n| format!("{:.1}%", n * 100.0));
+        *usage_notes = vec![
+            format!("{} · {} B", tr("Group resource storage"), number("resourceBytes")),
+            format!("{} · {} Token", tr("Group token usage"), number("groupTokens")),
+            format!("{} · {share}", tr("Share of host usage")),
+            tr("All conversations on this host: {tokens} Token").replace("{tokens}", &number("hostTokens")),
+        ];
+        if usage["partial"] == true {
+            usage_notes.push(tr("Partial usage records").into_owned());
+        }
+        if local && directory.is_none() {
+            *directory = usage["resourceDirectory"].as_str().map(str::to_owned);
+            if directory.is_some() {
+                fields.choices.push(tr("Open folder").into_owned());
+            }
+        }
+    }
+
     pub(in crate::tui) fn fields_key(&mut self, mut f: Box<Fields>, k: KeyEvent) -> Option<Overlay> {
         if f.saving {
             return if k.code == KeyCode::Esc { None } else { Some(Overlay::Fields(f)) };
@@ -103,7 +138,7 @@ impl App {
                     Reply::FieldsSaved,
                 );
             }
-            Submit::GroupContextOptions { room, members } => {
+            Submit::GroupContextOptions { room, members, directory, .. } => {
                 if let Some(basis) = [256_000, 512_000, 1_000_000].get(f.choice) {
                     self.call(
                         "setGroupContextBasis",
@@ -116,6 +151,16 @@ impl App {
                     } else {
                         self.inspect_member_context(room, bot);
                     }
+                } else if let Some(path) = directory {
+                    // 只有本机 Host 会返回可打开的资源目录。
+                    use crate::analytics::reported::{FileLinkAction, FileLinkOutcome, Reported};
+                    let outcome = if crate::shell::open(std::ffi::OsStr::new(path)) {
+                        FileLinkOutcome::Ok
+                    } else {
+                        self.flash("Could not open the group resource folder.");
+                        FileLinkOutcome::Failed
+                    };
+                    self.track(Reported::FileLinkAction { action: FileLinkAction::Open, outcome });
                 }
             }
             Submit::Section(bot) => {

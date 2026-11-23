@@ -10,6 +10,8 @@ else a generic "Bug fixes and improvements" line. Delete old sections.
 ## 2.50.0
 
 ### zh-Hant
+- 群聊訊息的成員用量旁顯示會話確認的模型和推理等級。
+- 在群組詳情查看檔案占用、累計 Token 及其在主機總用量中的占比。
 - 可用新機器人開啟獨立群組任務，或建立下一階段並按需查閱上一階段的聊天與交接。
 - 可暫停或繼續群組中的單一任務，並將新訊息引導至成員正在執行的回合。
 - 在輸入框鍵入 / 搜尋工作區檔案，選取後以 @檔名帶入訊息。
@@ -18,6 +20,8 @@ else a generic "Bug fixes and improvements" line. Delete old sections.
 - 群組的預設收件者提示只在輸入框空白時顯示。
 
 ### en-US
+- See the confirmed model and reasoning level next to a group member’s context usage.
+- See group storage, total tokens, and the group’s share of Host usage in group details.
 - Start an independent group task with fresh bots, or let a new stage consult the previous chat and handoff on demand.
 - Pause or continue individual group assignments and guide a member during its current turn.
 - Search workspace files with / and insert a file reference into your message.

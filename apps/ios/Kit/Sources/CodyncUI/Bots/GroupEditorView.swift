@@ -120,6 +120,9 @@ public struct GroupEditorView: View {
                             .padding(.top, 10)
                     }
                     .animation(Motion.layout, value: members)
+                    if model.hello?.groupResourceUsage == true {
+                        GroupResourceUsageView(roomId: groupId)
+                    }
                     if let error {
                         Text(L10n.tr(error)).font(.footnote).foregroundStyle(Palette.danger).transition(.opacity)
                     }
@@ -181,6 +184,103 @@ public struct GroupEditorView: View {
                 withAnimation(Motion.fade) { self.error = error.localizedDescription }
             }
             saving = false
+        }
+    }
+}
+
+/// 手机显示 Host 汇总，文件目录在运行 Host 的桌面上打开。
+private struct GroupResourceUsageView: View {
+    private struct Usage: Decodable {
+        let resourceBytes: Int64?
+        let groupTokens: Int64?
+        let hostTokens: Int64?
+        let share: Double?
+        let partial: Bool
+    }
+
+    @Environment(BotStore.self) private var model
+    @State private var usage: Usage?
+    @State private var failed = false
+    let roomId: String
+
+    /// 切换 Host 连接状态会重读统计，取消请求时保留现有读数。
+    private var online: Bool { !model.isOffline && model.mismatch == nil }
+
+    /// 在成员下方显示资源占用、本群累计、占比和 Host 总量。
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(L10n.tr("Resources and usage")).font(.subheadline.weight(.semibold))
+            VStack(alignment: .leading, spacing: 10) {
+                if let usage {
+                    reading("Group resource storage", usage.resourceBytes.map {
+                        ByteCountFormatter.string(fromByteCount: $0, countStyle: .file)
+                    } ?? L10n.tr("Unavailable"), icon: "folder")
+                    Divider()
+                    HStack(alignment: .top) {
+                        reading("Group token usage", usage.groupTokens.map { "\($0.formatted()) Token" }
+                            ?? L10n.tr("No usage recorded"), icon: "chart.bar")
+                        Spacer(minLength: 4)
+                        if let share = usage.share {
+                            VStack(alignment: .trailing, spacing: 2) {
+                                Text(share.formatted(.percent.precision(.fractionLength(0...1)))).fontWeight(.semibold)
+                                Text(L10n.tr("Share of host usage")).font(.caption).foregroundStyle(Palette.secondary)
+                            }
+                        }
+                    }
+                    if let share = usage.share {
+                        Capsule().fill(Palette.bubbleUser).overlay(alignment: .leading) {
+                            // 比例由 Host 计算，进度条只负责绘制。
+                            GeometryReader { proxy in
+                                Capsule().fill(Color.blue).frame(width: proxy.size.width * share)
+                            }
+                        }
+                        .frame(height: 5)
+                        .accessibilityHidden(true)
+                    }
+                    if let total = usage.hostTokens {
+                        Text(L10n.tr("All conversations on this host: {tokens} Token")
+                            .replacingOccurrences(of: "{tokens}", with: total.formatted()))
+                            .font(.caption).foregroundStyle(Palette.secondary)
+                    }
+                    if usage.partial {
+                        Text(L10n.tr("Partial usage records")).font(.caption).foregroundStyle(Palette.secondary)
+                    }
+                    if failed || !online {
+                        Text(L10n.tr("Could not refresh usage.")).font(.caption).foregroundStyle(Palette.secondary)
+                    }
+                } else {
+                    Text(L10n.tr(failed || !online ? "Unavailable" : "Loading…"))
+                        .font(.footnote).foregroundStyle(Palette.secondary)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(12)
+            .background(Palette.surface, in: RoundedRectangle(cornerRadius: 13))
+        }
+        .task(id: online) { await load() }
+    }
+
+    /// 同一行组合图标、标签和数值。
+    private func reading(_ label: String, _ value: String, icon: String) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: icon).frame(width: 28).accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(L10n.tr(label)).font(.footnote)
+                Text(value).font(.callout.weight(.semibold)).monospacedDigit()
+            }
+        }
+    }
+
+    /// 离开群资料页时忽略已取消的读取。
+    private func load() async {
+        guard online else { return }
+        do {
+            let result: Usage = try await model.ready().call("groupResourceUsage", ["roomId": roomId])
+            guard !Task.isCancelled else { return }
+            usage = result
+            failed = false
+        } catch {
+            if !Task.isCancelled { failed = true }
         }
     }
 }

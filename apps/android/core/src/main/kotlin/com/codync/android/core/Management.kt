@@ -87,6 +87,7 @@ data class GroupSessionContexts(val basis: Long, val members: List<Member>) {
     @Serializable data class Member(
         val botId: String, val hasSession: Boolean, val used: Long? = null, val size: Long? = null,
         val shared: Boolean, val recommended: Boolean, val handoff: Review? = null,
+        val actualModelName: String? = null, val reasoning: String? = null,
     )
 
     @Serializable data class Review(
