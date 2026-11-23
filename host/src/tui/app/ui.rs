@@ -408,6 +408,8 @@ pub enum Click {
     /// The port in the chat's header: opens the bot's dev servers.
     DevServers,
     GroupContexts,
+    /// 消息头直接打开该成员的摘要，沿用成员页的权限与状态检查。
+    MemberSession(String, String),
     /// A section's label (its name): folds or unfolds it, like `z`.
     Section(String),
 }

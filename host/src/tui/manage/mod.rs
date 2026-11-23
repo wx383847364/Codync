@@ -407,7 +407,7 @@ fn context_percent(used: u64, capacity: u64) -> String {
     format!("{}.{:01}%", tenths / 10, tenths % 10)
 }
 
-/// 当前选择的基准只控制显示，超过档位的比例原样显示。
+/// 当前基准显示真实占比并决定推荐提示，不改变模型的任务预算。
 pub(in crate::tui) fn context_reading(member: &Value, basis: u64) -> String {
     member["used"].as_u64().map_or_else(
         || {
@@ -421,7 +421,7 @@ pub(in crate::tui) fn context_reading(member: &Value, basis: u64) -> String {
     )
 }
 
-/// 只有待确认派工或真实窗口达到阈值才有主动入口。
+/// 待确认派工和达到显示档位 70% 的成员均保留主动入口。
 pub(in crate::tui) fn context_action(member: &Value) -> bool {
     match member["handoff"]["phase"].as_str() {
         Some("draft") => true,

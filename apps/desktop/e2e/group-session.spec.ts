@@ -449,11 +449,11 @@ test('capacity handoffs continue the original group dispatch in a new session', 
       await typeMessage(page, 'Seed context just below half')
       await expect(page.getByText('Below threshold', { exact: true })).toBeVisible()
       await expect(card.getByText('15K', { exact: true })).toBeVisible()
-      // 取整后的 15K 不能触发推荐，右侧只使用 Host 的实际窗口判断。
+      // 显示占比未到 70% 不触发主动推荐，容量不足的原派工仍可进入摘要。
       await expect(card.getByRole('button', { name: 'Open new session' })).toHaveCount(0)
       await typeMessage(page, 'Seed context pressure')
       await expect(page.getByText('Pressure seeded', { exact: true })).toBeVisible()
-      await expect(card.getByRole('button', { name: 'Open new session' })).toBeVisible()
+      await expect(card.getByRole('button', { name: 'Open new session' })).toHaveCount(0)
       await typeMessage(page, 'Continue the original group assignment')
       await expect(page.getByText('Waiting for a new session', { exact: false })).toBeVisible()
       await expect(card.getByText('29K', { exact: true })).toBeVisible()
@@ -533,6 +533,94 @@ test('full group deletion removes the exclusive bot and keeps the copied group',
   } finally {
     // 清理只涉及此用例创建的沙箱数据。
     for (const id of ids) await api(page, 'deleteBot', { botId: id }).catch(() => {})
+    await browser.close()
+  }
+})
+
+/** 两处新开入口按显示档位的精确 70% 同步，普通群摘要仍只在私聊确认。 */
+test('seventy percent recommendations open the same review from a closed sidebar', async () => {
+  const { browser, page } = await attach()
+  const workspace = mkdtempSync(join(tmpdir(), 'codync-session70-'))
+  const ids: string[] = []
+  try {
+    for (const shared of [false, true]) {
+      const cwd = join(workspace, shared ? 'shared' : 'isolated')
+      mkdirSync(cwd)
+      writeFileSync(join(cwd, 'group-script.json'), JSON.stringify({ steps: [
+        { reply: 'Below display threshold', usage: { used: 179199, size: 1000000 } },
+        { reply: 'At display threshold', usage: { used: 179200, size: 1000000 } },
+        { reply: 'Continued in the new session', usage: { used: 12000, size: 1000000 } },
+      ] }))
+      // 自动整理不消耗派工步骤，验收会话只统计真实群任务。
+      writeFileSync(join(cwd, 'group-compact.json'), JSON.stringify({ usage: { used: 179199, size: 1000000 } }))
+      const name = `Session70 ${shared ? 'shared' : 'isolated'} ${Date.now()}`
+      const { bot } = await api<{ bot: Group }>(page, 'createBot', {
+        name, cwd, backend: 'custom', command: `python3 -u '${join(__dirname, '../../../host/tests/fixtures/team_agent.py')}'`,
+        connectors: [], skills: [], notify: false,
+      })
+      ids.unshift(bot.id)
+      const { bot: original } = await api<{ bot: Group }>(page, 'createBot', { name: `Threshold group ${Date.now()}`, kind: 'group', members: [bot.id] })
+      ids.unshift(original.id)
+      const group = shared ? original : (await api<{ bot: Group }>(page, 'createGroupSession', { botId: original.id })).bot
+      if (!shared) ids.unshift(group.id)
+      const groupRow = page.locator('.roster-row').getByText(group.name, { exact: true })
+      await groupRow.click()
+      const detailsButton = page.getByRole('button', { name: `${group.name}, view details`, exact: true })
+      await detailsButton.click()
+      const sidebar = page.locator('.side-panel')
+      const overview = sidebar.getByRole('region', { name: 'Member context' })
+      await overview.getByRole('button', { name: '256K', exact: true }).click()
+      await typeMessage(page, 'Seed the usage below seventy percent')
+      await expect(page.getByText('Below display threshold', { exact: true })).toBeVisible()
+      // 真实值仍差一个 token，不使用已经舍入到 70.0% 的界面文字判断。
+      await expect(page.locator('.group-context-chip')).toContainText('70.0%')
+      await expect(page.getByRole('button', { name: 'Open new session', exact: true })).toHaveCount(0)
+      await typeMessage(page, 'Seed exactly seventy percent')
+      await expect(page.getByText('At display threshold', { exact: true })).toBeVisible()
+      await expect(page.getByRole('button', { name: 'Open new session', exact: true })).toHaveCount(2)
+      for (const basis of ['512K', '1M']) {
+        await overview.getByRole('button', { name: basis, exact: true }).click()
+        await expect(page.getByRole('button', { name: 'Open new session', exact: true })).toHaveCount(0)
+      }
+      await overview.getByRole('button', { name: '256K', exact: true }).click()
+      await expect(page.getByRole('button', { name: 'Open new session', exact: true })).toHaveCount(2)
+      // 截图作为验收证据留在仓外，不进入源码或正式资源。
+      await page.screenshot({ path: join(tmpdir(), `codync-session70-${shared ? 'shared' : 'isolated'}.png`) })
+      await detailsButton.click()
+      // 无侧栏时点击消息头入口，也必须成功打开同一摘要，而不能静默无响应。
+      const headerAction = page.locator('.conversation').getByRole('button', { name: 'Open new session', exact: true })
+      await expect(headerAction).toBeVisible()
+      await headerAction.click()
+      if (shared) {
+        const privateCard = page.locator('.handoff-card')
+        await expect(privateCard.getByRole('button', { name: 'Start new session with summary' })).toBeVisible()
+        await privateCard.getByRole('button', { name: 'Start new session with summary' }).click()
+        await groupRow.click()
+      } else {
+        const review = sidebar.getByRole('region', { name: 'Open new session' })
+        await expect(review).toBeVisible()
+        await review.getByRole('textbox').fill('Edited summary from the message header')
+        // 取消再从成员行打开，仍是同一套准备及确认流程。
+        await review.getByRole('button', { name: 'Cancel', exact: true }).click()
+        await overview.getByRole('button', { name: 'Open new session', exact: true }).click()
+        await review.getByRole('textbox').fill('Edited summary from the member row')
+        await review.getByRole('button', { name: 'Confirm new session', exact: true }).click()
+      }
+      await typeMessage(page, 'Continue after the reviewed summary')
+      await expect(page.getByText('Continued in the new session', { exact: true })).toBeVisible()
+      const prompts = readFileSync(join(cwd, 'prompt-requests.jsonl'), 'utf8').trim().split('\n')
+        // 夹具只记录 ACP 入参，校验确认后实际更换了会话身份。
+        .map(line => JSON.parse(line) as { sessionId: string; prompt: { text: string }[] })
+        // 固定 64K 整理目标可能额外产生 /compact，不属于原派工。
+        .filter(request => !request.prompt[0]!.text.startsWith('/compact'))
+      expect(prompts).toHaveLength(3)
+      expect(prompts[2]!.sessionId).not.toBe(prompts[1]!.sessionId)
+      if (!shared) expect(prompts[2]!.prompt[0]!.text).toContain('Edited summary from the member row')
+    }
+  } finally {
+    // 本测试只清除自己创建的成员、群及夹具，保留其他沙箱数据。
+    for (const id of ids) await api(page, 'deleteBot', { botId: id }).catch(() => {})
+    rmSync(workspace, { recursive: true, force: true })
     await browser.close()
   }
 })

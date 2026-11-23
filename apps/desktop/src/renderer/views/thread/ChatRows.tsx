@@ -84,12 +84,12 @@ function LivePermission({ entry }: { entry: Entry }) {
 }
 
 /** Who wrote a message: their avatar and name in their color, or `name` for a bot on another computer. */
-/** 最新群回复旁显示待确认的派工入口。 */
+/** 最新群回复旁显示用量和摘要入口；窄窗口按完整控件换行。 */
 export function AuthorLabel({ botId, name, groupHandoffCard, latestAuthor }: { botId?: string | null; name?: string; groupHandoffCard?: string; latestAuthor?: boolean }) {
   const store = useStore()
   const bot = botId ? store.bots.get(botId) : undefined
   return (
-    <HStack gap={8}>
+    <HStack gap={8} wrap>
       {bot ? <BotAvatar bot={bot} size={26} animated={false} /> : null}
       <Text size="subheadline" weight="medium" tone="secondary" style={bot ? { color: avatarColor(bot.avatarColor) } : undefined}>{store.authorName(botId, name)}</Text>
       {latestAuthor ? <GroupContextChip botId={botId} /> : null}

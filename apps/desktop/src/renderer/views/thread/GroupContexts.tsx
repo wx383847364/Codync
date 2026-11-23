@@ -53,9 +53,10 @@ function percentage(used: number | null | undefined, total: number) {
 }
 
 /** 成员列表和聊天名字旁共用一份用量快照，关闭侧栏仍可看消息标签。 */
-export function GroupContexts({ room, panelVisible, children }: {
+export function GroupContexts({ room, panelVisible, openPanel, children }: {
   room: Bot | null
   panelVisible: boolean
+  openPanel: () => void
   children: ReactNode
 }) {
   const store = useStore()
@@ -66,6 +67,7 @@ export function GroupContexts({ room, panelVisible, children }: {
   const [inspected, setInspected] = useState<string | null>(null)
   const [review, setReview] = useState<Draft | null>(null)
   const reviewRequest = useRef(0)
+  const wasPanelVisible = useRef(panelVisible)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [refreshError, setRefreshError] = useState<string | null>(null)
@@ -89,14 +91,20 @@ export function GroupContexts({ room, panelVisible, children }: {
     return () => { valid = false; clearTimeout(timer) }
   }, [store, roomId, stamp, online])
 
-  // 关闭侧栏或切换群时废弃尚未完成的导航响应，避免跳进无关私聊。
+  // 从消息头打开侧栏不能使正在准备的摘要失效；仅关闭现有侧栏时取消。
   useLayoutEffect(() => {
-    if (!panelVisible) {
+    if (wasPanelVisible.current && !panelVisible) {
+      reviewRequest.current += 1
       setReview(null)
       setError(null)
     }
-    return () => { reviewRequest.current += 1 }
+    wasPanelVisible.current = panelVisible
   }, [panelVisible])
+
+  useLayoutEffect(() => {
+    // 切群或卸载后不再接受旧群的摘要响应，也不跳到无关私聊。
+    return () => { reviewRequest.current += 1 }
+  }, [roomId])
 
   /** 档位由 Host 保存，成员列表和聊天共用同一个响应。 */
   async function setBasis(basis: Basis) {
@@ -113,7 +121,8 @@ export function GroupContexts({ room, panelVisible, children }: {
 
   /** 优先审阅原派工的交接，共享摘要跳到对应私聊卡。 */
   async function openReview(member: MemberContext) {
-    if (!roomId || !panelVisible || busy) return
+    if (!roomId || !online || busy) return
+    openPanel()
     const request = ++reviewRequest.current
     setBusy(true)
     setError(null)
@@ -205,7 +214,7 @@ export function GroupContextHeading() {
   </div>
 }
 
-/** 只有 Host 推荐或有待确认派工时才显示动作，正在切换时显示状态。 */
+/** 成员行和消息头共用推荐入口，确认后的等待状态不允许重复操作。 */
 export function GroupContextAction({ botId }: { botId: string }) {
   const state = useGroupContexts()
   const tr = useTr()
@@ -216,8 +225,8 @@ export function GroupContextAction({ botId }: { botId: string }) {
   }
   if (!member.recommended && member.handoff?.phase !== 'draft') return null
   return <Button className="group-context-action" kind="secondary" disabled={state.disabled}
-    title={member.shared ? 'This also starts a new private session' : undefined}
-    onClick={() => { /* 普通群的摘要打开对应私聊。 */ void state.openReview(member) }}>Open new session</Button>
+    title={tr(member.shared ? 'This also starts a new private session' : 'Summary for the new session')}
+    onClick={() => { /* 普通群的摘要打开对应私聊。 */ void state.openReview(member) }}><Icon name="arrow.clockwise" size={12} /> {tr('Open new session')}</Button>
 }
 
 /** 成员行的进度条跟随显示档，点读数可查看精确用量与实际模型窗口。 */
@@ -274,20 +283,21 @@ export function GroupContextReview() {
   </section>
 }
 
-/** 保持原用量标签的出现条件，紧接着显示会话确认的模型和推理档。 */
+/** 最近一条成员消息显示实时读数、模型和新开入口，历史消息不重复堆按钮。 */
 export function GroupContextChip({ botId }: { botId?: string | null }) {
   const tr = useTr()
   const state = useContext(Current)
   const snapshot = state?.snapshot
   const member = snapshot?.members.find(row => row.botId === botId)
-  if (!state || !snapshot || !member || member.used == null) return null
+  if (!state || !snapshot || !member) return null
   return <>
-    <button type="button" className="group-context-chip" onClick={() => { /* 只点用量打开当前会话详情。 */ state.inspect(member.botId) }}>
+    {member.used != null && <button type="button" className={`group-context-chip${member.recommended ? ' recommended' : ''}`} onClick={() => { /* 只点用量打开当前会话详情。 */ state.inspect(member.botId) }}>
       {compact(member.used)} · {percentage(member.used, snapshot.basis)}
-    </button>
+    </button>}
     {member.actualModelName && <span className="group-context-model">
       <span title={member.actualModelName}>{member.actualModelName}</span>
       {member.reasoning && <span className="group-context-effort">{tr(member.reasoning)}</span>}
     </span>}
+    <GroupContextAction botId={member.botId} />
   </>
 }
