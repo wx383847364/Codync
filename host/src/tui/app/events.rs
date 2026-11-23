@@ -206,6 +206,7 @@ impl App {
                 match after {
                     After::Hello => self.error = Some(e),
                     After::Tracked | After::GroupContexts(_) => {}
+                    After::GroupResourceUsage(room) => self.show_group_resource_usage(&room, None),
                     After::History(id) => {
                         self.history_busy.remove(&id);
                     }
@@ -275,6 +276,7 @@ impl App {
                 self.stage_roster = v["stageRoster"] == true;
                 self.bot_session_usage = v["botSessionUsage"] == true;
                 self.group_session_contexts = v["groupSessionContexts"] == true;
+                self.group_resource_usage = v["groupResourceUsage"] == true;
                 self.stage_groups = v["stageGroups"] == true;
                 self.task_group_contexts = v["taskGroupContexts"] == true;
                 self.mismatch = crate::compat::check(env!("CARGO_PKG_VERSION"), crate::compat::MIN_HOST, &v);
@@ -370,6 +372,7 @@ impl App {
                     self.group_contexts = Some((room, v));
                 }
             }
+            After::GroupResourceUsage(room) => self.show_group_resource_usage(&room, Some(&v)),
             After::PrivateGroupHandoff(expected) => {
                 if let Some((bot, entry)) = Entry::parse(&v["entry"])
                     && bot == expected

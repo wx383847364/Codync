@@ -44,6 +44,56 @@ pub fn root(bot: &str) -> PathBuf {
     crate::service::data_dir().join("bots").join(bot).join("files")
 }
 
+/// 只读取本群的共享快照和上传文件；共享工作目录、链接和正在写入的快照不计入。
+pub(crate) fn group_resources(config: &crate::store::BotConfig) -> Result<(u64, Option<PathBuf>)> {
+    let shares = root(&config.id);
+    let uploads = super::uploads::root(config);
+    let parent = shares.parent().context("group resource folder")?;
+    if !resource_directory(parent)? {
+        return Ok((0, None));
+    }
+    let mut bytes = 0u64;
+    for (path, is_upload) in [(&shares, false), (&uploads, true)] {
+        if !resource_directory(path)? {
+            continue;
+        }
+        // 上传按 UUID 分目录，快照用 UUID 作文件名。只读取这两个现有存储布局。
+        let Some(entries) = resource_metadata(std::fs::read_dir(path))? else { continue };
+        for entry in entries {
+            let entry = entry?;
+            if uuid::Uuid::parse_str(&entry.file_name().to_string_lossy()).is_err() {
+                continue;
+            }
+            let Some(meta) = resource_metadata(entry.metadata())? else { continue };
+            if is_upload && meta.is_dir() {
+                let Some(files) = resource_metadata(std::fs::read_dir(entry.path()))? else { continue };
+                for file in files {
+                    if let Some(meta) = resource_metadata(file?.metadata())?.filter(std::fs::Metadata::is_file) {
+                        bytes = bytes.saturating_add(meta.len());
+                    }
+                }
+            } else if !is_upload && meta.is_file() {
+                bytes = bytes.saturating_add(meta.len());
+            }
+        }
+    }
+    Ok((bytes, Some(parent.to_path_buf())))
+}
+
+/// 空群没有目录是正常情况；符号链接不能扩大群资源的归属范围。
+fn resource_directory(path: &Path) -> Result<bool> {
+    Ok(resource_metadata(std::fs::symlink_metadata(path))?.is_some_and(|meta| meta.is_dir()))
+}
+
+/// 扫描时可能并发删除文件，已删除的文件按当前快照跳过，其他错误继续报告。
+fn resource_metadata<T>(value: std::io::Result<T>) -> Result<Option<T>> {
+    match value {
+        Ok(value) => Ok(Some(value)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error.into()),
+    }
+}
+
 /// 将分享文件的 UUID 限制在已确认聊天的快照目录。
 pub(crate) fn path(root: &Path, id: &str) -> Result<PathBuf> {
     let id = uuid::Uuid::parse_str(id).context("invalid file id")?;

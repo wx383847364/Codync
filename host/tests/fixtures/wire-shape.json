@@ -239,6 +239,7 @@
     "hello.device": "string",
     "hello.fileImageInfo": "bool",
     "hello.groupMemberPicker": "bool",
+    "hello.groupResourceUsage": "bool",
     "hello.groupSessionContexts": "bool",
     "hello.groupSessions": "bool",
     "hello.home": "string",

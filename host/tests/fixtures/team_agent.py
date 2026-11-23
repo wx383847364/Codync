@@ -301,6 +301,9 @@ def prompt(request):
             # 模拟 FirstMessage adapter 的原生自行整理，下一回合必须重新补发 profile。
             if script.get("compacted"):
                 update({"sessionUpdate": "compaction_update", "compactionId": "group-script-compact", "status": "completed"})
+            if "sessionOptionUpdate" in script:
+                # 推理档可在既有会话里变化，保持它与后续上下文上报分开。
+                update({"sessionUpdate": "config_option_update", "configOptions": script["sessionOptionUpdate"]})
             if "usage" in script:
                 update({"sessionUpdate": "usage_update", **script["usage"]})
             if "readStageHandoff" in script:
@@ -440,6 +443,10 @@ for line in sys.stdin:
             # 设置模型只回 ACK，不重发配置列表，Host 应记录确认后的选择。
             result["configOptions"] = [{"id": "model", "type": "select", "category": "model",
                 "currentValue": "old", "options": [{"value": "old", "name": "Old"}, {"value": "new", "name": "New"}]}]
+        session_options = pathlib.Path("session-options.json")
+        if session_options.exists():
+            # 仅显式配置该夹具的测试才覆盖实际会话目录与当前值。
+            result["configOptions"] = json.loads(session_options.read_text())
         send({"id": request["id"], "result": result})
     elif method == "session/set_model":
         # 用于执行中更改配置的回归；当前回合仍按旧模型身份完成。

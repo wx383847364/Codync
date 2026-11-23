@@ -77,6 +77,7 @@ pub(super) async fn call(hub: &Arc<Hub>, caller: &Caller, method: &str, b: Value
                 "stageRoster": true,
                 "botSessionUsage": true,
                 "groupSessionContexts": true,
+                "groupResourceUsage": true,
                 "stageGroups": true,
                 "taskGroupContexts": true,
                 "workspaceFileSearch": true,

@@ -282,12 +282,13 @@ private fun AppState.chatEntries(bot: Bot) = entries.filter { it.botId == bot.id
                     }
                     else {
                         val author = item.entry.data.text("author")
-                        val used = groupContexts?.members?.firstOrNull { item.latestAuthor && it.botId == author }?.used
-                        val details = used?.let { "${groupContextCompact(it)} · ${groupContextPercent(it, groupContexts.basis)}" }
+                        val reading = groupContexts?.members?.firstOrNull { item.latestAuthor && it.botId == author }
+                        val details = reading?.used?.let { "${groupContextCompact(it)} · ${groupContextPercent(it, groupContexts.basis)}" }
                         ChatRow(item.entry, item.groupStart, item.handoffPending, details, { author?.let(inspectContext) }, bot, state, store, openTrace = { store.showTrace(true) },
                         // An update card takes the composer's place, so there's nothing to reply with.
                         reply = if (item.entry.isReplyable && state.mismatch == null) { { reply(item.entry) } } else null, connect = connect,
-                        addFallback = addFallback, openArtifact = openArtifact, saveSharedFile = saveSharedFile)
+                        addFallback = addFallback, openArtifact = openArtifact, saveSharedFile = saveSharedFile,
+                        contextModel = reading?.actualModelName, contextReasoning = reading?.reasoning)
                     }
                 }
                 is ChatItem.Pending -> PendingBubble(item.send, item.groupStart, state, store)

@@ -2036,5 +2036,18 @@
   "The queued task will start with this summary.": "L’attività in coda partirà con questo riepilogo.",
   "Your next message starts a fresh session carrying this summary.": "Il prossimo messaggio avvierà una nuova sessione con questo riepilogo.",
   "This task may exceed the available context. Review what will carry over, then start a new session with the button or /new, or try the current session.": "Questa attività potrebbe superare il contesto disponibile. Rivedi cosa verrà trasferito, poi avvia una nuova sessione o prova quella attuale. Puoi accettare il riepilogo anche con /new.",
-  "Opening a new session with this summary.": "Apertura di una nuova sessione con questo riepilogo."
+  "Opening a new session with this summary.": "Apertura di una nuova sessione con questo riepilogo.",
+  "Resources and usage": "Risorse e utilizzo",
+  "Group resource storage": "Spazio delle risorse del gruppo",
+  "Group token usage": "Utilizzo dei token del gruppo",
+  "Share of host usage": "Quota di utilizzo dell’host",
+  "All conversations on this host: {tokens} Token": "Tutte le conversazioni su questo host: {tokens} token",
+  "No usage recorded": "Nessun utilizzo registrato",
+  "Partial usage records": "Dati di utilizzo parziali",
+  "Could not refresh usage.": "Impossibile aggiornare l’utilizzo.",
+  "Could not open the group resource folder.": "Impossibile aprire la cartella delle risorse.",
+  "Open in Finder": "Apri nel Finder",
+  "Open folder": "Apri cartella",
+  "Low": "Basso",
+  "High": "Alto"
 }

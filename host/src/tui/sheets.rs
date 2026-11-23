@@ -391,7 +391,11 @@ pub fn agent(buf: &mut Buffer, area: Rect, app: &App, a: &AgentSetup) {
 pub fn fields(buf: &mut Buffer, area: Rect, f: &Fields) {
     let t = theme();
     let tall = f.inputs.iter().any(|i| i.multiline);
-    let h = if tall { 20 } else { u(f.inputs.len() * 2 + usize::from(f.choices.len() > 1) * 2 + 8) };
+    let usage = match &f.submit {
+        Submit::GroupContextOptions { usage_notes, .. } => usage_notes.as_slice(),
+        _ => &[],
+    };
+    let h = if tall { 20 } else { u(f.inputs.len() * 2 + usize::from(f.choices.len() > 1) * 2 + 8 + usage.len()) };
     let r = centered(area, 84, h);
     let title = tr(&f.title);
     let note = tr(&f.note);
@@ -399,6 +403,10 @@ pub fn fields(buf: &mut Buffer, area: Rect, f: &Fields) {
     let mut y = inner.y;
     put(buf, inner.x, y, inner.width, &truncate(note.as_ref(), usize::from(inner.width)), t.dim.patch(t.panel));
     y += 2;
+    for note in usage {
+        put(buf, inner.x, y, inner.width, &truncate(note, usize::from(inner.width)), t.dim.patch(t.panel));
+        y += 1;
+    }
     let label_w = 18u16;
     let vx = inner.x + label_w;
     let vw = inner.width.saturating_sub(label_w);

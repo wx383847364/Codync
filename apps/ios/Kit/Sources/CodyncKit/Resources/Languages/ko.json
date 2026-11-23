@@ -2036,5 +2036,18 @@
   "The queued task will start with this summary.": "대기 중인 작업은 이 요약과 함께 시작됩니다.",
   "Your next message starts a fresh session carrying this summary.": "다음 메시지부터 이 요약을 포함한 새 세션이 시작됩니다.",
   "This task may exceed the available context. Review what will carry over, then start a new session with the button or /new, or try the current session.": "이 작업은 남은 컨텍스트를 초과할 수 있습니다. 전달할 내용을 확인하고 새 세션을 시작하거나 현재 세션에서 시도하세요. /new 명령으로도 요약과 함께 시작할 수 있습니다.",
-  "Opening a new session with this summary.": "이 요약과 함께 새 세션을 여는 중입니다."
+  "Opening a new session with this summary.": "이 요약과 함께 새 세션을 여는 중입니다.",
+  "Resources and usage": "리소스 및 사용량",
+  "Group resource storage": "그룹 리소스 저장 공간",
+  "Group token usage": "그룹 토큰 사용량",
+  "Share of host usage": "호스트 사용량 비율",
+  "All conversations on this host: {tokens} Token": "이 호스트의 모든 대화: {tokens} 토큰",
+  "No usage recorded": "사용 기록 없음",
+  "Partial usage records": "일부 사용 기록",
+  "Could not refresh usage.": "사용량을 새로고침할 수 없습니다.",
+  "Could not open the group resource folder.": "리소스 폴더를 열 수 없습니다.",
+  "Open in Finder": "Finder에서 열기",
+  "Open folder": "폴더 열기",
+  "Low": "낮음",
+  "High": "높음"
 }

@@ -2036,5 +2036,18 @@
   "The queued task will start with this summary.": "Задача из очереди начнётся с этой сводки.",
   "Your next message starts a fresh session carrying this summary.": "Следующее сообщение начнёт новую сессию с этой сводкой.",
   "This task may exceed the available context. Review what will carry over, then start a new session with the button or /new, or try the current session.": "Эта задача может превысить доступный контекст. Проверьте, что будет перенесено, затем начните новую сессию или попробуйте текущую. Команда /new тоже принимает сводку.",
-  "Opening a new session with this summary.": "Открывается новая сессия с этой сводкой."
+  "Opening a new session with this summary.": "Открывается новая сессия с этой сводкой.",
+  "Resources and usage": "Ресурсы и использование",
+  "Group resource storage": "Хранилище ресурсов группы",
+  "Group token usage": "Расход токенов группы",
+  "Share of host usage": "Доля расхода на хосте",
+  "All conversations on this host: {tokens} Token": "Все разговоры на этом хосте: {tokens} токенов",
+  "No usage recorded": "Нет данных об использовании",
+  "Partial usage records": "Неполные данные об использовании",
+  "Could not refresh usage.": "Не удалось обновить данные об использовании.",
+  "Could not open the group resource folder.": "Не удалось открыть папку ресурсов.",
+  "Open in Finder": "Открыть в Finder",
+  "Open folder": "Открыть папку",
+  "Low": "Низкий",
+  "High": "Высокий"
 }

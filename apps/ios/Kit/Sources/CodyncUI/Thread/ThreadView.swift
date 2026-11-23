@@ -141,6 +141,7 @@ public struct ThreadView: View {
                     "\(groupContextCompact(used)) · \($0)"
                 }}
                 ChatRow(entry: e, groupStart: groupStart, handoffPending: item.handoffPending, groupContextLabel: label,
+                        contextModel: reading?.actualModelName, contextReasoning: reading?.reasoning,
                         inspectContext: { inspectingContext = e.data.author }, chat: bot, openTrace: { showTrace = true },
                         // An update card takes the composer's place, so there's nothing to reply with.
                         reply: e.isReplyable && model.mismatch == nil ? { reply(to: e) } : nil,

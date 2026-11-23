@@ -44,6 +44,8 @@ public struct GroupSessionContexts: Decodable, Sendable {
         public var hasSession: Bool
         public var used: Int?
         public var size: Int?
+        public var actualModelName: String?
+        public var reasoning: String?
         public var shared: Bool
         public var recommended: Bool
         public var handoff: Review?
