@@ -110,7 +110,7 @@ pub(super) fn stage_group_view(buf: &mut Buffer, area: Rect, app: &App, stage: &
             )
         };
         put(buf, inner.x, inner.bottom() - 2, inner.width, &summary, t.dim);
-    } else if stage.from_stage() && (stage.handoff.is_some() || !app.optional_stage_setup) {
+    } else if stage.has_stage_source() && (stage.handoff.is_some() || !app.optional_stage_setup) {
         let summary = stage.handoff.as_ref().map_or_else(
             || tr("Review and accept a handoff in Stage details first.").into_owned(),
             |file| {

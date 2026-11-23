@@ -12,6 +12,7 @@ use super::buffer::{fill, hline, put, put_line, restyle, rput, u};
 use super::style::{avatar, glyph, theme};
 use super::time::{elapsed, when};
 
+/// 绘制会话列表及分组，已归档阶段使用独立的可折叠分组。
 pub(super) fn roster(buf: &mut Buffer, r: Rect, app: &mut App, narrow: bool) {
     let t = theme();
     app.hits.roster = r;
@@ -80,7 +81,7 @@ pub(super) fn roster(buf: &mut Buffer, r: Rect, app: &mut App, narrow: bool) {
                 section_row(buf, Rect::new(x0, yy, wd, 1), cursor_bar, name, *count, *unread, *folded);
             }
             RosterLine::Archives { count, folded, .. } => {
-                section_row(buf, Rect::new(x0, yy, wd, 1), cursor_bar, &tr("Archived stages"), *count, 0, *folded)
+                section_row(buf, Rect::new(x0, yy, wd, 1), cursor_bar, &tr("Archived stages"), *count, 0, *folded);
             }
             RosterLine::StageMember(b, lead) => {
                 bot_row(buf, Rect::new(x0 + 2, yy, wd.saturating_sub(2), 2), app, b, cursor_bar);

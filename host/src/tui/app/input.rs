@@ -4,6 +4,8 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent,
 use ratatui::layout::Position;
 use serde_json::json;
 
+use crate::store::StageGroup;
+
 use super::editor::move_line;
 use super::{
     After, App, Click, Confirm, ConfirmAct, Editor, Field, Focus, Goto, GroupField, Kind, Mark, NewBotField, Overlay,
@@ -107,7 +109,7 @@ impl App {
             self.typing = false;
             return;
         };
-        if self.bots.get(&key).and_then(|bot| bot.stage.as_ref()).is_some_and(|stage| stage.read_only()) {
+        if self.bots.get(&key).and_then(|bot| bot.stage.as_ref()).is_some_and(StageGroup::read_only) {
             self.typing = false;
             self.flash("Stage closed");
             return;

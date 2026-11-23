@@ -5,6 +5,8 @@ use ratatui::layout::{Position, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
+use crate::store::StageGroup;
+
 use super::super::app::{App, Click, Editor, Entry, Mark, SlashAction, Status};
 use super::super::l10n::tr;
 use super::super::md::{truncate, width as w};
@@ -117,7 +119,7 @@ pub(super) fn chat(buf: &mut Buffer, r: Rect, app: &mut App, narrow: bool) {
     }
 
     // Composer at the bottom.
-    let stage_closed = b.stage.as_ref().is_some_and(|stage| stage.read_only());
+    let stage_closed = b.stage.as_ref().is_some_and(StageGroup::read_only);
     let draft = if stage_closed { Editor::default() } else { app.draft() };
     let inner = usize::from(r.width.saturating_sub(4)).max(1);
     let (clines, cursor) = composer_lines(&draft, inner);

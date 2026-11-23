@@ -47,7 +47,7 @@ impl StageGroupForm {
     }
 
     /// 旧版阶段表单按来源类型决定是否强制交接。
-    pub(in crate::tui) fn from_stage(&self) -> bool {
+    pub(in crate::tui) fn has_stage_source(&self) -> bool {
         matches!(self.mode, TaskGroupMode::Stage { from_stage: true })
     }
 
@@ -293,7 +293,7 @@ impl App {
             );
             return;
         }
-        if !form.independent() && !self.optional_stage_setup && form.from_stage() && !form.use_handoff {
+        if !form.independent() && !self.optional_stage_setup && form.has_stage_source() && !form.use_handoff {
             form.error = Some("Review and accept a handoff in Stage details first.".into());
             return;
         }
