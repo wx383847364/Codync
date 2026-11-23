@@ -37,7 +37,6 @@ import kotlinx.serialization.json.*
     Row(Modifier.background(Palette.bubbleAgent, RoundedCornerShape(18.dp))
         .padding(horizontal = 16.dp, vertical = if (paused) 4.dp else 12.dp),
         verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        Symbol(if (paused) "pause.fill" else "clock", size = 16.dp, tint = Palette.secondary)
         Text("$name · $status$preview", Modifier.weight(1f, fill = false), style = Type.subheadline,
             color = Palette.secondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
         if (paused) {

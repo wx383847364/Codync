@@ -13,8 +13,6 @@ struct HeldDeliveryRow: View {
         let status = L10n.tr(paused ? "Paused" : "Continuing…")
         let name = model.bots[task.targetBotId]?.name ?? L10n.tr("Bot")
         HStack(spacing: 8) {
-            Image(systemName: paused ? "pause.fill" : "clock")
-                .font(.footnote).accessibilityHidden(true)
             Text("\(name) · \(status)" + (task.preview.isEmpty ? "" : " · \(task.preview)"))
                 .font(.subheadline).lineLimit(1)
             if paused {

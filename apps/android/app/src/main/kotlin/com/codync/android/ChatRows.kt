@@ -422,7 +422,9 @@ internal val Entry.botReactions: Map<String, List<String>> get() =
             // 折叠详情区域和暂停按钮分别响应点击。
             Row(Modifier.weight(1f, fill = open).then(toggle),
                 verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                ThinkingOrb(if (needs) ThinkingOrbState.Listening else ThinkingOrbState.Working, 16.dp, if (needs) Palette.warning else Palette.secondary)
+                if (pause == null) {
+                    ThinkingOrb(if (needs) ThinkingOrbState.Listening else ThinkingOrbState.Working, 16.dp, color)
+                }
                 if (member) {
                     // 各自截断名称和状态，避免长成员名吃掉整个状态文本。
                     Row(Modifier.weight(1f, fill = open), horizontalArrangement = Arrangement.spacedBy(3.dp)) {
@@ -436,9 +438,9 @@ internal val Entry.botReactions: Map<String, List<String>> get() =
                         color = color, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
                 bot.startedAt?.let { Elapsed(it) }
-                if (details) Symbol("chevron.right", Modifier.rotate(turn), size = 13.dp, tint = Palette.tertiary)
+                if (details && pause == null) Symbol("chevron.right", Modifier.rotate(turn), size = 13.dp, tint = Palette.tertiary)
             }
-            if (pause != null) IconButton("Pause", "pause.fill", action = pause)
+            if (pause != null) IconButton("Pause", "stop.fill", action = pause)
         }
         AnimatedVisibility(open, enter = fadeIn(Motion.fade()) + expandVertically(Motion.layoutSize),
             exit = fadeOut(Motion.fade()) + shrinkVertically(Motion.layoutSize)) {

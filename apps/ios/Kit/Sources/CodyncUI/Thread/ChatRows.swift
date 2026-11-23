@@ -362,7 +362,7 @@ private struct WorkingIndicator: View {
                 } else {
                     status
                 }
-                if let pause { IconButton("Pause", systemImage: "pause.fill", action: pause) }
+                if let pause { IconButton("Pause", systemImage: "stop.fill", action: pause) }
             }
             if open {
                 WorkingSteps(steps: steps)
@@ -382,7 +382,9 @@ private struct WorkingIndicator: View {
     private var status: some View {
         let activity = L10n.tr(bot.activity.isEmpty ? "Working…" : bot.activity)
         return HStack(spacing: 8) {
-            ThinkingOrb(state: bot.needsInput ? .listening : .working, size: 16, color: bot.needsInput ? Palette.warning : Palette.secondary)
+            if pause == nil {
+                ThinkingOrb(state: bot.needsInput ? .listening : .working, size: 16, color: bot.needsInput ? Palette.warning : Palette.secondary)
+            }
             HStack(spacing: 0) {
                 if member { Text("\(bot.name): ") }
                 // 空间紧张时先缩短成员名，给活动留出位置。
@@ -397,7 +399,7 @@ private struct WorkingIndicator: View {
                     .font(.footnote.monospacedDigit())
                     .foregroundStyle(Palette.tertiary)
             }
-            if details {
+            if details && pause == nil {
                 Image(systemName: "chevron.right")
                     .font(.caption2.weight(.semibold))
                     .foregroundStyle(Palette.tertiary)

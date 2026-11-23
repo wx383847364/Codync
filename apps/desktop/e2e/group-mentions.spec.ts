@@ -3,18 +3,20 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node
 import { DatabaseSync } from 'node:sqlite'
 import { join } from 'node:path'
 import { homedir, tmpdir } from 'node:os'
-import { api, attach, sandbox, steerBot, typeMessage } from './sandbox.ts'
+import { api, attach, sandbox, setPref, steerBot, typeMessage } from './sandbox.ts'
 
 type History = { entries: { kind: string; data: { final?: boolean; text?: string; mentions?: { botId: string; start: number; end: number }[] } }[] }
 
 /** 用真实群聊并行回合验证单独暂停、切换聊天和继续原任务。 */
 test('pauses just one running group delivery and resumes its original session', async () => {
   const { browser, page } = await attach()
+  const hadThinkingDetails = await page.evaluate(() => localStorage.getItem('showThinkingDetails') === 'true')
   const suffix = Date.now()
   const workspace = join(tmpdir(), `codync-group-pause-${suffix}`)
   const names = [`PauseAlpha${suffix}`, `PauseBeta${suffix}`]
   const ids: string[] = []
   try {
+    await setPref(page, 'showThinkingDetails', true)
     for (const [index, name] of names.entries()) {
       const cwd = join(workspace, String(index))
       mkdirSync(cwd, { recursive: true })
@@ -37,8 +39,21 @@ test('pauses just one running group delivery and resumes its original session', 
     const first = page.getByRole('group', { name: names[0], exact: true })
     const second = page.getByRole('group', { name: names[1], exact: true })
     await expect(second.getByRole('button', { name: 'Pause', exact: true })).toBeVisible()
-    await first.getByRole('button', { name: 'Pause', exact: true }).click()
+    const pause = first.getByRole('button', { name: 'Pause', exact: true })
+    const taskIcons = first.locator('.working-action-row').locator('svg, canvas, span[style*="mask-image"]')
+    // 系统蒙版和 Lucide 回退都必须显示实心方块，避免控件退回空心圆。
+    await expect(pause.locator('span[style*="stop.fill"], svg rect[fill="currentColor"]')).toHaveCount(1)
+    await expect(taskIcons).toHaveCount(1)
+    // 详情入口仍可通过状态文字展开，且不会为任务行增加第二个图标。
+    const details = first.locator('.working-toggle')
+    await details.click()
+    await expect(details).toHaveAttribute('aria-expanded', 'true')
+    await expect(taskIcons).toHaveCount(1)
+    await pause.click()
     await expect(first.getByText(/Paused/)).toBeVisible()
+    const resume = first.getByRole('button', { name: 'Continue', exact: true })
+    await expect(resume.locator('span[style*="play.fill"], svg polygon[fill="currentColor"], svg path[fill="currentColor"]')).toHaveCount(1)
+    await expect(taskIcons).toHaveCount(1)
     await expect(second.getByRole('button', { name: 'Pause', exact: true })).toBeVisible()
     writeFileSync(join(workspace, '1', 'release'), '')
     await expect(page.getByText(`Result from ${names[1]}`, { exact: true })).toBeVisible()
@@ -73,6 +88,7 @@ test('pauses just one running group delivery and resumes its original session', 
     await expect(first.getByRole('button', { name: 'Continue', exact: true })).toHaveCount(0)
   } finally {
     // 失败时也清理沙箱里本测试的群、成员和夹具文件。
+    await setPref(page, 'showThinkingDetails', hadThinkingDetails)
     for (const id of ids) await api(page, 'deleteBot', { botId: id }).catch(() => {})
     rmSync(workspace, { recursive: true, force: true })
     await browser.close()
