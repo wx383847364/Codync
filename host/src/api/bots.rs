@@ -408,6 +408,33 @@ pub(super) async fn call(hub: &Arc<Hub>, caller: &Caller, method: &str, b: Value
             crate::chat::group::guide(hub, str_arg(&b, "deliveryId")?, str_arg(&b, "activeDeliveryId")?).await?;
             json!({})
         }
+        "groupMemberActivity" => {
+            let result = hub.store.latest_member_delivery(str_arg(&b, "roomId")?, str_arg(&b, "botId")?)?;
+            let entry = result.as_ref().and_then(|(card, _)| hub.store.entry(card));
+            json!({"entry":entry,"deliveryId":result.map(|(_, id)| id)})
+        }
+        "groupDeliveryResult" => {
+            let room = str_arg(&b, "roomId")?;
+            let id = str_arg(&b, "resultId")?;
+            let entry = hub
+                .store
+                .entry(id)
+                .filter(|entry| {
+                    entry.bot_id == room
+                        && entry.kind == "agent"
+                        && entry.data["final"] == true
+                        && entry.data["removed"] != true
+                        && entry.data["deliveryId"].as_str().is_some_and(|delivery| {
+                            hub.store.delivery(delivery).is_ok_and(|delivery| {
+                                delivery.is_some_and(|d| {
+                                    d.room_id == room && d.status == crate::store::deliveries::Status::Completed
+                                })
+                            })
+                        })
+                })
+                .ok_or_else(|| anyhow!("Delivery result is no longer available"))?;
+            json!({"entry":entry})
+        }
         "retryDelivery" => {
             let delivery = hub.retry_delivery(str_arg(&b, "deliveryId")?)?;
             crate::chat::group::ensure_runner(hub, &delivery.room_id);
@@ -424,6 +451,9 @@ pub(super) async fn call(hub: &Arc<Hub>, caller: &Caller, method: &str, b: Value
         }
         "groupResourceUsage" => {
             super::files::group_usage(hub, str_arg(&b, "roomId")?, matches!(caller, Caller::Local)).await?
+        }
+        "botWorkspaceUsage" => {
+            super::files::bot_workspace(hub, str_arg(&b, "botId")?, matches!(caller, Caller::Local)).await?
         }
         "groupWorkspaceUsage" => {
             super::files::group_workspaces(hub, str_arg(&b, "roomId")?, matches!(caller, Caller::Local)).await?
@@ -467,6 +497,18 @@ pub(super) async fn call(hub: &Arc<Hub>, caller: &Caller, method: &str, b: Value
                 anyhow::ensure!(d.status == crate::store::deliveries::Status::Queued, "原派工已结束");
                 json!({"text":handoff.text, "phase":handoff.phase, "revision":handoff.revision})
             }
+        }
+        "sessionHistory" | "deleteOldSession" => {
+            let bot = str_arg(&b, "botId")?;
+            let room = b["roomId"].as_str().map(str::to_owned);
+            let delete =
+                (method == "deleteOldSession").then(|| str_arg(&b, "historyId").map(str::to_owned)).transpose()?;
+            let (reply, recv) = tokio::sync::oneshot::channel();
+            hub.send_cmd(bot, Cmd::SessionHistory { room, delete, reply })?;
+            recv.await??
+        }
+        "sessionHistoryMessages" => {
+            hub.store.old_session_messages(str_arg(&b, "botId")?, b["roomId"].as_str(), str_arg(&b, "historyId")?)?
         }
         "botSessionUsage" => {
             let id = str_arg(&b, "botId")?;

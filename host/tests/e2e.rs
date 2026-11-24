@@ -424,6 +424,31 @@ async fn phone_pairs_and_chats_over_the_direct_channel() {
     let devices = host.call("devices", json!({})).await;
     assert_eq!(devices["devices"][0]["name"], "Test iPhone");
     assert_eq!(devices["devices"][0]["connected"], true);
+
+    // 托管工作区容量可经已配对的远程通道读取，本机路径始终只给本机。
+    assert_eq!(phone.call(5, "botWorkspaceUsage", json!({"botId":bot})).await, json!({"bytes":0}));
+    let managed = host
+        .call(
+            "createBot",
+            json!({"name":"Managed workspace","backend":"custom",
+        "command":common::python_agent(&agent),"connectors":[],"skills":[]}),
+        )
+        .await["bot"]
+        .clone();
+    let workspace = PathBuf::from(managed["cwd"].as_str().unwrap());
+    std::fs::write(workspace.join("usage.bin"), vec![1_u8; 8192]).unwrap();
+    let body = json!({"botId":managed["id"]});
+    let local = host.call("botWorkspaceUsage", body.clone()).await;
+    assert!(local["bytes"].as_u64().is_some_and(|bytes| bytes >= 8192));
+    assert_eq!(local["directory"], json!(workspace));
+    assert_eq!(phone.call(6, "botWorkspaceUsage", body.clone()).await, json!({"bytes":local["bytes"]}));
+    #[cfg(unix)]
+    {
+        // 托管目录被外部链接替换时，显示不可用且没有打开目录入口。
+        std::fs::rename(&workspace, workspace.with_file_name("previous-workspace")).unwrap();
+        std::os::unix::fs::symlink(&host.home, &workspace).unwrap();
+        assert_eq!(phone.call(7, "botWorkspaceUsage", body).await, json!({"bytes":null}));
+    }
 }
 
 #[tokio::test]

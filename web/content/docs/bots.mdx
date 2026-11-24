@@ -120,11 +120,17 @@ Sections group a computer's bots under headings you name, such as Work and Perso
 - **Rename or remove a section:** touch and hold its heading (Desktop: right-click it) and choose **Rename section…** or **Remove section**. Its bots stay, without a section. Renaming it to another section's name merges the two. Terminal UI: `W`; an empty name removes the section.
 - Pinned bots stay on top, outside sections. A pinned bot goes back to its section when you unpin it. Bots in no section sit under a **Bots** label, and dragging moves a bot only within its section.
 
+## Disk usage
+
+Open **Details** to see **Disk usage** above the instructions. It reports the managed workspace on the Host, using the same measurement as **Member workspaces** in group details. External project folders, group files, and global agent caches are counted elsewhere or outside Codync. On the Host computer, choose **Open folder**. In the terminal Details page, press **O**.
+
 ## Sessions
 
 A bot's chat and its agent's session are two different things. The chat is the permanent record you scroll through. The session is the agent's working context: what the model currently remembers of the conversation.
 
 Open the bot's **Details** to see its **Main session context** and up to five recent task attempts. Expand an attempt to see the token fields the provider reported. Failed attempts and retries can have their own entries. A missing report shows as **Unavailable**. In the terminal, press `R` for Details and `F7` to refresh usage.
+
+Choose **Session history** below **Main session context** to view the current session and earlier switches (terminal: **H** in Details). **View chat history** shows messages around the switch. When the agent supports it and Codync can verify the old session, choose **Delete old agent session** and confirm. This leaves the original chat in place.
 
 Choose **Prepare new session with summary** in Details (terminal: `S`). Back in the chat, you can review and edit what will carry over. Your next private message uses the new session. When a queued private task may exceed the current window, the chat instead asks you to choose **Start new session with summary** or **Try current session** for that task. See [Fresh conversations](/docs/conversations#fresh-conversations).
 

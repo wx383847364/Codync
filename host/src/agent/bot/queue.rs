@@ -24,6 +24,10 @@ impl Actor {
                     self.begin_delivery(id, reply, done_tx).await;
                 }
             }
+            Cmd::SessionHistory { room, delete, reply } => {
+                let result = self.manage_session_history(room.as_deref(), delete.as_deref()).await;
+                let _ = reply.send(result);
+            }
             Cmd::MemberSession { room, revision, text, reply } => {
                 let result = if let Some(revision) = revision {
                     self.hub.group_handoff_update(|| {
@@ -52,7 +56,7 @@ impl Actor {
                     self.hub.delivery_storage_error(&self.cfg.id, None);
                 }
                 self.retry_delivery_save(true);
-                self.apply_pending_session();
+                self.apply_pending_session().await;
             }
             Cmd::SessionSwitch { mode } => {
                 if mode == "after" && handoff::approve_from_session_switch(&self.hub, &self.cfg.id) {
@@ -65,7 +69,7 @@ impl Actor {
                     if mode == "immediate" {
                         self.cancel_turn().await;
                     }
-                    self.apply_pending_session();
+                    self.apply_pending_session().await;
                 }
                 self.hub.set_runtime(&self.cfg.id, |r| r.pending_new_session = self.pending_new_session.is_some());
             }

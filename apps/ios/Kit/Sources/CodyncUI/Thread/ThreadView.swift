@@ -24,6 +24,9 @@ public struct ThreadView: View {
     /// The chat stays on the newest message until the reader scrolls away.
     @State var following = true
     @State var loadingEarlier = false
+    @State private var jumpTo: UUID?
+    @State private var jumpEntryId: String?
+    @State private var expandedDispatch: String?
     @State private var groupContexts: GroupSessionContexts?
     @State private var inspectingContext: String?
     @State private var reviewingContext: String?
@@ -67,11 +70,23 @@ public struct ThreadView: View {
         .animation(Motion.reduced(Motion.layout, reduceMotion), value: calling)
     }
 
+    /// 关闭与聊天相连的弹层并定位到已加载的原条目。
+    private func jumpToChatEntry(_ id: String) {
+        guard model.entries[botId]?.contains(where: { $0.id == id }) == true else { return }
+        inspectingContext = nil
+        details = nil
+        editingGroup = false
+        expandedDispatch = id
+        following = false
+        jumpEntryId = id
+        jumpTo = UUID()
+    }
+
     var conversation: some View {
         chrome(chat)
             .readingConversation(botId)
             .groupContextUpdates(room: bot, model: model, snapshot: $groupContexts, failure: .constant(nil))
-            .groupContextInspection(snapshot: groupContexts, inspecting: $inspectingContext, model: model)
+            .groupContextInspection(roomId: botId, snapshot: groupContexts, inspecting: $inspectingContext, model: model)
             .codyncSheet(isPresented: Binding(
                 // 入口只记录目标，关闭时释放该成员的摘要页。
                 get: { reviewingContext != nil }, set: { if !$0 { reviewingContext = nil } }
@@ -121,6 +136,7 @@ public struct ThreadView: View {
                     }
                 }
             }
+            .environment(\.jumpToChatEntry, jumpToChatEntry)
     }
 
     /// Open Live Mode from Shortcuts: closes whatever covers the chat, then starts the call.
@@ -436,7 +452,11 @@ extension ThreadView {
                 if bot.isGroup { GroupIntroCard(group: bot).padding(.top, 40) } else { IntroCard(bot: bot).padding(.top, 40) }
             })
         }
-        rows += items.map { item in ConversationRow(item.id, isUserMessage: item.isUserMessage) { row(item) } }
+        rows += items.map { item in
+            ConversationRow(item.id, isUserMessage: item.isUserMessage) {
+                row(item).environment(\.openedDispatchId, expandedDispatch)
+            }
+        }
         let active = activeBots
         if let bot, !active.isEmpty || (!model.isOffline && !bot.deliveryControls.isEmpty) {
             // 聊天末尾保留同一活动行，成员各自开始和结束。
@@ -446,7 +466,12 @@ extension ThreadView {
             })
         }
         // Pull to refresh reconnects, like Reconnect in the computer menu, until the link is back.
-        return ConversationList(rows: rows, following: $following, nearTop: { showEarlier() }, refresh: {
+        // 乐观用户消息用 nonce 保持视图身份，跳转以 Host 的原消息 ID 查找。
+        let jumpRow = items.first { item in
+            if case .entry(let entry, _) = item.kind { return entry.id == jumpEntryId }
+            return false
+        }?.id
+        return ConversationList(rows: rows, following: $following, jumpTo: jumpTo, jumpEntryId: jumpRow, nearTop: { showEarlier() }, refresh: {
             model.restartStream()
             _ = try? await model.ready()
         })

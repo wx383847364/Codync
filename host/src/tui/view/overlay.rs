@@ -1,5 +1,7 @@
 //! Overlays over the dimmed screen, and their text fields.
 
+use std::fmt::Write as _;
+
 use ratatui::Frame;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
@@ -67,6 +69,56 @@ pub(super) fn overlay(buf: &mut Buffer, area: Rect, app: &mut App, top: &Overlay
         }
         Overlay::GroupWorkspaces { usage, cursor, .. } => {
             super::usage::group_workspaces(buf, area, usage.as_ref(), *cursor, app.on_this_computer);
+        }
+        Overlay::SessionHistory { snapshot, messages, cursor, .. } => {
+            session_history(buf, area, snapshot, messages.as_ref(), *cursor);
+        }
+        Overlay::MemberActivity { bot, room, snapshot, result, cursor } => {
+            let row = app.member_activity_row(room, snapshot);
+            let title = format!(
+                "{} · {}",
+                super::super::l10n::tr(if result.is_some() { "View result" } else { "Member activity" }),
+                app.author_name(Some(bot))
+            );
+            let mut hint = "↑↓  esc".to_owned();
+            if result.is_none() {
+                if snapshot["entry"]["id"].as_str().is_some_and(|id| app.lane(room).iter().any(|entry| entry.id == id))
+                {
+                    let _ = write!(hint, "  o {}", super::super::l10n::tr("Open original assignment"));
+                }
+                if row.is_some_and(|row| row["resultId"].is_string()) {
+                    let _ = write!(hint, "  ↵ {}", super::super::l10n::tr("View result"));
+                }
+                if app.session_history
+                    && app.group_contexts.as_ref().is_some_and(|(chat, snapshot)| {
+                        chat == room
+                            && snapshot["members"].as_array().is_some_and(|members| {
+                                members.iter().any(|member| member["botId"] == bot.as_str() && member["shared"] != true)
+                            })
+                    })
+                {
+                    let _ = write!(hint, "  H {}", super::super::l10n::tr("Session history"));
+                }
+            }
+            let text = result.clone().unwrap_or_else(|| {
+                row.map_or_else(
+                    || {
+                        super::super::l10n::tr(if snapshot.is_null() { "Loading…" } else { "No assignments yet" })
+                            .into_owned()
+                    },
+                    |row| {
+                        let mut lines = vec![
+                            super::super::app::Entry::delivery_status(row["status"].as_str().unwrap_or_default())
+                                .to_owned(),
+                        ];
+                        lines.extend(super::transcript::activity_lines(row));
+                        lines.join("\n")
+                    },
+                )
+            });
+            let t = theme();
+            let inner = frame_box(buf, centered(area, 76, 20), t.text, t.panel, Some((&title, t.text)));
+            inspection_text(buf, inner, &text, *cursor, &hint);
         }
         Overlay::Help(filter) => help(buf, area, filter),
         Overlay::LeadAgent(scroll) => super::lead_agent::lead_agent(buf, area, *scroll),
@@ -205,6 +257,90 @@ pub(super) fn overlay(buf: &mut Buffer, area: Rect, app: &mut App, top: &Overlay
 /// (the folder path, with an empty placeholder).
 pub(in crate::tui) fn field_line(buf: &mut Buffer, r: Rect, y: u16, e: &Editor, placeholder: &str, active: bool) {
     input_line(buf, r, y, e, placeholder, active, !placeholder.is_empty());
+}
+
+/// 绘制历史列表、当前会话及只读聊天预览。
+fn session_history(
+    buf: &mut Buffer,
+    area: Rect,
+    snapshot: &serde_json::Value,
+    messages: Option<&serde_json::Value>,
+    cursor: usize,
+) {
+    use super::super::l10n::tr;
+    let t = theme();
+    let title = tr(if messages.is_some() { "Chat history" } else { "Session history" });
+    let inner = frame_box(buf, centered(area, 76, 20), t.text, t.panel, Some((&title, t.text)));
+    if let Some(messages) = messages {
+        let text = messages["messages"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|message| {
+                let name = tr(if message["kind"] == "user" { "You" } else { "Bot" });
+                format!(
+                    "{name} · {}\n{}",
+                    super::time::clock(message["at"].as_i64().unwrap_or_default()),
+                    message["text"].as_str().unwrap_or_default()
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        inspection_text(buf, inner, &text, cursor, "↑↓  esc");
+        return;
+    }
+    let active = tr(if snapshot.is_null() {
+        "Loading…"
+    } else if snapshot["active"] == true {
+        "In use"
+    } else {
+        "No session yet"
+    });
+    put(buf, inner.x, inner.y, inner.width, &format!("{} · {active}", tr("Current session")), t.bold.patch(t.panel));
+    let rows = usize::from(inner.height.saturating_sub(2));
+    let sessions = snapshot["sessions"].as_array().map(Vec::as_slice).unwrap_or_default();
+    let offset = cursor.saturating_sub(rows.saturating_sub(1));
+    for (index, item) in sessions.iter().enumerate().skip(offset).take(rows) {
+        let state = tr(match item["state"].as_str() {
+            Some("archived") => "Archived",
+            Some("retained") => "Retained",
+            Some("deleted") => "Only chat history remains",
+            _ => "Archive status unknown",
+        });
+        let time = chrono::DateTime::from_timestamp_millis(item["at"].as_i64().unwrap_or_default())
+            .map_or_else(String::new, |at| at.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M").to_string());
+        let text = format!("{time} · {state}");
+        let style = if index == cursor { t.bold.patch(t.sel) } else { t.text.patch(t.panel) };
+        put(buf, inner.x, inner.y + 1 + u(index - offset), inner.width, &text, style);
+    }
+    if !snapshot.is_null() && sessions.is_empty() {
+        put(buf, inner.x, inner.y + 1, inner.width, &tr("No old sessions"), t.dim.patch(t.panel));
+    }
+    let selected = sessions.get(cursor);
+    let mut hint = String::from("↑↓  esc");
+    if selected.is_some_and(|item| item["hasMessages"] == true) {
+        let _ = write!(hint, "  ↵ {}", tr("View chat history"));
+    }
+    if selected.is_some_and(|item| item["canDelete"] == true) {
+        let _ = write!(hint, "  D {}", tr("Delete old agent session"));
+    }
+    put(buf, inner.x, inner.bottom().saturating_sub(1), inner.width, &hint, t.dim.patch(t.panel));
+}
+
+/// 按可见高度分页显示只读文本，避免长回复撑破终端。
+fn inspection_text(buf: &mut Buffer, inner: Rect, text: &str, cursor: usize, hint: &str) {
+    use ratatui::text::Span;
+    let t = theme();
+    let lines = text
+        .lines()
+        .flat_map(|line| super::super::md::wrap(&[Span::raw(line.to_owned())], usize::from(inner.width), &[], &[]))
+        .collect::<Vec<_>>();
+    let height = usize::from(inner.height.saturating_sub(1));
+    let offset = cursor.min(lines.len().saturating_sub(height));
+    for (index, line) in lines.into_iter().skip(offset).take(height).enumerate() {
+        buf.set_line(inner.x, inner.y + u(index), &line.style(t.text.patch(t.panel)), inner.width);
+    }
+    put(buf, inner.x, inner.bottom().saturating_sub(1), inner.width, hint, t.dim.patch(t.panel));
 }
 
 pub(in crate::tui) fn input_line(

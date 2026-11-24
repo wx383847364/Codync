@@ -9,11 +9,15 @@ a version without one gets a generic "Bug fixes and improvements" line. Delete o
 ## 2.54.0
 
 ### zh-Hant
+- 展開群內派工可查看成員的即時活動及結果。
+- 在機器人詳情查看託管工作區大小及歷史會話，並可在確認後刪除支援的舊 Agent 會話。
 - 群組上下文達顯示基準 70% 時，在成員列及最新訊息旁提示「新開會話」，共用摘要確認。
 - 群組詳情可依占用查看成員工作區，成員較多時可在卡片內捲動。
 - 可徹底刪除群聊、專屬機器人、聊天記錄和資源，並保留已複製的會話與共用機器人。
 
 ### en-US
+- Expand a group assignment to see member activity and results.
+- See a bot’s managed workspace size and session history in Details, and delete supported old agent sessions after confirmation.
 - At 70% of the selected context display basis, start a new session from a member row or their latest message and review the same summary.
 - See members’ workspace sizes in group details and scroll through longer lists inside the card.
 - Permanently delete a group chat, its exclusive bots, history and resources, while keeping copied chats and shared bots.

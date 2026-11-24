@@ -204,10 +204,31 @@ impl Store {
     }
 
     /// 新建主会话时一次提交主会话与parked会话清理；失败不允许actor清除旧内存会话。
-    pub fn reset_main_session(&self, bot: &str) -> Result<()> {
+    pub fn reset_main_session(&self, bot: &str, backend: &str, keep_parked: bool) -> Result<Option<(String, String)>> {
         let mut c = self.db.locked();
         let tx = c.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let previous: Option<String> = tx
+            .query_row("SELECT session_id FROM bots WHERE id=? AND deleted=0", [bot], |r| r.get(0))
+            .optional()?
+            .flatten();
+        let retired = if let Some(session) = previous {
+            let id = uuid::Uuid::new_v4().to_string();
+            let anchor = super::deliveries::handoff::archive_anchor(&tx, bot, None)?;
+            let item = serde_json::json!({"sessionId":session,"backend":backend,"roomId":bot,
+                "slot":null,"archivedAt":super::now_ms(),"anchor":anchor,"state":"retained"});
+            tx.execute(
+                "INSERT INTO kv(k,v) VALUES(?1,?2)",
+                params![format!("session.archive.{bot}.{id}"), item.to_string()],
+            )?;
+            Some((id, session))
+        } else {
+            None
+        };
         tx.execute("UPDATE bots SET session_id=NULL WHERE id=?", [bot])?;
+        if keep_parked {
+            tx.commit()?;
+            return Ok(retired);
+        }
         let prefix = format!("fallback.session.{bot}.");
         tx.execute("DELETE FROM kv WHERE substr(k,1,length(?1))=?1", [prefix])?;
         let seq: i64 = tx.query_row("SELECT COALESCE(MAX(seq),0) FROM entries WHERE bot_id=?", [bot], |r| r.get(0))?;
@@ -216,7 +237,7 @@ impl Store {
             params![format!("fallback.fresh.{bot}"), seq.to_string()],
         )?;
         tx.commit()?;
-        Ok(())
+        Ok(retired)
     }
 
     /// 只有群和成员仍存在时才保存群会话，避免删除与正在打开的会话交错后留下记录。

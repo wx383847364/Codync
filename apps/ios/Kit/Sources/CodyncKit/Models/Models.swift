@@ -247,6 +247,9 @@ public struct Hello: Codable, Sendable {
     public var groupSessionContexts: Bool?
     public var groupResourceUsage: Bool?
     public var groupWorkspaceUsage: Bool?
+    public var botWorkspaceUsage: Bool?
+    public var sessionHistory: Bool?
+    public var groupMemberActivity: Bool?
     public var workspaceFileSearch: Bool? = nil
     public var icons: [String: CustomIcon]?
     public var iconsRevision: Int64?

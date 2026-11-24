@@ -289,7 +289,7 @@ impl Actor {
             Ok(false) => {}
             Err(error) => tracing::warn!(bot = %self.cfg.id, %error, "couldn't check private session capacity"),
         }
-        match self.take_handoff() {
+        match self.take_handoff().await {
             Ok(Some((id, text))) => {
                 self.handoff = Some(text);
                 Ok(Some(id))
@@ -446,7 +446,7 @@ impl Actor {
     /// Before the user's message in the main chat: a handoff waiting for it starts a new conversation. Returns the
     /// handoff to put before the message.
     /// 手动确认的新会话同时清除回退执行器的旧主会话，失败时保持待执行消息。
-    fn take_handoff(&mut self) -> anyhow::Result<Option<(String, String)>> {
+    async fn take_handoff(&mut self) -> anyhow::Result<Option<(String, String)>> {
         // A rollover that came due since the last tick gets its card now, without the chance to edit it.
         if let Some(sid) = self.session_id.clone()
             && handoff::pending(&self.hub.store, &self.cfg.id).is_none()
@@ -467,14 +467,7 @@ impl Actor {
             self.hub.store.entry(&id).is_some_and(|entry| {
                 matches!(entry.data["handoff"]["reason"].as_str(), Some("requested" | "capacity"))
             });
-        if user_started {
-            self.hub.store.reset_main_session(&self.cfg.id)?;
-            self.session_id = None;
-            self.main_session_changed();
-            self.relay.recap = None;
-        } else {
-            self.forget_session();
-        }
+        self.switch_main_session(!user_started).await?;
         Ok(Some((id, text)))
     }
 }

@@ -276,6 +276,9 @@ impl App {
                 self.optional_stage_setup = v["optionalStageSetup"] == true;
                 self.stage_roster = v["stageRoster"] == true;
                 self.bot_session_usage = v["botSessionUsage"] == true;
+                self.bot_workspace_usage = v["botWorkspaceUsage"] == true;
+                self.session_history = v["sessionHistory"] == true;
+                self.group_member_activity = v["groupMemberActivity"] == true;
                 self.group_session_contexts = v["groupSessionContexts"] == true;
                 self.group_resource_usage = v["groupResourceUsage"] == true;
                 self.group_workspace_usage = v["groupWorkspaceUsage"] == true;

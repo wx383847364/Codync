@@ -25,6 +25,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.shadow
@@ -37,17 +38,28 @@ import com.codync.android.design.*
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
+/** 聊天及所属弹层共享已载入消息的跳转动作。 */
+internal val LocalChatEntryJump = staticCompositionLocalOf<((String) -> Unit)?> { null }
+
 /**
  * A conversation's scrolling list (iOS `ConversationList`): it opens at the newest message and follows
  * it as messages arrive (`last`, `rev`, `working`) until the reader scrolls away; then a round button
  * leads back down. With `refresh`, a pull past the top runs it, its indicator at `indicatorTop`.
  */
 @Composable internal fun ConversationList(last: String?, rev: Long?, working: Boolean, padding: PaddingValues,
-    refresh: (suspend () -> Unit)? = null, indicatorTop: Dp = 0.dp, content: LazyListScope.() -> Unit) {
+    refresh: (suspend () -> Unit)? = null, indicatorTop: Dp = 0.dp, jump: Pair<String, Int>? = null, content: LazyListScope.() -> Unit) {
     val list = rememberLazyListState()
     val bottom = padding.calculateBottomPadding()
     val following = rememberFollowing(list, last, rev, working, bottom)
     val scope = rememberCoroutineScope()
+    // 用户手动定位后暂停跟随末尾。等待列表测量后再滚动。
+    LaunchedEffect(jump) {
+        if (jump != null) {
+            following.value = false
+            snapshotFlow { list.layoutInfo.totalItemsCount }.first { it > jump.second }
+            list.scrollToItem(jump.second)
+        }
+    }
     val focus = LocalFocusManager.current
     // Child controls consume their taps; only a plain conversation tap clears the composer.
     Box(Modifier.fillMaxSize().pointerInput(focus) {

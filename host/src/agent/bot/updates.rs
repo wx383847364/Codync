@@ -116,6 +116,7 @@ impl Actor {
                 crate::chat::memory::turns::touched(&self.hub, &self.cfg, &data);
                 let working = activity(&data, self.renamed()).to_owned();
                 if let Some(e) = self.add(EntryKind::Tool, turn, data) {
+                    self.publish_delivery_activity(&e);
                     self.tools.insert(tool_id, e.id);
                 }
                 self.set_activity(&working);
@@ -143,6 +144,7 @@ impl Actor {
                 crate::chat::memory::turns::touched(&self.hub, &self.cfg, &e.data);
                 let working = (e.data["status"] == "in_progress").then(|| activity(&e.data, self.renamed()).to_owned());
                 self.hub.set_entry(&e.id, &e.data);
+                self.publish_delivery_activity(&e);
                 if let Some(working) = working {
                     self.set_activity(&working);
                 }
@@ -187,6 +189,39 @@ impl Actor {
                 }
             }
             _ => {}
+        }
+    }
+
+    /// 仅公开本次群执行的工具类别，命令、路径、输出和推理内容留在原有可见性边界。
+    fn publish_delivery_activity(&self, entry: &crate::store::Entry) {
+        let Some(active) = self.active_delivery.as_ref().filter(|active| active.delivery.room_id == entry.bot_id)
+        else {
+            return;
+        };
+        let Some(status @ ("in_progress" | "completed" | "failed")) = entry.data["status"].as_str() else { return };
+        let label = match entry.data["toolKind"].as_str() {
+            Some("read") => "Reading files",
+            Some("edit" | "delete" | "move") => "Updating files",
+            Some("search") => "Searching",
+            Some("execute") => "Running a command",
+            Some("test") => "Running tests",
+            Some("fetch") => "Fetching information",
+            Some("think") => return,
+            _ => "Using a tool",
+        };
+        let delivery = &active.delivery;
+        if let Err(error) = self.hub.group_handoff_update(|| {
+            let cards = self.hub.store.record_delivery_activity(
+                &delivery.id,
+                &self.cfg.id,
+                delivery.started_at,
+                &entry.id,
+                label,
+                status,
+            )?;
+            Ok(((), cards))
+        }) {
+            tracing::warn!(%error, "couldn't publish delivery activity");
         }
     }
 

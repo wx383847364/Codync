@@ -1,6 +1,6 @@
 import { useContext, useEffect, useId, useState } from 'react'
 import { hasLibrary } from '@shared/artifacts'
-import { isGroup, isWorking, type Bot, type BotSessionUsage } from '@shared/models'
+import { isGroup, isWorking, isWorkingIn, type Bot, type BotSessionUsage } from '@shared/models'
 import { AgentIcon } from '../../components/AgentIcon'
 import { BotAvatar, GroupAvatar } from '../../components/Avatar'
 import { Button, CardSection, Disclosure, IconButton, Reveal, RowLabel, Switch, TabChoice } from '../../components/Controls'
@@ -16,6 +16,7 @@ import { RoutinesView } from '../routines/RoutinesView'
 import { LibraryView } from '../library/LibraryView'
 import { DevServersSection } from './DevServersSection'
 import { GroupContextAction, GroupContextHeading, GroupContextReading, GroupContextReview, useGroupContexts } from './GroupContexts'
+import { SessionHistory } from './SessionHistory'
 import { MacChatButton } from './MacChatButton'
 import '../bots/bots.css'
 import './details-panel.css'
@@ -66,6 +67,7 @@ export function DetailsPanel({ botId, routineId, tab, setTab, editGroup, openArt
             <div key={tab} className="details-tab fade-in">
               {tab === 'details' ? (
                 <>
+                  {bot && store.hello?.botWorkspaceUsage ? <BotWorkspaceUsage key={bot.id} botId={bot.id} /> : null}
                   {bot ? <DevServersSection bot={bot} /> : null}
                   <BotSettingsPanel botId={botId} part="often" />
                   {bot ? <ComputerUse bot={bot} /> : null}
@@ -85,6 +87,50 @@ export function DetailsPanel({ botId, routineId, tab, setTab, editGroup, openArt
       </div>
     </div>
   )
+}
+
+/** 打开本机 Host 返回的工作区，并上报操作结果。 */
+async function openWorkspace(store: ReturnType<typeof useStore>, directory: string, tr: (key: string) => string) {
+  const outcome = await window.codync.fileLinks.act(store.computer.id, directory, 'open').catch(() => 'failed' as const)
+  analytics.track({ event: 'file_link_action', action: 'open', outcome })
+  if (outcome !== 'ok') store.setError(tr('Could not open the workspace folder.'))
+}
+
+/** 显示 Host 托管工作区大小，并在运行 Host 的桌面打开目录。 */
+function BotWorkspaceUsage({ botId }: { botId: string }) {
+  const store = useStore()
+  const app = useContext(AppContext)
+  const storeRef = useStoreRef()
+  const tr = useTr()
+  const online = !store.isOffline && !store.mismatch
+  const [usage, setUsage] = useState<{ bytes: number | null; directory?: string } | null>(null)
+
+  // 详情重新打开或连接恢复时读取工作区，忽略已卸载页面的响应。
+  useEffect(() => {
+    if (!online) return
+    let current = true
+    void store.ready().then(client => client.call<{ bytes: number | null; directory?: string }>('botWorkspaceUsage', { botId })).then(
+      result => { if (current) setUsage(result) },
+      () => { if (current) setUsage({ bytes: null }) },
+    )
+    return () => { current = false }
+  }, [store, botId, online])
+
+  const directory = online && app?.local === storeRef && store.isLoopback ? usage?.directory : undefined
+  return <div className="details-group-usage-card">
+    <HStack gap={10}>
+      <span className="details-usage-glyph"><Icon name="folder" size={16} /></span>
+      <VStack grow>
+        <Text weight="semibold">{tr('Disk usage')}</Text>
+        <Text size="footnote" tone="secondary">{tr('Managed workspace')}</Text>
+      </VStack>
+      <strong>{!online || usage?.bytes === null ? tr('Unavailable') : usage ? bytes(usage.bytes) : tr('Loading…')}</strong>
+      {directory && <IconButton icon="folder" title={tr('Open folder')} onClick={() => {
+        // 沿用群工作区的本机文件操作。
+        void openWorkspace(store, directory, tr)
+      }} />}
+    </HStack>
+  </div>
 }
 
 /** 展示主会话实报资源以及最近的任务尝试，保留执行器各字段的口径。 */
@@ -133,6 +179,7 @@ function SessionUsage({ bot, close }: { bot: Bot; close: () => void }) {
       }>
         <RowLabel label={context} />
       </CardSection>
+      {store.hello?.sessionHistory && <SessionHistory botId={bot.id} />}
       {error ? <Text size="footnote">{tr(error)}</Text> : null}
       {usage?.hasSession ? <Button kind="secondary" disabled={!online || isWorking(bot) || preparing} onClick={() => { void prepare() }}>
         {tr('Prepare new session with summary')}
@@ -215,7 +262,7 @@ function GroupMembersList({ group, editGroup }: { group: Bot; editGroup: () => v
               <BotAvatar bot={bot} size={32} />
               <VStack as="span" gap={1} grow>
                 <span className="member-name">{bot.name}</span>
-                {isWorking(bot) ? <Text size="compactSecondary" tone="secondary" className="member-name">{tr(bot.activity || 'Working…')}</Text> : null}
+                {!store.hello?.groupMemberActivity && isWorkingIn(bot, group.id) ? <Text size="compactSecondary" tone="secondary" className="member-name">{tr(bot.activity || 'Working…')}</Text> : null}
               </VStack>
             </button>
             <GroupContextAction botId={bot.id} />
@@ -223,6 +270,11 @@ function GroupMembersList({ group, editGroup }: { group: Bot; editGroup: () => v
               title={tr('Remove {name} from the group').replaceAll('{name}', () => bot.name)} icon="xmark"
               onClick={() => { /* 移除入口与会话操作各自独立。 */ store.removeMember(group, bot.id) }} /> : null}
           </div>
+          {contexts?.snapshot?.members.some(row => row.botId === bot.id) && store.hello?.groupMemberActivity
+            && isWorkingIn(bot, group.id) && <Button kind="secondary" title={tr('Member activity')} onClick={() => {
+              // 只显示本群执行状态，点击打开本群任务。
+              contexts.inspect(bot.id)
+            }}>{tr(bot.activity || 'Working…')}</Button>}
           <GroupContextReading bot={bot} />
         </div>
       ))}
@@ -365,13 +417,6 @@ function GroupWorkspaceUsage({ group }: { group: Bot }) {
     return () => { current = false }
   }, [store, group.id, membership, online, visible])
 
-  /** 只打开本机 Host 返回的成员托管工作区。 */
-  async function openWorkspace(directory: string) {
-    const outcome = await window.codync.fileLinks.act(store.computer.id, directory, 'open').catch(() => 'failed' as const)
-    analytics.track({ event: 'file_link_action', action: 'open', outcome })
-    if (outcome !== 'ok') store.setError(tr('Could not open the workspace folder.'))
-  }
-
   const total = usage?.totalBytes == null
     ? tr(usage || failed || !online ? 'Unavailable' : 'Loading…')
     : bytes(usage.totalBytes)
@@ -394,7 +439,7 @@ function GroupWorkspaceUsage({ group }: { group: Bot }) {
               {member.shared && <small>{tr('Shared across groups')}</small>}
             </span>
             <span>{member.bytes == null ? tr('Unavailable') : bytes(member.bytes)}</span>
-            {directory && <IconButton icon="folder" title={tr('Open folder')} disabled={!online} onClick={() => void openWorkspace(directory)} />}
+            {directory && <IconButton icon="folder" title={tr('Open folder')} disabled={!online} onClick={() => { /* 只打开本机 Host 提供的目录。 */ void openWorkspace(store, directory, tr) }} />}
           </li>
         })}
       </ul> : null}

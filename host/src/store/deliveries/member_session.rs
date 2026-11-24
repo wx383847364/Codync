@@ -135,7 +135,7 @@ fn config(c: &Connection, id: &str) -> Result<BotConfig> {
 }
 
 /// 用量读取支持已归档群，确认时另行检查该群能否工作。
-fn member(c: &Connection, room: &str, bot: &str) -> Result<(BotConfig, MemberContext)> {
+pub(super) fn member(c: &Connection, room: &str, bot: &str) -> Result<(BotConfig, MemberContext)> {
     let room = config(c, room)?;
     ensure!(room.is_group() && room.members.iter().any(|id| id == bot), "Bot is no longer a group member");
     let cfg = config(c, bot)?;

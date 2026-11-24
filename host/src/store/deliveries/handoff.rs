@@ -365,6 +365,23 @@ pub(super) fn archive_context(c: &Connection, bot: &str, room: &str, id: &str, h
         .prepare("SELECT k,v FROM kv WHERE substr(k,1,length(?1))=?1 ORDER BY k")?
         .query_map([&parked_prefix], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?
         .collect::<rusqlite::Result<Vec<_>>>()?;
+    let chat = if handoff.slot.is_some() { room } else { bot };
+    // 原派工可能在切换前就已排队，其用户消息属于新执行。
+    let before = if handoff.slot.is_some() {
+        get(c, id)?
+            .and_then(|delivery| delivery.source_entry_id)
+            .map(|source| {
+                c.query_row("SELECT seq FROM entries WHERE id=? AND bot_id=?", params![source, chat], |r| {
+                    r.get::<_, i64>(0)
+                })
+                .optional()
+            })
+            .transpose()?
+            .flatten()
+    } else {
+        None
+    };
+    let anchor = archive_anchor(c, chat, before)?;
     let archive = format!("session.archive.{bot}.{id}");
     c.execute(
         "INSERT INTO kv(k,v) VALUES(?1,?2)",
@@ -372,7 +389,7 @@ pub(super) fn archive_context(c: &Connection, bot: &str, room: &str, id: &str, h
             archive,
             json!({
                 "sessionId":handoff.session, "backend":handoff.backend, "roomId":room,
-                "slot":handoff.slot,"parked":parked,"archivedAt":now_ms()
+                "slot":handoff.slot,"parked":parked,"archivedAt":now_ms(),"anchor":anchor,"state":"retained"
             })
             .to_string()
         ],
@@ -389,6 +406,16 @@ pub(super) fn archive_context(c: &Connection, bot: &str, room: &str, id: &str, h
     Ok(())
 }
 
+/// 只定位到切换前已存在的可见聊天消息。
+pub(crate) fn archive_anchor(c: &Connection, chat: &str, before: Option<i64>) -> Result<Option<i64>> {
+    Ok(c.query_row(
+        "SELECT MAX(seq) FROM entries WHERE bot_id=?1 AND (?2 IS NULL OR seq<?2) AND kind IN ('user','agent')
+         AND json_extract(data,'$.removed') IS NOT 1 AND ((kind='user' AND COALESCE(json_extract(data,'$.status'),'sent')='sent') OR (kind='agent' AND json_extract(data,'$.final') IS 1))",
+        params![chat, before],
+        |r| r.get(0),
+    )?)
+}
+
 /// 确认、恢复和用量投影读取同一个已保存的会话槽。
 pub(super) fn active_session(c: &Connection, bot: &str, slot: Option<&str>) -> Result<Option<String>> {
     Ok(if let Some(slot) = slot {
@@ -396,4 +423,89 @@ pub(super) fn active_session(c: &Connection, bot: &str, slot: Option<&str>) -> R
     } else {
         c.query_row("SELECT session_id FROM bots WHERE id=? AND deleted=0", [bot], |r| r.get(0)).optional()?.flatten()
     })
+}
+
+impl Store {
+    /// 记录执行器返回的确定状态，进程标识只用于 Host 的删除归属检查。
+    pub(crate) fn mark_session_history(&self, bot: &str, id: &str, state: &str, opened: Option<&str>) -> Result<()> {
+        let changed = self.db.locked().execute(
+            "UPDATE kv SET v=json_set(v,'$.state',?2,'$.opened',?3) WHERE k=?1",
+            params![format!("session.archive.{bot}.{id}"), state, opened],
+        )?;
+        ensure!(changed == 1, "Session history no longer exists");
+        Ok(())
+    }
+
+    /// 主会话和独立群各自查询，普通群读主会话时必须主动导航到 Bot 私聊。
+    pub(crate) fn session_history(
+        &self,
+        bot: &str,
+        room: Option<&str>,
+        id: Option<&str>,
+    ) -> Result<(bool, Vec<(String, Value)>)> {
+        let c = self.db.locked();
+        let has_main: bool = c.query_row(
+            "SELECT session_id IS NOT NULL FROM bots WHERE id=? AND deleted=0 AND COALESCE(json_extract(config,'$.kind'),'bot') <> 'group'",
+            [bot], |r| r.get(0),
+        ).optional()?.unwrap_or(false);
+        let active = if let Some(room) = room {
+            let (_, context) = super::member_session::member(&c, room, bot)?;
+            ensure!(!context.shared, "Open the bot’s private chat for its main session history.");
+            context.session.is_some()
+        } else {
+            has_main
+        };
+        let prefix = format!("session.archive.{bot}.");
+        let mut query = c.prepare(
+            "SELECT substr(k,length(?1)+1),v FROM kv WHERE substr(k,1,length(?1))=?1
+             AND CASE WHEN ?2 IS NULL THEN json_extract(v,'$.slot') IS NULL
+                 ELSE json_extract(v,'$.slot') IS NOT NULL AND json_extract(v,'$.roomId')=?2 END
+             AND (?3 IS NULL OR k=?1 || ?3)
+             ORDER BY json_extract(v,'$.archivedAt') DESC,k DESC LIMIT 100",
+        )?;
+        let rows =
+            query.query_map(params![prefix, room, id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+        let mut entries = Vec::new();
+        for row in rows {
+            let (id, raw) = row?;
+            entries.push((id, serde_json::from_str(&raw)?));
+        }
+        Ok((active, entries))
+    }
+
+    /// 删除前拒绝仍处于主会话、运行槽或停泊引用中的 ID。
+    pub(crate) fn session_is_active(&self, bot: &str, sid: &str) -> Result<bool> {
+        let c = self.db.locked();
+        let fallback = format!("fallback.session.{bot}.");
+        let runs = run_session_key(bot, "");
+        Ok(c.query_row(
+            "SELECT EXISTS(SELECT 1 FROM bots WHERE id=?1 AND session_id=?2 AND deleted=0)
+             OR EXISTS(SELECT 1 FROM kv WHERE
+                 (substr(k,1,length(?3))=?3 AND (v=?2 OR json_extract(CASE WHEN json_valid(v) THEN v ELSE '{}' END,'$.session')=?2))
+                 OR (substr(k,1,length(?4))=?4 AND v=?2))",
+            params![bot, sid, fallback, runs], |r| r.get(0),
+        )?)
+    }
+
+    /// 按已验证历史条目的锚点读取旧聊天，仅返回用户与最终回复的文本。
+    pub(crate) fn old_session_messages(&self, bot: &str, room: Option<&str>, id: &str) -> Result<Value> {
+        let (_, entries) = self.session_history(bot, room, Some(id))?;
+        let (_, item) = entries.first().ok_or_else(|| anyhow!("Session history no longer exists"))?;
+        let Some(anchor) = item["anchor"].as_i64() else { return Ok(json!({"messages":[]})) };
+        let c = self.db.locked();
+        let mut query = c.prepare(
+            "SELECT id,kind,created_at,json_extract(data,'$.author'),json_extract(data,'$.text') FROM entries
+             WHERE bot_id=?1 AND seq<=?2 AND json_extract(data,'$.removed') IS NOT 1
+             AND ((kind='user' AND COALESCE(json_extract(data,'$.status'),'sent')='sent') OR (kind='agent' AND json_extract(data,'$.final') IS 1))
+             AND json_type(data,'$.text')='text' ORDER BY seq DESC LIMIT 25",
+        )?;
+        let mut messages = query
+            .query_map(params![room.unwrap_or(bot), anchor], |r| {
+                Ok(json!({"id":r.get::<_,String>(0)?,"kind":r.get::<_,String>(1)?,"at":r.get::<_,i64>(2)?,
+                "author":r.get::<_,Option<String>>(3)?,"text":r.get::<_,String>(4)?}))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        messages.reverse();
+        Ok(json!({"messages":messages}))
+    }
 }

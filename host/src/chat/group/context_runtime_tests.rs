@@ -599,12 +599,11 @@ async fn confirmed_group_handoff_resumes_the_original_delivery_and_archives_its_
         assert_eq!(room.hub.store.group_handoff(&id).unwrap().unwrap().phase, Phase::Sent);
         assert!(room.hub.store.kv_get(&format!("session.archive.a.{id}")).unwrap().contains(&original.session));
         let retired = records(&room, "a", "retirement.jsonl");
-        assert_eq!(retired.len(), if isolated { 2 } else { 1 });
+        assert_eq!(retired.len(), 1);
         assert_eq!(retired[0]["method"], if isolated { "_session/archive" } else { "session/archive" });
         assert_eq!(retired[0]["params"]["sessionId"], original.session);
-        if isolated {
-            assert_eq!(retired[1]["method"], "session/delete");
-        }
+        let history = room.hub.store.session_history("a", isolated.then_some(group.as_str()), None).unwrap().1;
+        assert_eq!(history[0].1["state"], if isolated { "retained" } else { "archived" });
         let prompts = records(&room, "a", "prompt-requests.jsonl");
         let matching: Vec<_> = prompts
             .iter()

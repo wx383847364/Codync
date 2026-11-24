@@ -320,6 +320,13 @@ def prompt(request):
             for task in script.get("tasks", []):
                 response = mcp_call("team", "message_bot", task)
                 assert not response.get("isError"), response
+            if script.get("activityTool"):
+                # 用明确的工具类别和不应公开的标题覆盖群活动。
+                update({"sessionUpdate": "tool_call", "toolCallId": "activity-test", "title": "PRIVATE_TOOL_TITLE",
+                        "kind": "execute", "status": "in_progress"})
+                if script.get("activityDelay"):
+                    time.sleep(script["activityDelay"])
+                update({"sessionUpdate": "tool_call_update", "toolCallId": "activity-test", "status": "completed"})
             reply = script["reply"]
             trailing = script.get("trailingPass")
             if trailing in ("toolUpdate", "duplicateToolUpdate", "duringReply", "duringReplyThenPass"):
@@ -401,7 +408,7 @@ for line in sys.stdin:
         if not pathlib.Path("first-message").exists():
             capabilities["_meta"] = {"claudeCode": {}}
         result = {"agentCapabilities": capabilities}
-        # 以明确的能力和不同结局验证归档优先、明确失败后才删除。
+        # 用显式能力和归档、删除失败覆盖旧会话生命周期。
         if pathlib.Path("session-retirement.json").exists():
             capabilities["sessionCapabilities"] = {"delete": {}}
             retirement = json.loads(pathlib.Path("session-retirement.json").read_text())
@@ -414,7 +421,9 @@ for line in sys.stdin:
         with open("retirement.jsonl", "a") as log:
             log.write(json.dumps(request) + "\n")
         retirement = json.loads(pathlib.Path("session-retirement.json").read_text())
-        if method != "session/delete" and retirement.get("archiveFails"):
+        if method == "session/delete" and retirement.get("deleteFails"):
+            send({"id": request["id"], "error": {"code": -32000, "message": "delete failed"}})
+        elif method != "session/delete" and retirement.get("archiveFails"):
             send({"id": request["id"], "error": {"code": -32601, "message": "archive unavailable"}})
         else:
             send({"id": request["id"], "result": {}})

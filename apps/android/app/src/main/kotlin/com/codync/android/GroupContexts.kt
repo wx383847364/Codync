@@ -148,7 +148,7 @@ internal fun groupContextPercent(used: Long?, size: Long): String? = used?.takeI
         }
         if (review == null) (error ?: refreshError)?.let { Text(it, style = Type.caption, color = Palette.danger) }
     }
-    GroupContextInspection(snapshot, members, inspecting) { inspecting = it }
+    GroupContextInspection(room.id, snapshot, members, inspecting, state, store, allowJump = canLeaveEditor()) { inspecting = it }
     // 成员页弹层和消息头弹页共用编辑内容，确认失败保留用户原文。
     val summaryEditor: @Composable () -> Unit = {
         val draft = review
@@ -199,14 +199,29 @@ internal fun groupContextPercent(used: Long?, size: Long): String? = used?.takeI
 }
 
 /** 从消息标签或成员名单查看精确读数，避免在聊天中同时展开成员管理。 */
-@Composable internal fun GroupContextInspection(snapshot: GroupSessionContexts?, members: List<Bot>, inspecting: String?,
-    inspect: (String?) -> Unit) {
+@Composable internal fun GroupContextInspection(roomId: String, snapshot: GroupSessionContexts?, members: List<Bot>, inspecting: String?,
+    state: AppState, store: AppStore, allowJump: Boolean = true, inspect: (String?) -> Unit) {
+    val openEntry = LocalChatEntryJump.current.takeIf { allowJump }
     CodyncSheet(inspecting != null, { inspect(null) }) {
         val member = snapshot?.members?.firstOrNull { it.botId == inspecting }
         val basis = snapshot?.basis ?: 512_000L
         if (member != null) Column {
             ModalHeader(members.firstOrNull { it.id == inspecting }?.name ?: "Member context")
             CardForm {
+                if (state.hello?.get("groupMemberActivity")?.jsonPrimitive?.booleanOrNull == true) {
+                    MemberDeliveryActivity(roomId, member.botId, state, store, openEntry?.let { jump ->
+                        // 先关闭群成员详情再返回到原消息。
+                        { id -> inspect(null); jump(id) }
+                    })
+                }
+                if (!member.shared && state.hello?.get("sessionHistory")?.jsonPrimitive?.booleanOrNull == true) {
+                    CompositionLocalProvider(LocalChatEntryJump provides openEntry?.let { jump ->
+                        /** 退出成员层后定位历史群聊条目。 */
+                        { id -> inspect(null); jump(id) }
+                    }) {
+                        SessionHistory(member.botId, store, state.actualConnection is LinkState.Ready, roomId, state.entries)
+                    }
+                }
                 CardSection("Current context") {
                     row { Text(member.used?.let { "${NumberFormat.getIntegerInstance().format(it)} token" }
                         ?: tr(if (member.hasSession) "Usage not reported" else "No session yet")) }
@@ -214,6 +229,48 @@ internal fun groupContextPercent(used: Long?, size: Long): String? = used?.takeI
                     row { Text("${tr("Actual model window")} · ${member.size?.let(::groupContextCompact) ?: "—"} · ${member.size?.let { groupContextPercent(member.used, it) } ?: "—"}") }
                     if (member.shared) row { Text(tr("This also starts a new private session")) }
                 }
+            }
+        }
+    }
+}
+
+/** 成员详情读取 Host 定位的原派工并跟随群事件。 */
+@Composable private fun MemberDeliveryActivity(roomId: String, botId: String, state: AppState, store: AppStore, openEntry: ((String) -> Unit)?) {
+    var entry by remember(roomId, botId) { mutableStateOf<Entry?>(null) }
+    var deliveryId by remember(roomId, botId) { mutableStateOf<String?>(null) }
+    var reading by remember(roomId, botId) { mutableStateOf("Loading…") }
+    val online = state.actualConnection is LinkState.Ready
+    // 详情关闭后取消读取，同一群里已载入的卡片提供实时更新。
+    LaunchedEffect(roomId, botId, online, state.bots.firstOrNull { it.id == botId }?.rev) {
+        if (!online) return@LaunchedEffect
+        try {
+            val response = store.hostCall("groupMemberActivity", body("roomId" to roomId, "botId" to botId)).jsonObject
+            entry = (response["entry"] as? JsonObject)?.let { WireJson.decodeFromJsonElement<Entry>(it) }
+            deliveryId = response.text("deliveryId")
+            reading = "No assignments yet"
+        } catch (failure: CancellationException) {
+            throw failure
+        } catch (_: Exception) {
+            reading = "Unavailable"
+        }
+    }
+    CardSection("Member activity") {
+        row {
+            val selected = deliveryId
+            val original = entry
+            if (selected != null && original != null) {
+                val latest = state.entries.firstOrNull { it.id == original.id } ?: original
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    if (openEntry != null && state.entries.any { it.id == original.id }) {
+                        SecondaryButton("Open original assignment") {
+                            // 成员页回到聊天中的原派工卡。
+                            openEntry(original.id)
+                        }
+                    }
+                    DeliveryNotice(latest, state, store, selected, openEntry = openEntry)
+                }
+            } else {
+                Text(tr(if (online) reading else "Unavailable"), color = Palette.secondary)
             }
         }
     }

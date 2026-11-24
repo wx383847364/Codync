@@ -449,7 +449,7 @@ const Transcript = memo(function Transcript({ botId, openTrace, onReply, openRou
           ) : null}
           {items.length === 0 && bot ? <div className="transcript-intro">{isGroup(bot) ? <GroupIntroCard group={bot} /> : <IntroCard bot={bot} />}</div> : null}
           {items.map((item) => (
-            <div key={item.id} id={item.kind === 'entry' && item.entry.data.handoff ? item.id : undefined} tabIndex={item.kind === 'entry' && item.entry.data.handoff ? -1 : undefined} className={arrivals.has(item.id) ? rowIn(item) : undefined}>
+            <div key={item.id} id={item.kind === 'entry' && !item.entry.data.deliveryRows ? item.entry.id : undefined} tabIndex={item.kind === 'entry' ? -1 : undefined} className={arrivals.has(item.id) ? rowIn(item) : undefined}>
               <Row item={item} chat={bot} openTrace={openTrace} onReply={onReply} openRoutine={openRoutine} openAgent={openAgent} openBotChat={openBotChat} openArtifact={openArtifact} openCall={openCall} />
             </div>
           ))}

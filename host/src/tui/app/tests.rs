@@ -25,6 +25,25 @@ async fn the_group_task_shortcut_keeps_the_draft() {
     assert_eq!(app.drafts["group"].text, "A distinct draft");
 }
 
+/// 删除确认层位于历史上方，取消后回到同一条会话。
+#[tokio::test]
+async fn old_session_delete_confirmation_returns_to_history_on_cancel() {
+    use crossterm::event::{KeyCode, KeyEvent};
+
+    let mut app = test_app();
+    app.overlays.push(Overlay::SessionHistory {
+        bot: "bot".into(),
+        room: None,
+        snapshot: json!({"sessions":[{"id":"old","canDelete":true}]}),
+        messages: None,
+        cursor: 0,
+    });
+    app.on_key(KeyEvent::from(KeyCode::Char('D')));
+    assert!(matches!(app.overlays.last(), Some(Overlay::Confirm(_))));
+    app.on_key(KeyEvent::from(KeyCode::Esc));
+    assert!(matches!(app.overlays.as_slice(), [Overlay::SessionHistory { cursor: 0, .. }]));
+}
+
 #[tokio::test]
 async fn routines_keep_the_chat_draft_until_the_user_returns_to_chat() {
     use crate::tui::manage::RoutineList;
@@ -36,6 +55,7 @@ async fn routines_keep_the_chat_draft_until_the_user_returns_to_chat() {
     app.overlays.push(Overlay::Routines(RoutineList {
         bot: "b".into(),
         session_usage: Value::Null,
+        workspace_usage: Value::Null,
         items: Some(Vec::new()),
         runs: Vec::new(),
         cursor: 0,

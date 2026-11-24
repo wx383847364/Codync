@@ -38,6 +38,13 @@ pub(super) fn cards(c: &Connection, rows: Vec<Delivery>) -> Result<Vec<Entry>> {
 pub(super) fn card(c: &Connection, d: &Delivery) -> Result<Entry> {
     let source = d.source_entry_id.as_deref().or(d.source_execution_id.as_deref()).unwrap_or(&d.id);
     let id = card_key(d);
+    // 卡片重建保留每条投递自己的步骤，重试生成的新卡片没有旧步骤。
+    let previous = c
+        .query_row("SELECT data FROM entries WHERE id=?1", [&id], |r| r.get::<_, String>(0))
+        .optional()?
+        .map(|data| serde_json::from_str::<Value>(&data))
+        .transpose()?
+        .unwrap_or_default();
     let mut st = c.prepare(&format!("SELECT {COLS} FROM deliveries WHERE room_id=?1 AND attempt=?2 AND (source_entry_id=?3 OR (source_entry_id IS NULL AND source_execution_id=?3) OR id=?3) ORDER BY room_seq"))?;
     let deliveries = st.query_map(params![d.room_id, d.attempt, source], row)?.collect::<rusqlite::Result<Vec<_>>>()?;
     let source_data = d
@@ -64,7 +71,29 @@ pub(super) fn card(c: &Connection, d: &Delivery) -> Result<Entry> {
             wire(&delivery.status),
             detail
         ));
-        items.push(json!({"deliveryId":delivery.id,"targetBotId":delivery.target_bot_id,"status":delivery.status,"detail":detail,"canGuide": delivery.status == Status::Queued && direct_user_mention(delivery, &source_data),"groupHandoff":super::handoff::projection(c,delivery)?}));
+        let old = previous["deliveryRows"]
+            .as_array()
+            .and_then(|rows| rows.iter().find(|row| row["deliveryId"] == delivery.id));
+        let result_delivery = old.and_then(|row| row["resultDeliveryId"].as_str()).unwrap_or(&delivery.id);
+        let result = if delivery.status == Status::Completed {
+            visible_result(c, &delivery.room_id, result_delivery)?
+        } else {
+            None
+        };
+        let mut item = json!({"startedAt":delivery.started_at,"resultId":result,"deliveryId":delivery.id,"targetBotId":delivery.target_bot_id,"status":delivery.status,"detail":detail,"canGuide": delivery.status == Status::Queued && direct_user_mention(delivery, &source_data),"groupHandoff":super::handoff::projection(c,delivery)?});
+        if let Some(old) = old {
+            item["resultDeliveryId"] = old["resultDeliveryId"].clone();
+            item["activity"] = old["activity"].clone();
+            if old["startedAt"] != item["startedAt"]
+                && let Some(steps) = item["activity"].as_array_mut()
+            {
+                // 续跑保留旧步骤，但之前未结束的工具不能再次显示为当前动作。
+                for step in steps.iter_mut().filter(|step| step["status"] == "in_progress") {
+                    step["status"] = "interrupted".into();
+                }
+            }
+        }
+        items.push(item);
     }
     let body = source_data["text"].as_str().or(d.body.as_deref()).unwrap_or_default();
     let turn = c.query_row("SELECT COALESCE(MAX(turn),0) FROM entries WHERE bot_id=?", [&d.room_id], |r| r.get(0))?;
@@ -79,6 +108,19 @@ pub(super) fn card(c: &Connection, d: &Delivery) -> Result<Entry> {
     )
 }
 
+/// 查找显示在来源群的最终结果，正文优先于仅含文件的回复。
+fn visible_result(c: &Connection, room: &str, delivery: &str) -> Result<Option<String>> {
+    let text = format!("delivery-result-{delivery}");
+    Ok(c.query_row(
+        "SELECT id FROM entries WHERE bot_id=?1 AND kind='agent' AND json_extract(data,'$.deliveryId')=?2
+         AND json_extract(data,'$.final') IS 1 AND json_extract(data,'$.removed') IS NOT 1
+         ORDER BY (id=?3) DESC,seq DESC LIMIT 1",
+        params![room, delivery, text],
+        |r| r.get(0),
+    )
+    .optional()?)
+}
+
 /// 仅允许原始用户消息中明确 @ 的投递加入当前执行。
 fn direct_user_mention(delivery: &Delivery, source: &Value) -> bool {
     delivery.source_kind == "user"
@@ -87,6 +129,74 @@ fn direct_user_mention(delivery: &Delivery, source: &Value) -> bool {
 }
 
 impl Store {
+    /// 仅在原投递仍执行时保存可公开的工具类别与状态，步骤上限避免长回合撑大事件。
+    pub(crate) fn record_delivery_activity(
+        &self,
+        id: &str,
+        bot: &str,
+        started_at: Option<i64>,
+        step: &str,
+        label: &str,
+        status: &str,
+    ) -> Result<Vec<Entry>> {
+        let mut c = self.db.locked();
+        let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let Some(delivery) = get(&tx, id)?.filter(|d| {
+            d.target_bot_id == bot && d.status == Status::Started && d.started_at == started_at && !d.held_after_pause()
+        }) else {
+            return Ok(vec![]);
+        };
+        let key = card_key(&delivery);
+        let Some((turn, raw)) = tx
+            .query_row("SELECT turn,data FROM entries WHERE id=? AND bot_id=?", params![key, delivery.room_id], |r| {
+                Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
+            })
+            .optional()?
+        else {
+            return Ok(vec![]);
+        };
+        let mut data: Value = serde_json::from_str(&raw)?;
+        let Some(row) =
+            data["deliveryRows"].as_array_mut().and_then(|rows| rows.iter_mut().find(|row| row["deliveryId"] == id))
+        else {
+            return Ok(vec![]);
+        };
+        if !row["activity"].is_array() {
+            row["activity"] = json!([]);
+        }
+        let Some(steps) = row["activity"].as_array_mut() else { return Ok(vec![]) };
+        let update = json!({"id":step,"label":label,"status":status,"at":now_ms()});
+        if let Some(index) = steps.iter().position(|event| event["id"] == step) {
+            if steps[index]["status"] == status && steps[index]["label"] == label {
+                return Ok(vec![]);
+            }
+            steps.remove(index);
+        }
+        if steps.len() >= 12 {
+            steps.remove(0);
+        }
+        steps.push(update);
+        let updated = entry(&tx, &key, &delivery.room_id, EntryKind::Notice, turn, &data)?;
+        tx.commit()?;
+        Ok(vec![updated])
+    }
+
+    /// 从成员状态定位本群最近的原派工；历史卡片无需先加载到客户端。
+    pub(crate) fn latest_member_delivery(&self, room: &str, bot: &str) -> Result<Option<(String, String)>> {
+        let c = self.db.locked();
+        super::member_session::member(&c, room, bot)?;
+        let delivery = c
+            .query_row(
+                &format!(
+                    "SELECT {COLS} FROM deliveries WHERE room_id=?1 AND target_bot_id=?2 ORDER BY (status='started') DESC,room_seq DESC LIMIT 1"
+                ),
+                params![room, bot],
+                row,
+            )
+            .optional()?;
+        Ok(delivery.map(|delivery| (card_key(&delivery), delivery.id)))
+    }
+
     /// 在发送 ACP 之前持久登记引导；Stop 或重启后按既有 started 边界处理。
     pub fn start_guidance(&self, id: &str, active_id: &str, bot: &str) -> Result<(Entry, Vec<Entry>)> {
         let mut c = self.db.locked();
@@ -215,6 +325,10 @@ impl Store {
             }
         }
         // 引导与原执行共用结果，但每条来源消息保留自己的投递记录。
+        let joined_result =
+            if changed == 1 && status == Status::Completed { visible_result(&tx, &d.room_id, &d.id)? } else { None };
+        let original = d.id.clone();
+        let mut joined = Vec::new();
         let mut changed_rows = vec![d];
         for (id, outcome) in guidance {
             let (next, detail) = match outcome {
@@ -230,10 +344,26 @@ impl Store {
             if count == 1
                 && let Some(delivery) = get(&tx, id)?
             {
+                if matches!(outcome, Guidance::Joined) && joined_result.is_some() {
+                    joined.push(id.clone());
+                }
                 changed_rows.push(delivery);
             }
         }
-        entries.extend(cards(&tx, changed_rows)?);
+        for mut card in cards(&tx, changed_rows)? {
+            let mut edited = false;
+            for row in card.data["deliveryRows"].as_array_mut().into_iter().flatten() {
+                if row["deliveryId"].as_str().is_some_and(|id| joined.iter().any(|joined| joined == id)) {
+                    row["resultId"] = json!(joined_result);
+                    row["resultDeliveryId"] = json!(original);
+                    edited = true;
+                }
+            }
+            if edited {
+                card = entry(&tx, &card.id, &card.bot_id, EntryKind::Notice, card.turn, &card.data)?;
+            }
+            entries.push(card);
+        }
         tx.commit()?;
         Ok(entries)
     }

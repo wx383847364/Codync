@@ -8,6 +8,9 @@ import { Text } from '../../components/Text'
 import { useTr } from '../../lib/use-language'
 import { avatarColor } from '../../lib/theme'
 import { useApp, useStore } from '../../store/context'
+import { DeliveryNotice } from './DeliveryNotice'
+import { SessionHistory } from './SessionHistory'
+import type { Entry } from '@shared/models'
 import { Field } from '../marketplace/pieces'
 import './group-contexts.css'
 
@@ -180,6 +183,11 @@ export function GroupContexts({ room, panelVisible, openPanel, children }: {
       {current ? <SheetPage>
         <ModalHeader title={store.bots.get(current.botId)?.name ?? tr('Member context')} />
         <CardForm>
+          {roomId && store.hello?.groupMemberActivity && <MemberActivity key={current.botId} roomId={roomId} botId={current.botId} onJump={() => {
+            // 先关闭成员弹层，焦点再回到群聊里的原派工。
+            setInspected(null)
+          }} />}
+          {!current.shared && roomId && store.hello?.sessionHistory && <SessionHistory botId={current.botId} roomId={roomId} />}
           <CardSection title={tr('Current context')}>
             <Text size="body">{current.used != null ? `${current.used.toLocaleString()} token` : tr(current.hasSession ? 'Usage not reported' : 'No session yet')}</Text>
             <Text size="footnote" tone="secondary">{tr('Display basis')} · {compact(snapshot?.basis ?? 512000)} · {percentage(current.used, snapshot?.basis ?? 512000) ?? '—'}</Text>
@@ -190,6 +198,47 @@ export function GroupContexts({ room, panelVisible, openPanel, children }: {
       </SheetPage> : null}
     </Sheet>
   </Current.Provider>
+}
+
+/** 从成员详情读取原派工，随后以群聊实时事件刷新同一张卡。 */
+function MemberActivity({ botId, roomId, onJump }: { botId: string; roomId: string; onJump: () => void }) {
+  const tr = useTr()
+  const store = useStore()
+  const [result, setResult] = useState<{ entry: Entry | null; deliveryId: string | null } | null>(null)
+  const [error, setError] = useState(false)
+  const online = !store.isOffline && !store.mismatch
+  const revision = store.bots.get(botId)?.rev
+  useEffect(() => {
+    if (!online) return
+    let current = true
+    void store.ready().then(client => client.call<{ entry: Entry | null; deliveryId: string | null }>('groupMemberActivity', { botId, roomId })).then(
+      value => { if (current) { setResult(value); setError(false) } },
+      () => { if (current) setError(true) },
+    )
+    return () => { current = false }
+  }, [store, botId, roomId, online, revision])
+  const entry = result?.entry
+  const latest = entry ? store.allEntries(roomId).find(item => item.id === entry.id) ?? entry : null
+  /** 已载入的卡片回到群聊原位，卸载的旧卡片仍可在此查看。 */
+  function jump() {
+    if (!latest) return
+    const target = document.getElementById(latest.id)
+    if (!target) return
+    onJump()
+    requestAnimationFrame(() => {
+      // 展开原派工并让键盘焦点从弹页回到准确位置。
+      const disclosure = target.querySelector<HTMLButtonElement>('button[aria-expanded]')
+      if (disclosure?.getAttribute('aria-expanded') === 'false') disclosure.click()
+      target.scrollIntoView({ block: 'center' })
+      disclosure?.focus({ preventScroll: true })
+    })
+  }
+
+  return <CardSection title={tr('Member activity')}>
+    {latest && store.allEntries(roomId).some(entry => entry.id === latest.id) && <Button kind="secondary" onClick={jump}>{tr('Open original assignment')}</Button>}
+    {latest && result?.deliveryId ? <DeliveryNotice entry={latest} deliveryId={result.deliveryId} />
+      : <Text tone="secondary">{tr(!online || error ? 'Unavailable' : result ? 'No assignments yet' : 'Loading…')}</Text>}
+  </CardSection>
 }
 
 /** 侧栏使用群共享的上下文和摘要草稿。 */

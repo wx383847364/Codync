@@ -210,6 +210,8 @@ pub(crate) struct Conn {
     session_slots: HashMap<String, Option<String>>,
     confirmed_models: HashMap<String, String>,
     started: Instant,
+    /// 每次打开都生成身份，拒绝删除重启后或同进程重新分配的旧 ACP ID。
+    opened_sessions: HashMap<String, String>,
     /// A `session/new` or `session/load` is waiting for its answer. Still set when a routine's time limit cut it short:
     /// the agent may then open that session, tools and all, under an id the host never learns (`drop_unanswered`).
     opening: bool,
@@ -418,7 +420,7 @@ impl Actor {
             Some(sid) if failed => self.close_reopenable(&sid).await,
             _ => {}
         }
-        self.apply_pending_session();
+        self.apply_pending_session().await;
         crate::chat::group::wake(&self.hub, Some(&self.cfg.id));
         self.next_in_queue(done_tx).await;
     }
@@ -476,7 +478,7 @@ impl Actor {
                     // 超时仅结束维护，投递仍保持排队。
                     self.expire_group_compaction().await;
                     self.retry_delivery_save(false);
-                    self.apply_pending_session();
+                    self.apply_pending_session().await;
                     self.release_idle().await;
                     // The idle check may have queued a compaction.
                     if self.turn.is_none() && !self.queue.is_empty() {

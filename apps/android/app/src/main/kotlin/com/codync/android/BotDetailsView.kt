@@ -25,6 +25,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
@@ -42,7 +43,9 @@ import java.text.NumberFormat
 import java.util.Date
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.coroutines.delay
 
@@ -91,11 +94,15 @@ internal data class DetailsRequest(val tab: DetailsTab = DetailsTab.Details, val
                 Box(Modifier.fillMaxWidth().padding(top = 20.dp)) {
                     when (tab) {
                         DetailsTab.Details -> Column(verticalArrangement = Arrangement.spacedBy(28.dp)) {
+                            if (state.hello?.get("botWorkspaceUsage")?.jsonPrimitive?.booleanOrNull == true) {
+                                BotWorkspaceUsage(bot.id, store, online)
+                            }
                             if (bot.devServers.isNotEmpty()) DevServersSection(bot, store)
                             BotSettingsForm(state, store, draft, { draft = it }, FormPart.Often, error = saveError)
                             state.screen?.let { ComputerCard(it, draft.computer, online) { on -> draft = draft.copy(computer = on) } }
                             if (state.hello?.get("botSessionUsage")?.jsonPrimitive?.booleanOrNull == true) {
-                                SessionUsage(bot, store, online, request.botId == null, dismiss)
+                                SessionUsage(bot, store, online, request.botId == null, dismiss,
+                                    state.hello.get("sessionHistory")?.jsonPrimitive?.booleanOrNull == true, state.entries)
                             }
                             RoutinesView(bot, state, store, routineId)
                             LaunchedEffect(Unit) { routineId = null }
@@ -151,8 +158,43 @@ internal data class DetailsRequest(val tab: DetailsTab = DetailsTab.Details, val
 }
 
 
+/** 显示远程 Host 上的 Bot 托管工作区大小。 */
+@Composable private fun BotWorkspaceUsage(botId: String, store: AppStore, online: Boolean) {
+    var bytes by remember(botId) { mutableStateOf<Long?>(null) }
+    var loaded by remember(botId) { mutableStateOf(false) }
+    val context = LocalContext.current
+    // 重连时重新扫描，取消页面读取时保留协程取消的语义。
+    LaunchedEffect(botId, online) {
+        if (!online) return@LaunchedEffect
+        loaded = false
+        try {
+            val result = store.hostCall("botWorkspaceUsage", body("botId" to botId)) as JsonObject
+            bytes = result["bytes"]?.jsonPrimitive?.longOrNull
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            bytes = null
+        }
+        loaded = true
+    }
+    val label = when {
+        !online -> tr("Unavailable")
+        !loaded -> tr("Loading…")
+        bytes == 0L -> "0 B"
+        else -> bytes?.let { android.text.format.Formatter.formatShortFileSize(context, it) } ?: tr("Unavailable")
+    }
+    CardSection("Disk usage") {
+        row {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text(tr("Managed workspace"))
+                Text(label, color = Palette.secondary)
+            }
+        }
+    }
+}
+
 /** 展示主会话实报占用，展开尝试查看独立的输入、输出和缓存字段。 */
-@Composable private fun SessionUsage(bot: Bot, store: AppStore, online: Boolean, offersSessionHandoff: Boolean, dismiss: () -> Unit) {
+@Composable private fun SessionUsage(bot: Bot, store: AppStore, online: Boolean, offersSessionHandoff: Boolean, dismiss: () -> Unit, supportsHistory: Boolean, entries: List<com.codync.android.core.Entry>) {
     val scope = rememberCoroutineScope()
     var usage by remember(bot.id) { mutableStateOf<BotSessionUsage?>(null) }
     var error by remember(bot.id) { mutableStateOf<String?>(null) }
@@ -189,6 +231,7 @@ internal data class DetailsRequest(val tab: DetailsTab = DetailsTab.Details, val
         }) {
             row { Text(context) }
         }
+        if (offersSessionHandoff && supportsHistory) SessionHistory(bot.id, store, online, entries = entries)
         error?.let { Text(tr(it), style = Type.footnote, color = Palette.danger) }
         if (offersSessionHandoff && current?.hasSession == true) {
             SecondaryButton("Prepare new session with summary", enabled = online && !bot.isWorking && !preparing) {

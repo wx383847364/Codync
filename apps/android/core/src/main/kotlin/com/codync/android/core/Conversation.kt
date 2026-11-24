@@ -260,7 +260,10 @@ data class GroupDeliveryControl(val deliveryId: String, val targetBotId: String,
 /** 聚合卡内的目标行，当前显示名从成员列表读取。 */
 @Serializable
 data class DeliveryRow(val deliveryId: String, val targetBotId: String, val status: String, val detail: String = "",
-    val groupHandoff: GroupHandoff? = null, val canGuide: Boolean = false) {
+    val groupHandoff: GroupHandoff? = null, val canGuide: Boolean = false,
+    val startedAt: Long? = null, val resultId: String? = null, val activity: List<Activity>? = null) {
+    /** Host 提供公开的工具类别及时间，客户端不解析工具内容。 */
+    @Serializable data class Activity(val id: String, val label: String, val at: Long, val status: String)
     /** 群卡的交接只携带状态和作用域。 */
     @Serializable data class GroupHandoff(val phase: String, val shared: Boolean)
 

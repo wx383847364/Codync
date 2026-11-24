@@ -20,9 +20,13 @@ impl App {
         if self.bot_session_usage {
             self.sheet("botSessionUsage", json!({"botId": bot}), Reply::BotSessionUsage(bot.clone()));
         }
+        if self.bot_workspace_usage {
+            self.sheet("botWorkspaceUsage", json!({"botId": bot}), Reply::BotWorkspaceUsage(bot.clone()));
+        }
         self.overlays.push(Overlay::Routines(RoutineList {
             bot,
             session_usage: Value::Null,
+            workspace_usage: Value::Null,
             items: None,
             runs: Vec::new(),
             cursor: 0,
@@ -41,6 +45,19 @@ impl App {
         match (k.code, current) {
             (KeyCode::F(7), _) if self.bot_session_usage => {
                 self.sheet("botSessionUsage", json!({"botId": bot}), Reply::BotSessionUsage(bot.clone()));
+            }
+            (KeyCode::Char('H'), _) if self.session_history => {
+                self.overlays.push(Overlay::Routines(l));
+                self.open_session_history(bot, None);
+                return None;
+            }
+            (KeyCode::Char('O'), _) if self.on_this_computer => {
+                // 目录路径只由本机 Host 提供。
+                if let Some(path) = l.workspace_usage["directory"].as_str()
+                    && !crate::shell::open(std::ffi::OsStr::new(path))
+                {
+                    self.flash("Could not open the workspace folder.");
+                }
             }
             (KeyCode::Char('S'), _) if l.session_usage["hasSession"] == true => {
                 self.sheet("prepareHandoff", json!({"botId": bot}), Reply::PrepareHandoff(bot.clone()));

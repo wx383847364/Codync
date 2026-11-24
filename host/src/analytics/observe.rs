@@ -8,7 +8,13 @@ use crate::store::BotConfig;
 use serde_json::{Map, Value};
 
 /// Methods that stand for one event with one fixed property.
-const FIXED: [(&str, Event, &str, &str); 24] = [
+const FIXED: [(&str, Event, &str, &str); 30] = [
+    ("groupMemberActivity", Event::BotSessionUsage, "action", "view_group_member_activity"),
+    ("groupDeliveryResult", Event::BotSessionUsage, "action", "view_group_delivery_result"),
+    ("sessionHistory", Event::BotSessionUsage, "action", "view_session_history"),
+    ("sessionHistoryMessages", Event::BotSessionUsage, "action", "view_session_messages"),
+    ("deleteOldSession", Event::BotSessionUsage, "action", "delete_old_session"),
+    ("botWorkspaceUsage", Event::BotSessionUsage, "action", "view_bot_workspace"),
     ("groupWorkspaceUsage", Event::BotSessionUsage, "action", "view_group_workspaces"),
     ("groupResourceUsage", Event::BotSessionUsage, "action", "view_group_resources"),
     ("editHandoff", Event::HandoffAnswered, "action", "edit"),

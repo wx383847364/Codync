@@ -118,6 +118,12 @@ impl App {
                 }
                 Some(Overlay::GroupWorkspaces { room, usage, cursor })
             }
+            Overlay::SessionHistory { bot, room, snapshot, messages, cursor } => {
+                self.session_history_key(bot, room, snapshot, messages, cursor, k.code)
+            }
+            Overlay::MemberActivity { bot, room, snapshot, result, cursor } => {
+                self.member_activity_key(bot, room, snapshot, result, cursor, k.code)
+            }
             Overlay::Help(mut e) => {
                 if k.code == KeyCode::Esc || k.code == KeyCode::Char('?') && e.text.is_empty() {
                     None
@@ -144,6 +150,13 @@ impl App {
                         }
                         ConfirmAct::KeepHarnessMemory(id) => {
                             self.call("updateBot", json!({"id": id, "harnessMemory": true}), changed);
+                        }
+                        ConfirmAct::DeleteOldSession { bot, room, id } => {
+                            self.call(
+                                "deleteOldSession",
+                                json!({"botId":bot,"roomId":room,"historyId":id}),
+                                After::Sheet(Reply::OldSessionDeleted { bot: bot.clone(), room: room.clone() }),
+                            );
                         }
                         ConfirmAct::DeleteRoutine(bot, id) => {
                             self.call("deleteRoutine", json!({"botId": bot, "id": id}), changed);

@@ -14,6 +14,7 @@ struct GroupContexts: View {
     let remove: (String) -> Void
     let canLeaveEditor: () -> Bool
     let reviewBotId: String?
+    @Environment(\.jumpToChatEntry) private var jumpToChatEntry
     @State private var snapshot: GroupSessionContexts?
     @State private var inspecting: String?
     @Environment(\.dismissModal) private var dismiss
@@ -52,7 +53,9 @@ struct GroupContexts: View {
             }
         }
         .groupContextUpdates(room: room, model: model, snapshot: $snapshot, failure: $refreshError)
-        .groupContextInspection(snapshot: snapshot, inspecting: $inspecting, model: model)
+        .groupContextInspection(roomId: room.id, snapshot: snapshot, inspecting: $inspecting, model: model)
+        // 群编辑有未保存的更改时，仅在成员页预览进度和消息。
+        .environment(\.jumpToChatEntry, canLeaveEditor() ? jumpToChatEntry : nil)
         .task(id: reviewBotId) {
             // 消息头只打开所选成员的摘要，复用成员页的准备与私聊导航。
             if let reviewBotId { await open(reviewBotId, shared: false) }
@@ -265,7 +268,7 @@ extension View {
     }
 
     /// 从聊天标签或成员行都能查看同一套精确读数。
-    func groupContextInspection(snapshot: GroupSessionContexts?, inspecting: Binding<String?>, model: BotStore) -> some View {
+    func groupContextInspection(roomId: String, snapshot: GroupSessionContexts?, inspecting: Binding<String?>, model: BotStore) -> some View {
         let presentation = Binding(get: {
             // 存在有效目标才呈现详情。
             inspecting.wrappedValue != nil
@@ -278,6 +281,12 @@ extension View {
                 VStack(spacing: 0) {
                     ModalHeader(model.bots[botId]?.name ?? "Member context")
                     CardForm {
+                        if model.hello?.groupMemberActivity == true {
+                            MemberDeliveryActivityView(roomId: roomId, botId: botId)
+                        }
+                        if !member.shared, model.hello?.sessionHistory == true {
+                            SessionHistoryView(botId: botId, roomId: roomId)
+                        }
                         CardSection("Current context") {
                             Text(member.used.map { "\($0.formatted()) token" } ?? L10n.tr(member.hasSession ? "Usage not reported" : "No session yet"))
                             Text("\(L10n.tr("Display basis")) · \(groupContextCompact(basis)) · \(groupContextPercent(member.used, basis) ?? "—")")
@@ -287,6 +296,47 @@ extension View {
                     }
                 }
                 .background(Palette.background)
+            }
+        }
+    }
+}
+
+/// 在成员详情中打开 Host 定位的原派工卡。
+private struct MemberDeliveryActivityView: View {
+    let roomId: String
+    let botId: String
+    @Environment(BotStore.self) private var model
+    @Environment(\.jumpToChatEntry) private var jumpToChatEntry
+    @State private var reading: Reading?
+    @State private var failed = false
+
+    private struct Reading: Decodable, Sendable {
+        let entry: Entry?
+        let deliveryId: String?
+    }
+
+    /// 展示当前已加载的聊天副本，以便继续收到派工进度变更。
+    var body: some View {
+        CardSection("Member activity") {
+            if let entry = reading?.entry, let deliveryId = reading?.deliveryId {
+                let latest = model.entries[roomId]?.first(where: { $0.id == entry.id }) ?? entry
+                if let jumpToChatEntry, model.entries[roomId]?.contains(where: { $0.id == entry.id }) == true {
+                    Button(L10n.tr("Open original assignment")) {
+                        // 返回原聊天中的派工卡。
+                        jumpToChatEntry(entry.id)
+                    }.buttonStyle(.secondary)
+                }
+                DeliveryNoticeRow(entry: latest, deliveryId: deliveryId)
+            } else {
+                Text(L10n.tr(failed || model.isOffline ? "Unavailable" : reading == nil ? "Loading…" : "No assignments yet"))
+                    .foregroundStyle(Palette.secondary)
+            }
+        }
+        .task(id: model.bots[botId]?.rev) {
+            do {
+                reading = try await model.ready().call("groupMemberActivity", ["roomId": roomId, "botId": botId])
+            } catch {
+                failed = true
             }
         }
     }

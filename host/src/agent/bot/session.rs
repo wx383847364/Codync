@@ -350,6 +350,8 @@ impl Actor {
                     };
                     conn.loaded.insert(sid.clone(), Instant::now());
                     conn.session_slots.insert(sid.clone(), slot.map(str::to_owned));
+                    // 重新加载后单独记录打开身份，历史条目不能借用新的打开记录。
+                    conn.opened_sessions.insert(sid.clone(), uuid::Uuid::new_v4().to_string());
                     conn.renamed.insert(sid.clone(), renamed);
                     self.note_options(&sid, &res, Listing::Session);
                     if let Some(s) = snapshot {
@@ -387,6 +389,7 @@ impl Actor {
         let sid = res["sessionId"].as_str().ok_or_else(|| anyhow!("agent returned no sessionId"))?.to_owned();
         conn.loaded.insert(sid.clone(), Instant::now());
         conn.session_slots.insert(sid.clone(), slot.map(str::to_owned));
+        conn.opened_sessions.insert(sid.clone(), uuid::Uuid::new_v4().to_string());
         conn.renamed.insert(sid.clone(), renamed);
         let options = select_model(&conn.acp, &res, &sid, &self.cfg).await?;
         // 先为新会话建立快照，再写入该会话确认的模型，防止复用 ID 时继承旧元数据。

@@ -144,7 +144,8 @@ internal fun chatItems(entries: List<Entry>, pending: List<PendingSend>, busy: B
 @Composable internal fun ChatRow(entry: Entry, groupStart: Boolean, handoffPending: Boolean, groupContextLabel: String?, inspectContext: () -> Unit, chat: Bot?, state: AppState, store: AppStore,
     openTrace: () -> Unit, reply: (() -> Unit)?, connect: ConnectionRequestActions, addFallback: (Bot) -> Unit, openArtifact: (OpenArtifact) -> Unit, saveSharedFile: (Entry, SharedFile) -> Unit,
     contextModel: String? = null, contextReasoning: String? = null, contextRecommended: Boolean = false,
-    contextWaiting: Boolean = false, newSession: (() -> Unit)? = null) {
+    contextWaiting: Boolean = false, newSession: (() -> Unit)? = null,
+    openEntry: ((String) -> Unit)? = null, expandedRequest: String? = null) {
     val group = chat?.kind == "group"
     when (entry.kind) {
         "user" -> Column(Modifier.fillMaxWidth().padding(top = if (groupStart) 12.dp else 4.dp).animateContentSize(Motion.layoutSize),
@@ -171,7 +172,7 @@ internal fun chatItems(entries: List<Entry>, pending: List<PendingSend>, busy: B
         } else if (entry.data["handoff"] is JsonObject) Box(Modifier.padding(top = 10.dp)) {
             // A fresh conversation starts at the left, as on the iPhone.
             HandoffCardRow(entry, entry.data["handoff"] as JsonObject, state, store)
-        } else if (entry.data["deliveryRows"] is JsonArray) DeliveryNotice(entry, state, store)
+        } else if (entry.data["deliveryRows"] is JsonArray) DeliveryNotice(entry, state, store, openEntry = openEntry, expandedRequest = expandedRequest)
         else Box(Modifier.padding(top = 10.dp)) {
             // In a group, the member whose agent failed.
             val owner = state.bots.firstOrNull { it.id == (entry.data.text("author") ?: entry.botId) && it.kind != "group" }

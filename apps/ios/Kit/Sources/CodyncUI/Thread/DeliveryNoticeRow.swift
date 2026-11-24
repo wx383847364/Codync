@@ -29,12 +29,25 @@ struct HeldDeliveryRow: View {
     }
 }
 
+extension EnvironmentValues {
+    @Entry var openedDispatchId: String?
+}
+
 /// 折叠时可直接引导单一成员，多位成员的操作在详情中逐一列出。
 struct DeliveryNoticeRow: View {
     let entry: Entry
     @Environment(BotStore.self) private var model
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var expanded = false
+    @Environment(\.openedDispatchId) private var openedDispatchId
+    @State private var expanded: Bool
+    private let deliveryId: String?
+
+    /// 成员弹页聚焦一条原派工，聊天中的卡片保持默认折叠。
+    init(entry: Entry, deliveryId: String? = nil) {
+        self.entry = entry
+        self.deliveryId = deliveryId
+        _expanded = State(initialValue: deliveryId != nil)
+    }
 
     /// 仅显示同群中可接收引导的回合，提交时仍由 host 复核。
     private func activeId(_ row: DeliveryRow) -> String? {
@@ -46,7 +59,7 @@ struct DeliveryNoticeRow: View {
 
     /// 折叠状态属于本地展示，投递状态和操作结果来自 host。
     var body: some View {
-        let rows = entry.data.deliveryRows ?? []
+        let rows = (entry.data.deliveryRows ?? []).filter { deliveryId == nil || $0.deliveryId == deliveryId }
         let phase = model.hello?.groupSessionContexts == true
             ? ["draft", "approved", "switched", "sent"].first { phase in rows.contains { $0.groupHandoff?.phase == phase } }
             : nil
@@ -64,7 +77,8 @@ struct DeliveryNoticeRow: View {
                     .font(.footnote).foregroundStyle(Palette.secondary)
                 ForEach(rows, id: \.deliveryId) { row in
                     // 明确选择一个成员；其他成员的投递状态由 host 独立更新。
-                    HStack(spacing: 8) {
+                    VStack(alignment: .leading, spacing: 5) {
+                        HStack(spacing: 8) {
                         Text("\(model.bots[row.targetBotId]?.name ?? "已移除成员")：\(row.statusText)" + (row.detail.isEmpty ? "" : " · \(row.detail)"))
                             .font(.footnote).foregroundStyle(Palette.secondary)
                         if let id = activeId(row) {
@@ -72,6 +86,8 @@ struct DeliveryNoticeRow: View {
                         } else if ["failed", "interrupted", "noReply"].contains(row.status) {
                             Button("重新尝试") { model.retryDelivery(row.deliveryId) }.buttonStyle(.secondary)
                         }
+                    }
+                        DeliveryActivityView(row: row, roomId: entry.botId)
                     }
                 }
             } label: {
@@ -85,12 +101,80 @@ struct DeliveryNoticeRow: View {
                 }.buttonStyle(.secondary)
             }
         }
+        .onChange(of: openedDispatchId, initial: true) { _, id in
+            // 来自成员活动的定位应展开原派工。
+            if id == entry.id { expanded = true }
+        }
         if model.hello?.groupSessionContexts != true {
             ForEach(rows, id: \.deliveryId) { row in
                 if let handoff = row.groupHandoff { GroupDeliveryHandoffRow(row: row, handoff: handoff) }
             }
         }
 
+    }
+}
+
+/// 时间线使用本地时间；完成的结果从来源群读取。
+private struct DeliveryActivityView: View {
+    let row: DeliveryRow
+    let roomId: String
+    @Environment(BotStore.self) private var model
+    @Environment(\.jumpToChatEntry) private var jumpToChatEntry
+    @State private var result: Entry?
+    @State private var loading = false
+    @State private var error: String?
+
+    private struct Result: Decodable, Sendable { let entry: Entry }
+
+    /// 终态下保留工具开始记录，只有执行中才标记正在运行。
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            if let startedAt = row.startedAt {
+                Text("\(time(startedAt)) · \(L10n.tr("Started assignment"))")
+            }
+            ForEach(row.activity ?? []) { step in
+                let status = step.status == "completed" ? "Step completed" : step.status == "failed" ? "Step failed" : step.status == "interrupted" ? "Step interrupted"
+                    : row.status == "started" ? "In progress" : "Step started"
+                Text("\(time(step.at)) · \(L10n.tr(step.label)) · \(L10n.tr(status))")
+                    .foregroundStyle(status == "In progress" ? Palette.text : Palette.secondary)
+            }
+            if let id = row.resultId {
+                Button(L10n.tr("View result")) {
+                    // 已加载的结果直接定位；其他结果从 Host 读取。
+                    if let jumpToChatEntry, model.entries[roomId]?.contains(where: { $0.id == id }) == true {
+                        jumpToChatEntry(id)
+                    } else {
+                        Task { await openResult(id) }
+                    }
+                }.buttonStyle(.secondary).disabled(loading)
+            }
+            if let error { Text(error).foregroundStyle(Palette.danger) }
+        }
+        .font(.footnote).foregroundStyle(Palette.secondary)
+        .codyncSheet(isPresented: Binding(get: { result != nil }, set: { if !$0 { result = nil } })) {
+            VStack(spacing: 0) {
+                ModalHeader("View result")
+                CardForm { Text(result?.data.text ?? "") }
+            }
+        }
+    }
+
+    /// 用设备设置的时区格式化群内事件的时间。
+    private func time(_ at: Int64) -> String {
+        Date(timeIntervalSince1970: Double(at) / 1000).formatted(date: .omitted, time: .shortened)
+    }
+
+    /// 预览的消息身份由 Host 按群和投递结果重新检查。
+    private func openResult(_ id: String) async {
+        loading = true
+        error = nil
+        defer { loading = false }
+        do {
+            let reply: Result = try await model.ready().call("groupDeliveryResult", ["roomId": roomId, "resultId": id])
+            result = reply.entry
+        } catch {
+            self.error = error.localizedDescription
+        }
     }
 }
 

@@ -35,6 +35,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -67,17 +68,23 @@ import kotlinx.serialization.json.jsonPrimitive
  * One endless conversation with a bot or a group, as iOS `ThreadView`: only deliberate messages
  * show; tool calls and thinking live in "Full conversation". `editGroup` opens a group's editor (its details).
  */
-@Composable fun ChatScreen(state: AppState, store: AppStore, editGroup: (Bot) -> Unit) {
+@Composable fun ChatScreen(state: AppState, store: AppStore, editGroup: (Bot, (String) -> Unit) -> Unit) {
     val bot = state.bots.firstOrNull { it.id == state.selectedBot } ?: return
     key(state.contextId, state.generation, bot.id) { ThreadView(bot, state, store, editGroup) }
 }
 
 /** 群消息头可直接审阅所选成员摘要，普通群复用私聊确认边界。 */
-@Composable private fun ThreadView(bot: Bot, state: AppState, store: AppStore, editGroup: (Bot) -> Unit) {
+@Composable private fun ThreadView(bot: Bot, state: AppState, store: AppStore, editGroup: (Bot, (String) -> Unit) -> Unit) {
     AnalyticsOnAppear(AnalyticsEvent.ScreenViewed(AnalyticsScreen.Chat))
     val context = LocalContext.current
     // The bot's details sheet and the page it opens on.
     var details by remember(bot.id) { mutableStateOf<DetailsRequest?>(null) }
+    var entryJump by remember(bot.id) { mutableStateOf<Pair<String, String>?>(null) }
+    // 弹层和聊天使用原 entry ID，每次点击产生新的定位请求。
+    val openEntry: (String) -> Unit = { id ->
+        details = null
+        entryJump = java.util.UUID.randomUUID().toString() to id
+    }
     val openRoutine = { id: String -> details = DetailsRequest(routineId = id) }
     // The artifact open full size, over the chat and its details.
     var viewing by remember(bot.id) { mutableStateOf<OpenArtifact?>(null) }
@@ -101,7 +108,9 @@ import kotlinx.serialization.json.jsonPrimitive
     val showContexts = bot.kind == "group" && state.hello?.get("groupSessionContexts")?.jsonPrimitive?.booleanOrNull == true
     if (showContexts) {
         ObserveGroupContexts(bot, state, store, update = { groupContexts = it })
-        GroupContextInspection(groupContexts, bot.memberBots(state.bots), inspectingContext) { inspectingContext = it }
+        CompositionLocalProvider(LocalChatEntryJump provides openEntry) {
+            GroupContextInspection(bot.id, groupContexts, bot.memberBots(state.bots), inspectingContext, state, store) { inspectingContext = it }
+        }
     }
     CodyncSheet(reviewingContext != null, { reviewingContext = null }) {
         reviewingContext?.let { target ->
@@ -121,7 +130,7 @@ import kotlinx.serialization.json.jsonPrimitive
         // Down to just above the header's bottom; the bottom one stops under Jump to latest.
         ScrollEdge(Edge.Top, top + 84.dp)
         ScrollEdge(Edge.Bottom, with(density) { composerHeight.toDp() } + 4.dp, Modifier.align(Alignment.BottomCenter))
-        ThreadHeader(bot, state, store) { if (bot.kind == "group") editGroup(bot) else details = DetailsRequest() }
+        ThreadHeader(bot, state, store) { if (bot.kind == "group") editGroup(bot, openEntry) else details = DetailsRequest() }
         // The call floats over the chat under the header, as on iOS; the chat stays readable and usable.
         AnimatedVisibility(state.voice != null, Modifier.padding(top = top + 54.dp),
             enter = fadeIn(Motion.fade()) + slideInVertically(Motion.layoutOffset) { -it }, exit = fadeOut(Motion.fade()) + slideOutVertically(Motion.layoutOffset) { -it }) {
@@ -142,7 +151,8 @@ import kotlinx.serialization.json.jsonPrimitive
     }) {
         Transcript(bot, chatState, store, connect, groupContexts, { inspectingContext = it }, { reviewingContext = it }, PaddingValues(start = 16.dp, end = 16.dp, top = top + 60.dp,
             bottom = with(density) { composerHeight.toDp() } + 8.dp), indicatorTop = top + 50.dp, openRoutine = openRoutine, reply = reply,
-            addFallback = { details = DetailsRequest(botId = it.id) }, openArtifact = { viewing = it }, openCall = { callLine = it }, saveSharedFile = saveSharedFile) { peer = it }
+            addFallback = { details = DetailsRequest(botId = it.id) }, openArtifact = { viewing = it }, openCall = { callLine = it },
+            saveSharedFile = saveSharedFile, entryJump = entryJump, openEntry = openEntry) { peer = it }
     }
     if (bot.kind != "group") PrivateGroupHandoff(bot, state, store)
     CodyncDialog("Microphone access is off", micDenied, { micDenied = false },
@@ -155,7 +165,9 @@ import kotlinx.serialization.json.jsonPrimitive
     }
     CodyncSheet(details, { details = null }) { request ->
         val shown = state.bots.firstOrNull { it.id == (request.botId ?: bot.id) }
-        if (shown != null) BotDetailsView(shown, request, state, store) { viewing = it }
+        if (shown != null) CompositionLocalProvider(LocalChatEntryJump provides openEntry.takeIf { shown.id == bot.id }) {
+            BotDetailsView(shown, request, state, store) { viewing = it }
+        }
     }
     ArtifactLayer(viewing) { open ->
         state.bots.firstOrNull { it.id == open.botId }?.let { owner -> ArtifactViewer(open, owner, state, store) { viewing = null } }
@@ -241,7 +253,8 @@ private fun AppState.chatEntries(bot: Bot) = entries.filter { it.botId == bot.id
 @Composable private fun Transcript(bot: Bot, state: AppState, store: AppStore, connect: ConnectionRequestActions,
     groupContexts: GroupSessionContexts?, inspectContext: (String) -> Unit, reviewContext: (String) -> Unit, padding: PaddingValues,
     indicatorTop: Dp, openRoutine: (String) -> Unit, reply: (Entry) -> Unit, addFallback: (Bot) -> Unit, openArtifact: (OpenArtifact) -> Unit,
-    openCall: (String) -> Unit, saveSharedFile: (Entry, SharedFile) -> Unit, openPeer: (String) -> Unit) {
+    openCall: (String) -> Unit, saveSharedFile: (Entry, SharedFile) -> Unit, entryJump: Pair<String, String>?,
+    openEntry: (String) -> Unit, openPeer: (String) -> Unit) {
     val entries = state.chatEntries(bot)
     // A call's message that failed to send stays here, to be sent again.
     val pending = state.pending.filter { it.botId == bot.id && (it.call == null || it.status == SendStatus.Failed) }
@@ -270,7 +283,12 @@ private fun AppState.chatEntries(bot: Bot) = entries.filter { it.botId == bot.id
     val details by ThinkingDetails.enabled.collectAsStateWithLifecycle()
     // Pull to refresh reconnects, like Reconnect in the roster's computer menu, until the link is back.
     val showActivity = active.isNotEmpty() || held.isNotEmpty()
-    ConversationList(items.lastOrNull()?.id, entries.lastOrNull()?.rev, showActivity, padding, store::refreshConnection, indicatorTop) {
+    val target = entryJump?.let { (token, id) ->
+        // 列表顶部的加载占位属于真实的 LazyColumn 行。
+        items.indexOfFirst { (it as? ChatItem.Message)?.entry?.id == id }
+            .takeIf { it >= 0 }?.let { token to (it + if (more) 1 else 0) }
+    }
+    ConversationList(items.lastOrNull()?.id, entries.lastOrNull()?.rev, showActivity, padding, store::refreshConnection, indicatorTop, target) {
         if (more) item("earlier") {
             Box(Modifier.fillMaxWidth().padding(vertical = 14.dp).clearAndSetSemantics { contentDescription = "Loading earlier messages" },
                 contentAlignment = Alignment.Center) { Spinner(14.dp) }
@@ -301,6 +319,7 @@ private fun AppState.chatEntries(bot: Bot) = entries.filter { it.botId == bot.id
                         addFallback = addFallback, openArtifact = openArtifact, saveSharedFile = saveSharedFile,
                         contextModel = reading?.actualModelName, contextReasoning = reading?.reasoning,
                         contextRecommended = reading?.recommended == true, contextWaiting = waiting,
+                        openEntry = openEntry, expandedRequest = entryJump?.takeIf { it.second == item.id }?.first,
                         newSession = if (canReview && author != null) { { reviewContext(author) } } else null)
                     }
                 }

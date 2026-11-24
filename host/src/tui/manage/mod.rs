@@ -10,6 +10,7 @@ use super::net::files::SharedFileAction;
 mod agent;
 mod analytics;
 mod bot_chat;
+mod chat_inspection;
 mod dev_servers;
 mod fields;
 mod gear;
@@ -61,6 +62,27 @@ pub enum Reply {
     MemoryFile(String),
     Routines(String),
     BotSessionUsage(String),
+    BotWorkspaceUsage(String),
+    SessionHistory {
+        bot: String,
+        room: Option<String>,
+    },
+    SessionHistoryMessages {
+        bot: String,
+        room: Option<String>,
+    },
+    OldSessionDeleted {
+        bot: String,
+        room: Option<String>,
+    },
+    MemberActivity {
+        bot: String,
+        room: String,
+    },
+    MemberDeliveryResult {
+        bot: String,
+        room: String,
+    },
     PrepareHandoff(String),
     GroupHandoff(String),
     MemberSession {
@@ -127,6 +149,7 @@ pub struct Library {
 pub struct RoutineList {
     pub bot: String,
     pub session_usage: Value,
+    pub workspace_usage: Value,
     pub items: Option<Vec<Value>>,
     /// The bot's runs, newest first.
     pub runs: Vec<Value>,
@@ -503,6 +526,9 @@ impl App {
             let cap = reading["size"].as_u64();
             let occupancy = used.zip(cap).map_or_else(|| "—".into(), |(n, size)| context_percent(n, size));
             let name = self.author_name(Some(bot));
+            if self.group_member_activity {
+                self.open_member_activity(room.to_owned(), bot.to_owned());
+            }
             self.flash(&format!(
                 "{name} · {} token · {} {} · {occupancy}",
                 used.map_or_else(|| "—".into(), |n| n.to_string()),

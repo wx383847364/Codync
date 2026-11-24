@@ -254,6 +254,7 @@ pub(crate) async fn start_agent(
         session_slots: HashMap::new(),
         confirmed_models: HashMap::new(),
         started: Instant::now(),
+        opened_sessions: HashMap::new(),
         opening: false,
         fast_options: HashMap::new(),
         modes: HashMap::new(),

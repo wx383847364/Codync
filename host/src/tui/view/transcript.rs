@@ -478,6 +478,7 @@ fn entry_lines(
                             app.author_name(row["targetBotId"].as_str()),
                             Entry::delivery_status(row["status"].as_str().unwrap_or_default())
                         ));
+                        details.extend(activity_lines(row));
                     }
                     if rows
                         .iter()
@@ -603,6 +604,29 @@ fn reactions(out: &mut Built, app: &App, e: &Entry) {
 pub(super) fn user_line(e: &Entry) -> String {
     let files = e.attachments().iter().map(|(n, _)| format!("▤ {n}")).collect::<Vec<_>>().join("  ");
     [e.text(), files.as_str()].iter().filter(|s| !s.is_empty()).copied().collect::<Vec<_>>().join("  ")
+}
+
+/// 派工详情和成员弹层共用时间线文案。
+pub(super) fn activity_lines(row: &serde_json::Value) -> Vec<String> {
+    let mut lines = Vec::new();
+    if let Some(at) = row["startedAt"].as_i64() {
+        lines.push(format!("{} · {}", clock(at), tr("Started assignment")));
+    }
+    for step in row["activity"].as_array().into_iter().flatten() {
+        let state = tr(match step["status"].as_str() {
+            Some("completed") => "Step completed",
+            Some("failed") => "Step failed",
+            Some("interrupted") => "Step interrupted",
+            _ if row["status"] == "started" => "In progress",
+            _ => "Step started",
+        });
+        lines.push(format!(
+            "{} · {} · {state}",
+            clock(step["at"].as_i64().unwrap_or_default()),
+            tr(step["label"].as_str().unwrap_or("Using a tool"))
+        ));
+    }
+    lines
 }
 
 pub(in crate::tui) fn file_size(bytes: u64) -> String {

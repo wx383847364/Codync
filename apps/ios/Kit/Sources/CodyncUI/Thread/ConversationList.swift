@@ -2,6 +2,11 @@ import CodyncKit
 import SwiftUI
 import UIKit
 
+/// 当前聊天提供消息定位；从其他页面打开的详情仍可使用只读预览。
+extension EnvironmentValues {
+    @Entry var jumpToChatEntry: ((String) -> Void)?
+}
+
 /// One row of a conversation: a message, a separator, the working indicator…
 struct ConversationRow {
     let id: String
@@ -25,6 +30,8 @@ struct ConversationRow {
 struct ConversationList: View {
     let rows: [ConversationRow]
     @Binding var following: Bool
+    var jumpTo: UUID?
+    var jumpEntryId: String?
     /// The reader scrolled up near the top: time to bring in earlier messages.
     var nearTop: (() -> Void)?
     /// Letting go of a full pull past the top: the force refresh, its indicator held until it returns.
@@ -42,7 +49,7 @@ struct ConversationList: View {
             .ignoresSafeArea()
             // The list itself stays inside the safe area (so its rows never see one) and
             // reaches out past it.
-            ConversationCollection(rows: rows, following: $following, nearTop: nearTop, refresh: refresh, pull: pull,
+            ConversationCollection(rows: rows, following: $following, jumpTo: jumpTo, jumpEntryId: jumpEntryId, nearTop: nearTop, refresh: refresh, pull: pull,
                                    outsets: UIEdgeInsets(top: max(0, safeFrame.minY - fullFrame.minY), left: 0,
                                                          bottom: max(0, fullFrame.maxY - safeFrame.maxY), right: 0))
                 .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { safeFrame = $0 }
@@ -59,6 +66,8 @@ struct ConversationList: View {
 private struct ConversationCollection: UIViewRepresentable {
     let rows: [ConversationRow]
     @Binding var following: Bool
+    let jumpTo: UUID?
+    let jumpEntryId: String?
     let nearTop: (() -> Void)?
     let refresh: (() async -> Void)?
     let pull: PullToRefresh
@@ -86,6 +95,7 @@ private struct ConversationCollection: UIViewRepresentable {
         /// What the list is telling `following` (it reaches the binding after the update).
         private var pending: Bool?
         private var lastId: String?
+        private var handledJump: UUID?
         private var lastOffset: CGFloat = 0
         private var reduceMotion = false
 
@@ -184,7 +194,14 @@ private struct ConversationCollection: UIViewRepresentable {
             } else {
                 applyKeepingPlace(snapshot)
             }
-            if jump || sent { view.scrollToEnd(animated: !reduceMotion) }
+            if let jumpTo = parent.jumpTo, handledJump != jumpTo, let id = parent.jumpEntryId,
+               let path = dataSource.indexPath(for: id) {
+                // 点击原消息时停止自动跟随；等待快照载入后滚至目标行。
+                handledJump = jumpTo
+                setFollowing(false)
+                view.layoutIfNeeded()
+                view.scrollToItem(at: path, at: .centeredVertically, animated: !reduceMotion)
+            } else if jump || sent { view.scrollToEnd(animated: !reduceMotion) }
         }
 
         /// Rows going in or out above: the first row on screen stays where it is.

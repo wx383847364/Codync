@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -48,9 +49,14 @@ import kotlinx.serialization.json.*
 }
 
 /** 折叠时可直接引导单一成员，多位成员的操作在详情中逐一列出。 */
-@Composable internal fun DeliveryNotice(entry: Entry, state: AppState, store: AppStore) {
+@Composable internal fun DeliveryNotice(entry: Entry, state: AppState, store: AppStore, deliveryId: String? = null, openEntry: ((String) -> Unit)? = LocalChatEntryJump.current, expandedRequest: String? = null) {
     val rows = entry.data["deliveryRows"]?.let { WireJson.decodeFromJsonElement(ListSerializer(DeliveryRow.serializer()), it) }.orEmpty()
-    var expanded by remember(entry.id) { mutableStateOf(false) }
+        .filter { deliveryId == null || it.deliveryId == deliveryId }
+    var expanded by remember(entry.id, deliveryId) { mutableStateOf(deliveryId != null) }
+    LaunchedEffect(expandedRequest) {
+        // 来自成员页的定位让原卡片展开。
+        if (expandedRequest != null) expanded = true
+    }
 
     val hasOverview = state.hello?.get("groupSessionContexts")?.jsonPrimitive?.booleanOrNull == true
     // 成员卡负责新开会话时，原派工默认只占一行。
@@ -77,7 +83,8 @@ import kotlinx.serialization.json.*
             Text(summary, style = Type.footnote, color = Palette.secondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }) {
             Text("第 ${entry.data["deliveryAttempt"]?.jsonPrimitive?.intOrNull ?: 1} 次投递" + (if (entry.data.text("parentDeliveryId") != null) " · 重试投递" else ""), style = Type.footnote, color = Palette.secondary)
-            for (row in rows) Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            for (row in rows) Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("${state.bots.firstOrNull { it.id == row.targetBotId }?.name ?: "已移除成员"}：${row.statusText}" + (if (row.detail.isEmpty()) "" else " · ${row.detail}"),
                     modifier = Modifier.weight(1f), style = Type.footnote, color = Palette.secondary)
                 val id = activeId(row)
@@ -88,6 +95,10 @@ import kotlinx.serialization.json.*
                 } else if (row.status in listOf("failed", "interrupted", "noReply")) {
                     SecondaryButton("重新尝试", action = { store.command("retryDelivery", body("deliveryId" to row.deliveryId)) })
                 }
+                }
+                DeliveryActivity(row, entry.botId, store, openEntry?.takeIf {
+                    state.entries.any { it.id == row.resultId }
+                })
             }
         }
         if (!expanded && eligible.isNotEmpty()) {
@@ -101,6 +112,60 @@ import kotlinx.serialization.json.*
     }
     if (!hasOverview) for (row in rows) row.groupHandoff?.let { GroupDeliveryHandoffRow(row, it, state, store) }
 
+}
+
+/** 终态保留步骤时间，结果从同群历史读取。 */
+@Composable private fun DeliveryActivity(row: DeliveryRow, roomId: String, store: AppStore, openEntry: ((String) -> Unit)?) {
+    val scope = rememberCoroutineScope()
+    var result by remember(row.deliveryId) { mutableStateOf<Entry?>(null) }
+    var error by remember(row.deliveryId) { mutableStateOf<String?>(null) }
+    var loading by remember(row.deliveryId) { mutableStateOf(false) }
+
+    /** 与聊天一样按设备时区显示时间。 */
+    fun time(at: Long): String = java.text.DateFormat.getTimeInstance(java.text.DateFormat.SHORT).format(java.util.Date(at))
+
+    row.startedAt?.let { Text("${time(it)} · ${tr("Started assignment")}", style = Type.footnote, color = Palette.secondary) }
+    for (step in row.activity.orEmpty()) {
+        val status = when {
+            step.status == "completed" -> "Step completed"
+            step.status == "failed" -> "Step failed"
+            step.status == "interrupted" -> "Step interrupted"
+            row.status == "started" -> "In progress"
+            else -> "Step started"
+        }
+        Text("${time(step.at)} · ${tr(step.label)} · ${tr(status)}", style = Type.footnote,
+            color = if (status == "In progress") Palette.text else Palette.secondary)
+    }
+    row.resultId?.let { id ->
+        SecondaryButton("View result", enabled = !loading) {
+            if (openEntry != null) {
+                openEntry(id)
+                return@SecondaryButton
+            }
+            // 返回原始群回复，失败时保留活动列表。
+            scope.launch {
+                loading = true
+                error = null
+                try {
+                    val reply = store.hostCall("groupDeliveryResult", body("roomId" to roomId, "resultId" to id)).jsonObject
+                    result = reply["entry"]?.let { WireJson.decodeFromJsonElement<Entry>(it) }
+                } catch (failure: CancellationException) {
+                    throw failure
+                } catch (failure: Exception) {
+                    error = failure.localizedMessage
+                } finally {
+                    loading = false
+                }
+            }
+        }
+    }
+    error?.let { Text(it, style = Type.footnote, color = Palette.danger) }
+    CodyncSheet(result != null, { result = null }) {
+        Column {
+            ModalHeader("View result")
+            CardForm { Text(result?.text.orEmpty()) }
+        }
+    }
 }
 
 /** 独立群可以编辑交接，共享会话引导到派工成员的私聊。 */

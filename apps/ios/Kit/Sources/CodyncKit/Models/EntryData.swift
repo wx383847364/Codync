@@ -241,6 +241,17 @@ public struct DeliveryRow: Codable, Hashable, Sendable {
     public var status: String
     public var detail: String
     public var canGuide: Bool? = nil
+    public var startedAt: Int64? = nil
+    public var resultId: String? = nil
+    public var activity: [Activity]? = nil
+
+    /// Host 提供可公开的步骤类别、时间及状态。
+    public struct Activity: Codable, Hashable, Sendable, Identifiable {
+        public let id: String
+        public let label: String
+        public let at: Int64
+        public let status: String
+    }
     public var groupHandoff: GroupHandoff?
 
     /// 仅展示原派工的状态和作用域，摘要通过专用入口读取。

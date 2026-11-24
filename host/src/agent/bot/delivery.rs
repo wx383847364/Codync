@@ -378,9 +378,11 @@ impl Actor {
     }
 
     /// 会话准备完成后提交保守发送边界；提交失败绝不发送 prompt。
-    pub(super) fn commit_delivery_start(&self) -> Result<()> {
-        if let Some(active) = &self.active_delivery {
+    pub(super) fn commit_delivery_start(&mut self) -> Result<()> {
+        if let Some(active) = &mut self.active_delivery {
             ensure!(self.hub.start_delivery(&active.delivery.id, &self.cfg.id)?, "delivery cancelled before prompt");
+            // 活动写入使用本次 started 时间，避免暂停后的迟到更新串入重新开始的回合。
+            active.delivery.started_at = self.hub.store.delivery(&active.delivery.id)?.and_then(|row| row.started_at);
         }
         Ok(())
     }
@@ -451,12 +453,12 @@ impl Actor {
     }
 
     /// 默认等当前执行及结果保存结束后切换，强制切换也不能早于中断持久化。
-    pub(super) fn apply_pending_session(&mut self) {
+    pub(super) async fn apply_pending_session(&mut self) {
         if self.pending_new_session.is_some() && self.turn.is_none() && self.pending_completion.is_none() {
             if self.hub.runtime(&self.cfg.id).storage_error.is_some() {
                 return;
             }
-            if let Err(error) = self.hub.store.reset_main_session(&self.cfg.id) {
+            if let Err(error) = self.switch_main_session(false).await {
                 tracing::error!(%error,"new session could not be saved");
                 self.hub
                     .delivery_storage_error(&self.cfg.id, Some("存储不可写：旧会话已保留，等待重试保存后切换".into()));
@@ -466,9 +468,6 @@ impl Actor {
             self.hub.set_runtime(&self.cfg.id, |r| r.pending_new_session = false);
             // 持久清理成功后才清除内存会话；queued投递随后在新会话执行。
             crate::chat::handoff::clear(&self.hub, &self.cfg.id);
-            self.session_id = None;
-            self.main_session_changed();
-            self.relay.recap = None;
             let _ = self.dreamer.send(crate::chat::memory::DreamEvent::Flush);
             crate::chat::group::wake(&self.hub, Some(&self.cfg.id));
         }

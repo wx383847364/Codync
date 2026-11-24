@@ -85,6 +85,19 @@ pub fn routines(buf: &mut Buffer, area: Rect, app: &App, l: &RoutineList) {
     let title = name_of(app, &l.bot);
     let inner = frame_box(buf, r, t.text, t.panel, Some((&title, t.text)));
     let mut inner = page_tabs(buf, inner, Page::Details);
+    if app.bot_workspace_usage && inner.height >= 4 {
+        let value = l.workspace_usage["bytes"]
+            .as_u64()
+            .map_or_else(|| tr("Unavailable").into_owned(), super::view::workspace_size);
+        let hint = if app.on_this_computer && l.workspace_usage["directory"].is_string() {
+            format!("  O {}", tr("Open folder"))
+        } else {
+            String::new()
+        };
+        let line = format!("{} · {} · {value}{hint}", tr("Disk usage"), tr("Managed workspace"));
+        put(buf, inner.x, inner.y, inner.width, &line, t.text.patch(t.panel));
+        inner = Rect::new(inner.x, inner.y + 2, inner.width, inner.height.saturating_sub(2));
+    }
     // What changes often: the agent, its model and the instructions (`i` edits them in Settings).
     if let Some(b) = app.bots.get(&l.bot).filter(|b| !b.group) {
         let agent = app
@@ -123,6 +136,10 @@ pub fn routines(buf: &mut Buffer, area: Rect, app: &App, l: &RoutineList) {
     }
     if app.bot_session_usage && inner.height >= 6 {
         inner = session_usage(buf, inner, &l.session_usage);
+        if app.session_history {
+            put(buf, inner.x, inner.y, inner.width, &format!("H {}", tr("Session history")), t.dim.patch(t.panel));
+            inner = Rect::new(inner.x, inner.y + 1, inner.width, inner.height.saturating_sub(1));
+        }
     }
     put(buf, inner.x, inner.y, inner.width, &tr("Routines"), t.bold.patch(t.panel));
     let list_h = usize::from(inner.height.saturating_sub(3)) / 2;

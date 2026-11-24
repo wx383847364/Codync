@@ -94,6 +94,57 @@ impl App {
                     self.sheet("routines", json!({"botId": bot}), Reply::Routines(bot.clone()));
                 }
             }
+            Reply::SessionHistory { bot, room } => {
+                if let Some(Overlay::SessionHistory { bot: target, room: scope, snapshot, cursor, .. }) =
+                    self.overlays.last_mut()
+                    && *target == bot
+                    && *scope == room
+                {
+                    *cursor = (*cursor).min(v["sessions"].as_array().map_or(0, |rows| rows.len().saturating_sub(1)));
+                    *snapshot = v;
+                }
+            }
+            Reply::SessionHistoryMessages { bot, room } => {
+                if let Some(Overlay::SessionHistory { bot: target, room: scope, messages, cursor, .. }) =
+                    self.overlays.last_mut()
+                    && *target == bot
+                    && *scope == room
+                {
+                    *messages = Some(v);
+                    *cursor = 0;
+                }
+            }
+            Reply::OldSessionDeleted { bot, room } => {
+                self.sheet("sessionHistory", json!({"botId":bot,"roomId":room}), Reply::SessionHistory { bot, room });
+            }
+            Reply::MemberActivity { bot, room } => {
+                if let Some(Overlay::MemberActivity { bot: target, room: scope, snapshot, .. }) =
+                    self.overlays.last_mut()
+                    && *target == bot
+                    && *scope == room
+                {
+                    *snapshot = v;
+                }
+            }
+            Reply::MemberDeliveryResult { bot, room } => {
+                if let Some(Overlay::MemberActivity { bot: target, room: scope, result, cursor, .. }) =
+                    self.overlays.last_mut()
+                    && *target == bot
+                    && *scope == room
+                {
+                    *result = v["entry"]["data"]["text"].as_str().map(str::to_owned);
+                    *cursor = 0;
+                }
+            }
+            Reply::BotWorkspaceUsage(bot) => {
+                for overlay in &mut self.overlays {
+                    if let Overlay::Routines(details) = overlay
+                        && details.bot == bot
+                    {
+                        details.workspace_usage = v.clone();
+                    }
+                }
+            }
             Reply::BotSessionUsage(bot) => {
                 for overlay in &mut self.overlays {
                     if let Overlay::Routines(details) = overlay

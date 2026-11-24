@@ -124,6 +124,7 @@ struct BotDetailsView: View {
         switch tab {
         case .details:
             VStack(alignment: .leading, spacing: 28) {
+                if let bot, model.hello?.botWorkspaceUsage == true { BotWorkspaceUsageView(botId: bot.id) }
                 if let bot, !bot.devServers.isEmpty { DevServersSection(bot: bot) }
                 if let draft = Binding($draft) {
                     BotSettingsForm(draft: draft, error: saveError, scrolls: false, part: .often)
@@ -180,6 +181,37 @@ struct BotDetailsView: View {
 }
 
 
+/// 显示远程 Host 上的 Bot 托管工作区大小。
+private struct BotWorkspaceUsageView: View {
+    let botId: String
+    @Environment(BotStore.self) private var model
+    @State private var reading = "Loading…"
+
+    private struct Usage: Decodable, Sendable { let bytes: Int64? }
+
+    /// 重连时重新读取，确认的空目录按 0 B 展示。
+    var body: some View {
+        CardSection("Disk usage") {
+            HStack {
+                Text(L10n.tr("Managed workspace"))
+                Spacer()
+                Text(L10n.tr(model.isOffline ? "Unavailable" : reading))
+                    .foregroundStyle(Palette.secondary)
+            }
+        }
+        .task(id: model.isOffline) {
+            guard !model.isOffline else { return }
+            do {
+                let result: Usage = try await model.ready().call("botWorkspaceUsage", ["botId": botId])
+                guard !Task.isCancelled else { return }
+                reading = result.bytes.map { $0 == 0 ? "0 B" : ByteCountFormatter.string(fromByteCount: $0, countStyle: .file) } ?? "Unavailable"
+            } catch {
+                if !Task.isCancelled { reading = "Unavailable" }
+            }
+        }
+    }
+}
+
 /// 显示主会话占用和最近尝试，展开一次尝试可查看供应方实报字段。
 private struct SessionUsageView: View {
     let bot: Bot
@@ -201,6 +233,7 @@ private struct SessionUsageView: View {
                 IconButton("Refresh usage", systemImage: "arrow.clockwise") { refresh += 1 }
                     .disabled(model.isOffline)
             }
+            if offersSessionHandoff, model.hello?.sessionHistory == true { SessionHistoryView(botId: bot.id) }
             if let error { Text(L10n.tr(error)).font(.footnote).foregroundStyle(Palette.danger) }
             if offersSessionHandoff, usage?.hasSession == true {
                 Button(L10n.tr("Prepare new session with summary")) {

@@ -99,6 +99,12 @@ pub enum Cmd {
         text: Option<String>,
         reply: tokio::sync::oneshot::Sender<Result<Value>>,
     },
+    /// 历史查询及经用户确认的删除均由会话所属 actor 处理。
+    SessionHistory {
+        room: Option<String>,
+        delete: Option<String>,
+        reply: tokio::sync::oneshot::Sender<Result<Value>>,
+    },
     RetryDeliverySave,
     SessionSwitch {
         mode: String,

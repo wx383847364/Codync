@@ -113,6 +113,12 @@ pub enum ConfirmAct {
     /// Keeps a bot's harness's own memory on beside Codync's.
     KeepHarnessMemory(String),
     DeleteRoutine(String, String),
+    /// 用户确认后只删除 Host 标识的归档条目。
+    DeleteOldSession {
+        bot: String,
+        room: Option<String>,
+        id: String,
+    },
     RotateRoutineKey(String, String),
     RemoveConnector(String),
     RemoveSkill(String),
@@ -342,6 +348,22 @@ pub enum Overlay {
     GroupWorkspaces {
         room: String,
         usage: Option<serde_json::Value>,
+        cursor: usize,
+    },
+    /// 私聊和群成员历史共用浏览与聊天预览。
+    SessionHistory {
+        bot: String,
+        room: Option<String>,
+        snapshot: serde_json::Value,
+        messages: Option<serde_json::Value>,
+        cursor: usize,
+    },
+    /// 无需先加载聊天历史即可查看所选成员的原派工。
+    MemberActivity {
+        bot: String,
+        room: String,
+        snapshot: serde_json::Value,
+        result: Option<String>,
         cursor: usize,
     },
     Help(Editor),

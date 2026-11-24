@@ -64,12 +64,38 @@ pub(super) async fn group_usage(hub: &Arc<Hub>, room: &str, local: bool) -> Resu
     .await?
 }
 
+// 单 Bot 与群统计共用扫描限流，避免同时打开多个详情挤占 Host。
+static WORKSPACE_SCAN: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
+
+/// 校验 Bot 归属后读取其托管工作区，远程调用只返回容量。
+pub(super) async fn bot_workspace(hub: &Hub, bot: &str, local: bool) -> Result<Value> {
+    let id = hub
+        .store
+        .bot(bot)?
+        .filter(|row| !row.deleted && !row.config.is_group())
+        .ok_or_else(|| anyhow!("unknown bot"))?
+        .config
+        .id;
+    let permit = WORKSPACE_SCAN.acquire().await?;
+    tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+        let (bytes, exists) = crate::agent::workspace::storage(&id, deadline);
+        let mut result = json!({"bytes": bytes});
+        if local && exists {
+            result["directory"] = json!(crate::agent::workspace::path(&id));
+        }
+        result
+    })
+    .await
+    .map_err(Into::into)
+}
+
 /// 按群成员统计托管工作区。只给本机返回目录，避免向远程设备透露文件系统路径。
 pub(super) async fn group_workspaces(hub: &Arc<Hub>, room: &str, local: bool) -> Result<Value> {
     use std::collections::HashSet;
     use std::time::{Duration, Instant};
 
-    static SCAN: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
     let rows = hub.store.bots()?;
     let group = rows
         .iter()
@@ -86,7 +112,7 @@ pub(super) async fn group_workspaces(hub: &Arc<Hub>, room: &str, local: bool) ->
         .filter(|row| !row.deleted && !row.config.is_group() && current.contains(&row.config.id))
         .map(|row| (row.config.id.clone(), (row.config.name.clone(), shared.contains(&row.config.id))))
         .collect();
-    let permit = SCAN.acquire().await?;
+    let permit = WORKSPACE_SCAN.acquire().await?;
     tokio::task::spawn_blocking(move || {
         let _permit = permit;
         // 每个成员都有自己的时间份额，大目录超时也不会让排在后面的成员失去扫描机会。

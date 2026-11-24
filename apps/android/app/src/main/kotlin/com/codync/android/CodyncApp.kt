@@ -40,7 +40,7 @@ private enum class Root { Loading, AwaitingAccount, Welcome, Choose, Pairing, Ta
 private data class NewTarget(val group: Boolean, val computerId: String)
 
 /** An editor sheet's draft and the computer its bot lives on. */
-private data class Editing<T>(val computerId: String, val draft: T)
+private data class Editing<T>(val computerId: String, val draft: T, val openEntry: ((String) -> Unit)? = null)
 
 /**
  * The app's root, as iOS `RootView`: the welcome and pairing until set up, then the tabs, with every sheet
@@ -141,7 +141,15 @@ private data class Editing<T>(val computerId: String, val draft: T)
                         edit = edit, extensions = openMarketplace, tab = tab, onTab = { tab = it }, covered = showAccount || showComputers || showPairing || showUsage ||
                             marketplace != null || creating != null || access != null || editor != null || groupEditor != null || app.error != null) { chat ->
                         // A conversation, talking to the computer the bot lives on.
-                        accounts.store(chat.computer.id)?.let { store -> ChatScreen(chat, store) { bot -> edit(chat.computer.id, bot) } }
+                        accounts.store(chat.computer.id)?.let { store ->
+                            ChatScreen(chat, store) { bot, jump ->
+                                // 由聊天打开的群详情可收起后定位原派工或消息。
+                                groupEditor = Editing(chat.computer.id, GroupDraft.from(bot)) { entry ->
+                                    groupEditor = null
+                                    jump(entry)
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -187,9 +195,11 @@ private data class Editing<T>(val computerId: String, val draft: T)
             AnalyticsOnAppear(AnalyticsEvent.ScreenViewed(AnalyticsScreen.BotDetails))
             OnComputer(target.computerId, computers, accounts) { state, store ->
                 key(app.contextId, app.generation, target.computerId, target.draft.id) {
-                    GroupEditor(state, target.draft, store) {
-                        // 关闭动画还在运行时，该设置页也已失去私聊跳转资格。
-                        groupEditor === target
+                    CompositionLocalProvider(LocalChatEntryJump provides target.openEntry) {
+                        GroupEditor(state, target.draft, store) {
+                            // 关闭动画还在运行时，该设置页也已失去聊天跳转资格。
+                            groupEditor === target
+                        }
                     }
                 }
             }

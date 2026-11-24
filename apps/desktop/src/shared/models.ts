@@ -365,6 +365,9 @@ export interface AgentSwitch {
 export interface DeliveryRow {
   deliveryId: string; targetBotId: string; status: string; detail: string
   canGuide?: boolean
+  startedAt?: number | null
+  resultId?: string | null
+  activity?: { id: string; label: string; at: number; status: string }[] | null
   groupHandoff?: { phase: string; shared: boolean } | null
 }
 
@@ -605,6 +608,9 @@ export interface Hello {
   groupSessionContexts?: boolean
   groupResourceUsage?: boolean
   groupWorkspaceUsage?: boolean
+  botWorkspaceUsage?: boolean
+  sessionHistory?: boolean
+  groupMemberActivity?: boolean
   /** 主机能按附件身份校验原图尺寸，不包含正文路径读取能力。 */
   fileImageInfo?: boolean
   workspaceFileSearch?: boolean

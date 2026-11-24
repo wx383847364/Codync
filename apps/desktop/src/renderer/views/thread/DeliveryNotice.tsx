@@ -11,11 +11,11 @@ import { useTr } from '../../lib/use-language'
 import { deliveryStatus, deliverySummary } from './delivery-status'
 
 /** 折叠时可直接引导单一成员，多位成员的操作在详情中逐一列出。 */
-export function DeliveryNotice({ entry }: { entry: Entry }) {
+export function DeliveryNotice({ entry, deliveryId }: { entry: Entry; deliveryId?: string }) {
   const store = useStore()
   const tr = useTr()
-  const [expanded, setExpanded] = useState(false)
-  const rows = entry.data.deliveryRows ?? []
+  const [expanded, setExpanded] = useState(deliveryId != null)
+  const rows = (entry.data.deliveryRows ?? []).filter(row => deliveryId == null || row.deliveryId === deliveryId)
   /** 只显示同群中已声明支持引导的当前回合，提交时仍由 host 复核。 */
   const activeId = (row: DeliveryRow) => {
     const bot = store.bots.get(row.targetBotId)
@@ -34,7 +34,7 @@ export function DeliveryNotice({ entry }: { entry: Entry }) {
   const summary = phase === 'draft' ? tr('Waiting for a new session')
     : phase === 'sent' ? tr('New session started. Original dispatch resumed.')
     : phase ? tr('Preparing a new session') : deliverySummary(rows)
-  return <HStack id={entry.id} className="delivery-notice" align="flex-start" gap={8}>
+  return <HStack id={deliveryId == null ? entry.id : undefined} className="delivery-notice" align="flex-start" gap={8}>
     <VStack grow>
       {/* 复用折叠控件的键盘与 aria-expanded 行为，正文保留在原消息中。 */}
       <Disclosure expanded={expanded} onToggle={() => setExpanded(!expanded)} label={<Text size="footnote" tone="secondary" truncate>{summary}</Text>}>
@@ -43,13 +43,16 @@ export function DeliveryNotice({ entry }: { entry: Entry }) {
           {rows.map((row) => {
             // 显式引导只作用于该行成员，重试仍由 host 新建投递。
             const id = activeId(row)
-            return <HStack key={row.deliveryId} gap={8}>
+            return <VStack key={row.deliveryId} gap={5}>
+              <HStack gap={8}>
               <Text size="footnote" tone="secondary" grow>{store.bots.get(row.targetBotId)?.name ?? '已移除成员'}：{deliveryStatus(row.status)}{row.detail ? ` · ${row.detail}` : ''}</Text>
               {id
                 ? <Button kind="secondary" onClick={() => store.guideDelivery(row.deliveryId, id)}>引导</Button>
                 : ['failed', 'interrupted', 'noReply'].includes(row.status)
                   ? <Button kind="secondary" onClick={() => store.retryDelivery(row.deliveryId)}>重新尝试</Button> : null}
-            </HStack>
+              </HStack>
+              <DeliveryActivity row={row} roomId={entry.botId} inDetails={deliveryId != null} />
+            </VStack>
           })}
         </VStack>
       </Disclosure>
@@ -65,6 +68,52 @@ export function DeliveryNotice({ entry }: { entry: Entry }) {
         }}>{eligible.length === 1 ? '引导' : '引导…'}</Button> : null}
     {!store.hello?.groupSessionContexts && rows.filter(row => row.groupHandoff).map(row => <GroupHandoffRow row={row} key={row.deliveryId} />)}
   </HStack>
+}
+
+/** 在原卡回看步骤，结果优先定位到群聊原消息。 */
+function DeliveryActivity({ row, roomId, inDetails }: { row: DeliveryRow; roomId: string; inDetails: boolean }) {
+  const tr = useTr()
+  const store = useStore()
+  const [result, setResult] = useState<Entry | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [loading, setLoading] = useState(false)
+
+  /** 旧结果尚未载入或原卡处于详情弹层时，读取同群的原消息。 */
+  async function openResult() {
+    if (!row.resultId) return
+    const target = inDetails ? null : document.getElementById(row.resultId)
+    if (target) {
+      target.scrollIntoView({ block: 'center' })
+      target.focus({ preventScroll: true })
+      return
+    }
+    setLoading(true)
+    setError(null)
+    try {
+      setResult((await (await store.ready()).call<{ entry: Entry }>('groupDeliveryResult', { roomId, resultId: row.resultId })).entry)
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : String(failure))
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  /** 显示设备本地时间，便于与聊天消息对应。 */
+  const time = (at: number) => new Date(at).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
+  return <VStack gap={4}>
+    {row.startedAt != null && <Text size="footnote" tone="secondary">{time(row.startedAt)} · {tr('Started assignment')}</Text>}
+    {(row.activity ?? []).map(step => {
+      // 结束的派工可能保留未结束的工具，仍显示历史上的开始时间。
+      const status = step.status === 'completed' ? 'Step completed' : step.status === 'failed' ? 'Step failed' : step.status === 'interrupted' ? 'Step interrupted'
+        : row.status === 'started' ? 'In progress' : 'Step started'
+      return <Text key={step.id} size="footnote" tone={status === 'In progress' ? undefined : 'secondary'}>{time(step.at)} · {tr(step.label)} · {tr(status)}</Text>
+    })}
+    {row.resultId && <Button kind="secondary" disabled={loading} onClick={() => { /* 打开已保存的群聊结果。 */ void openResult() }}>{tr('View result')}</Button>}
+    {error && <Text size="footnote" tone="secondary" role="status">{error}</Text>}
+    <Sheet open={result != null} onClose={() => { /* 关闭结果页后仍可查看原派工。 */ setResult(null) }}>
+      {result && <SheetPage><ModalHeader title={tr('View result')} /><CardForm><Text>{result.data.text}</Text></CardForm></SheetPage>}
+    </Sheet>
+  </VStack>
 }
 
 /** 操作跟在原派工下，普通群仅显示作用域并打开对应私聊。 */

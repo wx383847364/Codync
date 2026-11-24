@@ -135,6 +135,10 @@ available beside the affected member in the source group and in its own chat, ev
 five times at three-second intervals first. If storage stays unavailable and the process
 exits, unsaved results may be lost; Codync reports uncertainty and does not rerun them.
 
+## Member activity
+
+Expand a **Group dispatch** notice in the chat to see when each member started, its reported steps, and its result. Select a member’s context reading to see their latest assignment in that group. The terminal expands a selected notice with **o** and opens member details from **W**. Activity shows tool categories and their states when the agent supplies them. The group result is the member’s original reply.
+
 ## Starting a new session
 
 `/new` waits for the current task and result save before switching; `/new-now` stops and
@@ -182,6 +186,8 @@ In an ordinary group, the member shares its session with its private chat. The m
 opens the private handoff. The summary goes into the next private message, and the group work
 continues with group context. In an isolated group, this opens a session for that member in that group.
 
-Codync archives the old session reference and continues the work. The old agent session is
-archived when the agent supports it. If archiving is unavailable and the agent supports deletion,
-Codync deletes it. A task that is too large for a fresh session needs a larger context window.
+Codync keeps the old session reference and archives the agent session when the agent supports it.
+Open **Session history** in an isolated group member’s details. For ordinary groups, open **Session
+history** in the bot’s private chat Details. **Delete old agent session** is available when the agent
+supports deletion and Codync can verify the old session. Deletion requires confirmation and keeps
+the original chat. A task too large for a fresh session needs a larger context window.

@@ -122,7 +122,7 @@ impl Actor {
         Ok(handoff)
     }
 
-    /// 优先调用已声明的归档能力，明确失败时才尝试已声明的删除能力。
+    /// 尝试归档旧会话，未确认时保留旧引用。
     pub(super) async fn retire_delivery_session(&mut self, new_session: &str) {
         // 新会话确实建立后才整理执行器的旧记录，失败时仍可访问本机归档。
         let Some(active) = self.active_delivery.as_ref() else { return };
@@ -131,40 +131,110 @@ impl Actor {
             return;
         }
         let opened_on = active.archive_connection;
-        self.retire_context_session(&handoff, opened_on).await;
+        let id = active.delivery.id.clone();
+        self.archive_old_session(&id, &handoff.session, &handoff.backend, handoff.slot.as_deref(), opened_on).await;
     }
 
-    /// 空闲归档和原派工使用同样的执行器能力及会话归属检查。
-    async fn retire_context_session(&mut self, handoff: &GroupHandoff, opened_on: Option<std::time::Instant>) {
-        let sid = handoff.session.as_str();
-        let Some(conn) = self.conn.as_ref().filter(|conn| conn.backend == handoff.backend) else { return };
-        // 执行器重启后进程内 ID 可能复用。若不能证明进程和槽都匹配，只按 Codex 的持久线程 UUID 寻址。
+    /// 持久记录旧主会话后清除活跃引用，普通及摘要切换共用归档步骤。
+    pub(super) async fn switch_main_session(&mut self, keep_parked: bool) -> Result<()> {
+        let backend = self.conn.as_ref().map_or(&self.cfg.backend, |conn| &conn.backend).clone();
+        let opened_on = self.conn.as_ref().map(|conn| conn.started);
+        let previous = self.hub.store.reset_main_session(&self.cfg.id, &backend, keep_parked)?;
+        self.session_id = None;
+        self.main_session_changed();
+        self.relay.recap = None;
+        if let Some((id, session)) = previous {
+            self.archive_old_session(&id, &session, &backend, None, opened_on).await;
+        }
+        Ok(())
+    }
+
+    /// 新会话只尝试归档，归档失败或能力缺失时保留旧引用。
+    pub(super) async fn archive_old_session(
+        &mut self,
+        id: &str,
+        sid: &str,
+        backend: &str,
+        slot: Option<&str>,
+        opened_on: Option<std::time::Instant>,
+    ) {
+        let Some(conn) = self.conn.as_ref().filter(|conn| conn.backend == backend) else { return };
         let owner = conn.session_slots.get(sid);
-        let same_process =
-            opened_on == Some(conn.started) && owner.is_some_and(|owner| owner.as_deref() == handoff.slot.as_deref());
-        let known_persistent = conn.adapter == Adapter::Codex && uuid::Uuid::parse_str(sid).is_ok() && owner.is_none();
-        if !same_process && !known_persistent {
+        let same_process = opened_on == Some(conn.started) && owner.is_some_and(|owner| owner.as_deref() == slot);
+        let persistent = conn.adapter == Adapter::Codex && owner.is_none() && uuid::Uuid::parse_str(sid).is_ok();
+        if !same_process && !persistent {
             return;
         }
-        let acp = conn.acp.clone();
-        let methods = [conn.sessions.archive, conn.sessions.delete.then_some("session/delete")];
-        for method in methods.into_iter().flatten() {
-            match tokio::time::timeout(std::time::Duration::from_secs(3), acp.request(method, json!({"sessionId":sid})))
-                .await
+        let opened = if same_process { conn.opened_sessions.get(sid).cloned() } else { None };
+        let mut state = "retained";
+        if let Some(method) = conn.sessions.archive {
+            match tokio::time::timeout(
+                std::time::Duration::from_secs(3),
+                conn.acp.request(method, json!({"sessionId":sid})),
+            )
+            .await
             {
-                Ok(Ok(_)) => return,
+                Ok(Ok(_)) => state = "archived",
                 Ok(Err(error)) => {
-                    tracing::warn!(%error, method, "couldn't retire the archived group session");
+                    tracing::warn!(%error, "couldn't archive the old session");
                     if error.downcast_ref::<crate::agent::acp::RpcError>().is_none() {
-                        break;
+                        state = "unknown";
                     }
                 }
-                Err(_) => break, // 响应未知时保留本机归档，避免接着删除一个可能已归档的会话。
+                Err(_) => state = "unknown",
             }
         }
-        if same_process {
-            self.close_reopenable(sid).await;
+        if let Err(error) = self.hub.store.mark_session_history(&self.cfg.id, id, state, opened.as_deref()) {
+            tracing::warn!(%error, "couldn't save old session state");
         }
+    }
+
+    /// 删除只接受 Host 保存的归属与明确支持删除的执行器，拒绝活跃或已删除的旧 ID。
+    fn can_delete_old_session(&self, item: &Value) -> bool {
+        let Some(conn) = self.conn.as_ref().filter(|conn| conn.sessions.delete && item["backend"] == conn.backend)
+        else {
+            return false;
+        };
+        let Some(sid) = item["sessionId"].as_str().filter(|_| item["state"] != "deleted") else { return false };
+        let slot = item["slot"].as_str();
+        let owner = conn.session_slots.get(sid);
+        let verified = conn.opened_sessions.get(sid).is_some_and(|opened| item["opened"] == *opened)
+            && owner.is_some_and(|owner| owner.as_deref() == slot)
+            || conn.adapter == Adapter::Codex && owner.is_none() && uuid::Uuid::parse_str(sid).is_ok();
+        // 回合结束后 turn_session 仍保留最后的 ID，只有执行中的回合占用该会话。
+        verified
+            && (self.turn.is_none() || self.turn_session.as_deref() != Some(sid))
+            && self.hub.store.session_is_active(&self.cfg.id, sid).is_ok_and(|active| !active)
+    }
+
+    /// 历史列表永不向客户端暴露底层会话 ID；删除请求与其它会话切换在 actor 串行。
+    pub(super) async fn manage_session_history(&self, room: Option<&str>, delete: Option<&str>) -> Result<Value> {
+        let bot = &self.cfg.id;
+        let (active, rows) = self.hub.store.session_history(bot, room, delete)?;
+        if let Some(id) = delete {
+            let (_, item) = rows.first().ok_or_else(|| anyhow!("Session history no longer exists"))?;
+            ensure!(self.can_delete_old_session(item), "This old session cannot be deleted by the current agent.");
+            let sid = item["sessionId"].as_str().ok_or_else(|| anyhow!("Session ID unavailable"))?;
+            let conn = self.conn.as_ref().ok_or_else(|| anyhow!("Agent is not connected"))?;
+            tokio::time::timeout(
+                std::time::Duration::from_secs(3),
+                conn.acp.request("session/delete", json!({"sessionId":sid})),
+            )
+            .await
+            .map_err(|_| anyhow!("The agent did not confirm deletion."))??;
+            self.hub.store.mark_session_history(bot, id, "deleted", None)?;
+            return Ok(json!({}));
+        }
+        let sessions = rows
+            .iter()
+            .map(|(id, item)| {
+                json!({
+                    "id":id, "at":item["archivedAt"], "state":item["state"].as_str().unwrap_or("unknown"),
+                    "hasMessages":item["anchor"].is_number(), "canDelete":self.can_delete_old_session(item),
+                })
+            })
+            .collect::<Vec<_>>();
+        Ok(json!({"active":active,"sessions":sessions}))
     }
 
     /// 成员卡只负责进入已有派工交接或准备该范围的主动摘要。
@@ -233,7 +303,14 @@ impl Actor {
         for r in self.hub.store.queued_member_sessions(&self.cfg.id)? {
             if r.handoff.phase != Phase::Approved {
                 if self.conn.is_some() && self.cfg.backend == r.handoff.backend {
-                    self.retire_context_session(&r.handoff, None).await;
+                    self.archive_old_session(
+                        &r.handoff.revision,
+                        &r.handoff.session,
+                        &r.handoff.backend,
+                        r.handoff.slot.as_deref(),
+                        None,
+                    )
+                    .await;
                     self.hub.store.finish_member_retirement(&self.cfg.id, &r)?;
                 }
                 continue;
@@ -253,7 +330,14 @@ impl Actor {
                     self.main_session_changed();
                 }
                 if self.conn.is_some() && self.cfg.backend == r.handoff.backend {
-                    self.retire_context_session(&r.handoff, opened_on).await;
+                    self.archive_old_session(
+                        &r.handoff.revision,
+                        &r.handoff.session,
+                        &r.handoff.backend,
+                        r.handoff.slot.as_deref(),
+                        opened_on,
+                    )
+                    .await;
                     self.hub.store.finish_member_retirement(&self.cfg.id, &r)?;
                 }
             }
