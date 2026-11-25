@@ -1,11 +1,10 @@
 {
+  "Repair and request access again": "修復並重新授權",
+  "Path copied for {app}. Click +, then press ⌘⇧G and paste the path.": "已複製 {app} 的路徑。點選「＋」，按 ⌘⇧G，再貼上路徑。",
   "If macOS names the screen helper, select it instead.": "如果 macOS 提示要授權的是螢幕助手，請選擇下面的 App。",
   "Build commit": "建置提交",
   "If it is missing, click + and select this app.": "如果清單中沒有這一項，請點選「＋」並選擇此 App。",
   "Return here after granting access; if asked, quit and reopen Codync.": "授權後回到這裡。若系統提示，請結束並重新開啟 Codync。",
-  "Clear this permission for this installation of Codync, then approve the new request in System Settings.": "清除目前安裝的 Codync 的這項權限記錄，再到系統設定允許新的要求。",
-  "Already enabled in System Settings?": "系統設定中已開啟？",
-  "Request permission again": "重新要求權限",
   "Open original assignment": "開啟原派工",
   "Open original message": "開啟原訊息",
   "Step interrupted": "步驟已中斷",

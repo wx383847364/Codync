@@ -1,11 +1,10 @@
 {
+  "Repair and request access again": "Réparer et redemander l’accès",
+  "Path copied for {app}. Click +, then press ⌘⇧G and paste the path.": "Chemin de {app} copié. Cliquez sur +, appuyez sur ⌘⇧G, puis collez le chemin.",
   "If macOS names the screen helper, select it instead.": "Si macOS indique l’assistant de capture, sélectionnez-le.",
   "Build commit": "Commit de compilation",
   "If it is missing, click + and select this app.": "Si elle est absente, cliquez sur + et sélectionnez cette app.",
   "Return here after granting access; if asked, quit and reopen Codync.": "Revenez ici après avoir accordé l’accès. Si le système le demande, quittez et rouvrez Codync.",
-  "Clear this permission for this installation of Codync, then approve the new request in System Settings.": "Effacez cette autorisation pour cette installation de Codync, puis approuvez la nouvelle demande dans Réglages Système.",
-  "Already enabled in System Settings?": "Déjà activé dans Réglages Système ?",
-  "Request permission again": "Redemander l’autorisation",
   "Archive status unknown": "État d’archivage inconnu",
   "Archived": "Archivée",
   "Chat history": "Historique de la discussion",

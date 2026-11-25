@@ -1,15 +1,13 @@
-import { useState, type ReactNode } from 'react'
+import type { ReactNode } from 'react'
 import type { ComputerAccess } from '../../store/computer-access'
 import type { AccessPage } from '../../lib/access-onboarding'
 import { Button, Spinner } from '../../components/Controls'
-import { Dialog } from '../../components/Overlay'
 import { Icon } from '../../components/Icon'
 import { useTr } from '../../lib/use-language'
 
 export function AccessSteps({ access, selection }: { access: ComputerAccess; selection?: AccessPage }) {
   const tr = useTr()
   const { screen, step, busy, helperReady } = access
-  const [recovery, setRecovery] = useState<'capture' | 'input' | null>(null)
   const mac = window.codync.platform === 'darwin'
   const windows = window.codync.platform === 'win32'
   const ready = step === 'ready'
@@ -21,8 +19,8 @@ export function AccessSteps({ access, selection }: { access: ComputerAccess; sel
   )
   /** 仅在助手运行但实际未获授权时提供恢复入口。 */
   const recover = (permission: 'capture' | 'input') => mac && access.agent?.available && helperReady && canRequest && screen?.[permission] === false
-    ? <Button kind="secondary" disabled={busy !== null} onClick={() => { /* 重置之前明确告知影响范围。 */ setRecovery(permission) }}>
-        {tr('Already enabled in System Settings?')}
+    ? <Button kind="secondary" disabled={busy !== null} onClick={() => { /* 用户明确点击修复，只重新请求此项权限。 */ void access.recoverPermission(permission) }}>
+        {tr('Repair and request access again')}
       </Button> : null
   return (
     <>
@@ -36,13 +34,13 @@ export function AccessSteps({ access, selection }: { access: ComputerAccess; sel
         </AccessRow> : null}
         {mac ? <>
           {(!selection || selection === 'capture') ? <AccessRow large={selection !== undefined} title="Screen recording" icon="record.circle" detail="Lets Codync see your screen, including anything visible in your apps." done={helperReady && screen?.capture === true} active={step === 'capture'}>
-            {canRequest ? <SettingsHint path={access.agent?.permissionPaths?.capture} alternative={access.agent?.permissionPaths?.input} app="Codync" /> : null}
+            {canRequest ? <SettingsHint path={access.agent?.permissionPaths?.capture} alternative={access.agent?.permissionPaths?.input} app="Codync" copied={access.copiedPermission === 'capture'} /> : null}
             {canRequest ? request('capture', 'Allow screen recording') : null}
             {recover('capture')}
             {canRequest ? <SettingsLink action={() => access.openSettings('capture')} /> : null}
           </AccessRow> : null}
           {(!selection || selection === 'input') ? <AccessRow large={selection !== undefined} title="Control apps" icon="cursorarrow.motionlines" detail="Lets Codync click, type and interact with apps on your behalf." done={helperReady && screen?.input === true} active={step === 'input'}>
-            {canRequest ? <SettingsHint path={access.agent?.permissionPaths?.input} app={access.helperName} /> : null}
+            {canRequest ? <SettingsHint path={access.agent?.permissionPaths?.input} app={access.helperName} copied={access.copiedPermission === 'input'} /> : null}
             {canRequest ? request('input', 'Allow computer control') : null}
             {recover('input')}
             {canRequest ? <SettingsLink action={() => access.openSettings('input')} /> : null}
@@ -51,13 +49,6 @@ export function AccessSteps({ access, selection }: { access: ComputerAccess; sel
           {canRequest ? request('portal', 'Choose screen and allow control') : null}
         </AccessRow> : null}
       </>}
-      <Dialog open={recovery !== null} title={tr('Request permission again')}
-        message={tr('Clear this permission for this installation of Codync, then approve the new request in System Settings.')}
-        onClose={() => { /* 取消时保留系统权限记录。 */ setRecovery(null) }}
-        actions={recovery ? [{ title: 'Request permission again', action: () => {
-          // 确认后向系统请求当前助手的权限。
-          void access.recoverPermission(recovery)
-        } }] : []} />
     </>
   )
 }
@@ -80,11 +71,12 @@ function AccessRow({ title, icon, detail, done, active = false, status, children
 }
 
 /** 显示当前安装的授权目标，方便从系统设置手动添加。 */
-function SettingsHint({ app, path, alternative }: { app: string; path?: string; alternative?: string }) {
+function SettingsHint({ app, path, alternative, copied }: { app: string; path?: string; alternative?: string; copied: boolean }) {
   const tr = useTr()
   const name = path?.split('/').at(-1) || app
   return <div className="computer-access-inline-note">
     <p>{tr('In System Settings, look for')} <strong>{name}</strong>. {tr('If it is missing, click + and select this app.')} {tr('Return here after granting access; if asked, quit and reopen Codync.')}</p>
+    {copied ? <p role="status">{tr('Path copied for {app}. Click +, then press ⌘⇧G and paste the path.').replace('{app}', name)}</p> : null}
     {path ? <PermissionPath path={path} /> : null}
     {alternative ? <>
       <p>{tr('If macOS names the screen helper, select it instead.')}</p>

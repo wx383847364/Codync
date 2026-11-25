@@ -36,8 +36,13 @@ test('repeated checks never request permissions; explicit actions and failures s
   let platform = 'macos'
   let resetFails = false
   let settings = ''
+  let allowCaptureOnRequest = false
+  const clipboard: string[] = []
+  const permissionRequests: string[] = []
+  const permissionPaths = { capture: '/Applications/Codync.app', input: '/Applications/Codync.app/Contents/Library/LoginItems/CodyncScreen.app' }
   Object.assign(globalThis, { window: { codync: { platform: 'darwin', app: {
-    screenAgentState: async () => ({ available: true, needsApproval: false, registered: true }),
+    screenAgentState: async () => ({ available: true, needsApproval: false, registered: true, permissionPaths }),
+    copy: (path: string) => { clipboard.push(path) },
     // 模拟系统重置失败，确认界面不会继续请求已经失败的恢复。
     resetScreenPermission: async (permission: string) => {
       calls.push(`reset:${permission}`)
@@ -45,9 +50,13 @@ test('repeated checks never request permissions; explicit actions and failures s
     },
     openSettings: (url: string) => { settings = url },
   } } } })
-  const app = { updateScreenApproval() { /* 本用例只检查录屏和控制权限。 */ }, local: { connection: { kind: 'online' }, client: { call: async (method: string) => {
+  const app = { updateScreenApproval() { /* 本用例只检查录屏和控制权限。 */ }, local: { connection: { kind: 'online' }, client: { call: async (method: string, body?: { permission?: string }) => {
     calls.push(method)
-    if (method === 'requestScreenPermission' && fail) throw new Error('Permission denied')
+    if (method === 'requestScreenPermission') {
+      permissionRequests.push(body?.permission ?? '')
+      if (fail) throw new Error('Permission denied')
+      if (allowCaptureOnRequest && body?.permission === 'capture') capture = true
+    }
     return { enabled: true, connected: true, platform, capture, input, permissionApp: 'CodyncDevScreen' }
   } } }, setRemoteScreen: async () => { calls.push('enable') }, screenError: null } as unknown as AppModel
   const { ComputerAccess } = await import('../store/computer-access.ts')
@@ -69,6 +78,7 @@ test('repeated checks never request permissions; explicit actions and failures s
   settings = ''
   await access.request('capture')
   assert.match(settings, /Privacy_ScreenCapture/)
+  assert.deepEqual(clipboard, [])
   settings = ''
   capture = true
   await access.request('capture')
@@ -80,6 +90,9 @@ test('repeated checks never request permissions; explicit actions and failures s
   await access.recoverPermission('input')
   assert.deepEqual(calls.slice(-3), ['reset:input', 'requestScreenPermission', 'screenStatus'])
   assert.match(settings, /Privacy_Accessibility/)
+  assert.equal(permissionRequests.at(-1), 'input')
+  assert.deepEqual(clipboard, [permissionPaths.input])
+  assert.equal(access.copiedPermission, 'input')
   const count = calls.length
   await access.recoverPermission('capture')
   assert.deepEqual(calls.slice(count), ['screenStatus', 'screenStatus'])
@@ -91,6 +104,22 @@ test('repeated checks never request permissions; explicit actions and failures s
   assert.deepEqual(calls.slice(-3), ['reset:capture', 'requestScreenPermission', 'screenStatus'])
   assert.match(settings, /Privacy_ScreenCapture/)
   assert.equal(access.screen?.input, true)
+  assert.equal(permissionRequests.at(-1), 'capture')
+  assert.deepEqual(clipboard, [permissionPaths.input, permissionPaths.capture])
+  assert.equal(access.copiedPermission, 'capture')
+  // 用户在系统设置完成授权后，复查会清掉手动添加提示。
+  capture = true
+  await access.refresh()
+  assert.equal(access.copiedPermission, null)
+  // 系统直接授权成功不写剪贴板也不打开设置。
+  capture = false
+  settings = ''
+  allowCaptureOnRequest = true
+  await access.recoverPermission('capture')
+  assert.equal(access.screen?.capture, true)
+  assert.deepEqual(clipboard, [permissionPaths.input, permissionPaths.capture])
+  assert.equal(settings, '')
+  allowCaptureOnRequest = false
   input = false
   // 助手刚重连还没发送平台和状态，此时的默认 false 不能触发重置。
   const beforeReconnect = calls.length
@@ -98,10 +127,14 @@ test('repeated checks never request permissions; explicit actions and failures s
   await access.recoverPermission('input')
   assert.deepEqual(calls.slice(beforeReconnect), ['screenStatus', 'screenStatus'])
   platform = 'macos'
+  // 即使清除旧记录失败，也能复制正确路径并手动添加。
   resetFails = true
+  settings = ''
   await access.recoverPermission('input')
-  assert.equal(calls.at(-1), 'reset:input')
+  assert.deepEqual(calls.slice(-3), ['screenStatus', 'reset:input', 'screenStatus'])
   assert.equal(access.error, 'Reset denied')
+  assert.equal(clipboard.at(-1), permissionPaths.input)
+  assert.match(settings, /Privacy_Accessibility/)
   await access.enable()
   assert.ok(calls.includes('enable'))
 })
@@ -167,4 +200,57 @@ test('restarts only a missing Mac helper and guides login-item approval', async 
   connected = true
   await access.refresh()
   assert.equal(trayNeedsApproval, false)
+})
+
+// 恢复与焦点轮询重叠时，以授权之后的新状态决定是否需要手动添加。
+test('repair waits for a fresh permission status before copying the fallback path', async () => {
+  const actions: string[] = []
+  const missing = { enabled: true, connected: true, platform: 'macos', capture: false, input: true }
+  let granted = false
+  let holdNextStatus = false
+  let releaseStatus: () => void = () => {}
+  let statusStarted: () => void = () => {}
+  const blocked = new Promise<void>((resolve) => { releaseStatus = resolve })
+  const inFlight = new Promise<void>((resolve) => { statusStarted = resolve })
+  Object.assign(globalThis, { window: { codync: { platform: 'darwin', app: {
+    screenAgentState: async () => ({
+      available: true, registered: true, needsApproval: false, permissionPaths: { capture: '/Applications/Codync.app' },
+    }),
+    resetScreenPermission: async () => { actions.push('reset') },
+    copy: () => { actions.push('copy') },
+    openSettings: () => { actions.push('settings') },
+  } } } })
+  const app = {
+    updateScreenApproval() { /* 本用例仅检查轮询与恢复交错时的行为。 */ },
+    local: { connection: { kind: 'online' }, client: {
+      // 请求期间模拟已开始的焦点轮询，其读数早于实际授权结果。
+      call: async (method: string) => {
+        if (method === 'requestScreenPermission') {
+          holdNextStatus = true
+          void access.refresh()
+          await inFlight
+          return missing
+        }
+        if (holdNextStatus) {
+          holdNextStatus = false
+          statusStarted()
+          await blocked
+          return missing
+        }
+        return { ...missing, capture: granted }
+      },
+    } },
+  } as unknown as AppModel
+  const { ComputerAccess } = await import('../store/computer-access.ts')
+  const access = new ComputerAccess(app)
+  await access.refresh()
+  const repair = access.recoverPermission('capture')
+  await inFlight
+  // 让权限请求完成并尝试复查，保持先前的轮询仍在等待。
+  await new Promise<void>((resolve) => setImmediate(resolve))
+  granted = true
+  releaseStatus()
+  await repair
+  assert.equal(access.screen?.capture, true)
+  assert.deepEqual(actions, ['reset'])
 })

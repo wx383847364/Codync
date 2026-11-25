@@ -1,11 +1,10 @@
 {
+  "Repair and request access again": "Исправить и повторно запросить доступ",
+  "Path copied for {app}. Click +, then press ⌘⇧G and paste the path.": "Путь к {app} скопирован. Нажмите +, затем ⌘⇧G и вставьте путь.",
   "If macOS names the screen helper, select it instead.": "Если macOS указывает помощник экрана, выберите его.",
   "Build commit": "Коммит сборки",
   "If it is missing, click + and select this app.": "Если приложения нет в списке, нажмите + и выберите его.",
   "Return here after granting access; if asked, quit and reopen Codync.": "После предоставления доступа вернитесь сюда. Если потребуется, закройте и снова откройте Codync.",
-  "Clear this permission for this installation of Codync, then approve the new request in System Settings.": "Сбросьте это разрешение для установленного Codync и подтвердите новый запрос в Системных настройках.",
-  "Already enabled in System Settings?": "Уже включено в системных настройках?",
-  "Request permission again": "Запросить разрешение снова",
   "Archive status unknown": "Статус архивации неизвестен",
   "Archived": "В архиве",
   "Chat history": "История чата",

@@ -8,10 +8,11 @@ export class ComputerAccess extends Observable {
   screen: ScreenState | null = null
   agent: ScreenAgentState | null = null
   busy: ComputerPermission | 'enable' | null = null
+  copiedPermission: 'capture' | 'input' | null = null
   private checkError: string | null = null
   private actionError: string | null = null
   private lastRequest: ComputerPermission | null = null
-  private refreshing = false
+  private refreshInFlight: Promise<void> | null = null
   private app: AppModel
 
   constructor(app: AppModel) { super(); this.app = app }
@@ -30,10 +31,24 @@ export class ComputerAccess extends Observable {
   get computerName() { return this.app.local?.hostName || window.codync.computerName || 'Your computer' }
   get error() { return this.checkError ?? this.actionError }
 
-  /** 重新读取系统和 Host 状态，并同步系统设置里发生的后台批准变化。 */
-  async refresh() {
-    if (this.refreshing) return
-    this.refreshing = true
+  /** 同时发起的轮询共用一次读取，授权结束时可要求在旧读取完成后再查一次。 */
+  async refresh(freshAfterPending = false) {
+    if (this.refreshInFlight) {
+      await this.refreshInFlight
+      if (freshAfterPending) await this.refresh()
+      return
+    }
+    this.refreshInFlight = this.readStatus()
+    try {
+      await this.refreshInFlight
+    } finally {
+      this.refreshInFlight = null
+      this.changed()
+    }
+  }
+
+  /** 读取系统和 Host 状态，并把登录项审批变化同步到托盘。 */
+  private async readStatus() {
     try {
       const local = this.app.local
       this.agent = await window.codync.app.screenAgentState()
@@ -42,6 +57,7 @@ export class ComputerAccess extends Observable {
         this.screen = normalizeScreen(await local.client.call<ScreenState>('screenStatus', {}))
       } else this.screen = null
       this.checkError = null
+      if (this.copiedPermission && this.screen?.[this.copiedPermission]) this.copiedPermission = null
       const granted = this.lastRequest === 'portal'
         ? this.screen?.capture && this.screen.input
         : this.lastRequest && this.screen?.[this.lastRequest]
@@ -49,9 +65,6 @@ export class ComputerAccess extends Observable {
     } catch (error) {
       this.screen = null
       this.checkError = message(error)
-    } finally {
-      this.refreshing = false
-      this.changed()
     }
   }
 
@@ -97,37 +110,57 @@ export class ComputerAccess extends Observable {
     await this.requestPermission(permission)
   }
 
-  /** 仅恢复确定缺失的 Mac 权限，避免清掉确认期间刚授予的权限。 */
+  /** 仅恢复确定缺失的 Mac 权限，避免清掉点击前后刚授予的权限。 */
   async recoverPermission(permission: 'capture' | 'input') {
-    await this.requestPermission(permission, true)
+    if (window.codync.platform === 'darwin') await this.requestPermission(permission, true)
   }
 
   /** 让授权请求和恢复流程共用忙碌状态与错误显示。 */
   private async requestPermission(permission: ComputerPermission, recover = false) {
     const client = this.app.local?.client
     if (!client || this.busy) return
+    const repair = recover && permission !== 'portal' ? permission : null
+    let repairChecked = false
     this.busy = permission
     this.actionError = null
     this.lastRequest = permission
+    this.copiedPermission = null
     this.changed()
     try {
-      // 用户确认后先清除失效记录，再由当前助手向 macOS 请求授权。
-      if (recover && permission !== 'portal') {
+      // 用户点击修复后重新检查，只有当前助手明确缺少的权限才清除旧记录。
+      if (repair) {
         const current = await client.call<ScreenState>('screenStatus', {})
-        if (!current?.enabled || !current.connected || current.platform !== 'macos' || current[permission] !== false) {
+        if (!current?.enabled || !current.connected || current.platform !== 'macos' || current[repair] !== false) {
           await this.refresh()
           return
         }
-        await window.codync.app.resetScreenPermission(permission)
+        repairChecked = true
+        await window.codync.app.resetScreenPermission(repair)
       }
       const result = await client.call<ScreenState>('requestScreenPermission', { permission }, 125_000)
-      await this.refresh()
-      // 系统可能直接拒绝弹窗，仍未授权时打开对应页面供手动添加。
+      await this.refresh(repair !== null)
       if (window.codync.platform === 'darwin' && permission !== 'portal'
-        && result?.[permission] === false && this.screen?.[permission] !== true) this.openSettings(permission)
+        && result?.[permission] === false && this.screen?.[permission] !== true) {
+        this.guideManualPermission(permission, repair !== null)
+      }
     } catch (error) {
       this.actionError = message(error)
+      // 重置或系统请求失败时仍提供手动添加，保留失败原因。
+      if (repair && repairChecked) {
+        await this.refresh(true)
+        if (this.screen?.[repair] !== true) this.guideManualPermission(repair, true)
+      }
     } finally { this.busy = null; this.changed() }
+  }
+
+  /** 手动添加时先复制当前安装路径，再打开相应的权限页。 */
+  private guideManualPermission(permission: 'capture' | 'input', copyPath: boolean) {
+    const path = copyPath ? this.agent?.permissionPaths?.[permission] : undefined
+    if (path) {
+      window.codync.app.copy(path)
+      this.copiedPermission = permission
+    }
+    this.openSettings(permission)
   }
 
   openSettings(permission: keyof typeof computerPermissionSettings) {
