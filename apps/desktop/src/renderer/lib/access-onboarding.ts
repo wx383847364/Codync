@@ -4,13 +4,15 @@ import { trNow } from './l10n.ts'
 
 export type AccessPage = 'helper' | 'capture' | 'input' | 'portal' | 'control' | 'star'
 
+/** 助手重新连接并注册后，才把其权限状态用于开通进度。 */
 export function accessPageReady(page: AccessPage, step: ComputerAccessStep, screen: ScreenState | null): boolean {
   if (!screen || step === 'host' || step === 'unavailable') return false
+  const helperReady = screen.enabled && screen.connected && !['enable', 'helper', 'background'].includes(step)
   switch (page) {
-    case 'helper': return screen.enabled && screen.connected && !['enable', 'helper', 'background'].includes(step)
-    case 'capture': return screen.capture
-    case 'input': return screen.input
-    case 'portal': return screen.capture && screen.input
+    case 'helper': return helperReady
+    case 'capture': return helperReady && screen.capture
+    case 'input': return helperReady && screen.input
+    case 'portal': return helperReady && screen.capture && screen.input
     case 'control': return step === 'ready'
     case 'star': return false
   }

@@ -1,4 +1,11 @@
 {
+  "If macOS names the screen helper, select it instead.": "Se o macOS indicar o assistente de tela, selecione-o.",
+  "Build commit": "Commit da compilação",
+  "If it is missing, click + and select this app.": "Se não estiver na lista, clique em + e selecione este app.",
+  "Return here after granting access; if asked, quit and reopen Codync.": "Volte aqui após conceder acesso. Se solicitado, encerre e reabra o Codync.",
+  "Clear this permission for this installation of Codync, then approve the new request in System Settings.": "Limpe essa permissão para esta instalação do Codync e aprove a nova solicitação nos Ajustes do Sistema.",
+  "Already enabled in System Settings?": "Já está ativado nos Ajustes do Sistema?",
+  "Request permission again": "Solicitar permissão novamente",
   "Archive status unknown": "Status de arquivamento desconhecido",
   "Archived": "Arquivada",
   "Chat history": "Histórico da conversa",

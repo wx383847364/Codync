@@ -28,6 +28,7 @@ const bridge: CodyncBridge = {
   appScheme: 'codync',
   hostPort: 19222,
   appVersion: version,
+  buildCommit: null,
   computerName: HOST_NAME,
   openedAtLogin: false,
   // Opens the group at launch, like the website's screenshot.
@@ -121,6 +122,8 @@ const bridge: CodyncBridge = {
     launchAtLogin: async () => false,
     openSettings() {},
     authenticate: unavailable,
+    // 演示页面没有本机授权记录。
+    resetScreenPermission: async () => {},
     screenAgentState: async () => ({ available: false, needsApproval: false, registered: false }),
     setScreenAgent: unavailable,
     syncScreenAgent: async () => ({ needsApproval: false }),

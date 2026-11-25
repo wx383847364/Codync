@@ -9,6 +9,7 @@ interface BuildConfig {
   clerkPublishableKey: string | null
   cloudURL: string | null
   localPreview?: boolean
+  buildCommit?: string
 }
 
 const path = app.isPackaged

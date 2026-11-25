@@ -32,7 +32,7 @@ Run from the repository root unless a command changes directories:
 
 Always stop the old desktop app, host and iPhone process for the variant being rebuilt before running a new build (old host = old protocol, old app = old UI); commands in [development: desktop app](docs/guides/development.md#desktop-app) and [iOS app](docs/guides/development.md#ios-app).
 
-Keep only the latest build: in this checkout, Apple builds go to `build/dd` only (no other `-derivedDataPath`, no copies in scratchpads, `/tmp` or Xcode's DerivedData); delete any older Codync build right away, so macOS never launches a stale copy. A git worktree may keep its own single build inside that worktree.
+Apple 构建使用当前工作树的 `build/dd`，每个工作树只保留一份构建。发布验收通过、最新正式 App 构建并验证成功、改动合并并推送到自己的 `origin/dev` 与 `origin/main` 后，只保留最新正式 App，并清理已合并且无未保存改动的本任务临时分支、工作树及过期构建产物。
 
 ## End-to-end test every change
 

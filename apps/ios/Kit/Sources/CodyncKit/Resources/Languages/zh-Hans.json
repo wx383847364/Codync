@@ -1,4 +1,11 @@
 {
+  "If macOS names the screen helper, select it instead.": "如果 macOS 提示授权的是屏幕助手，请选择下面的应用。",
+  "Build commit": "构建提交",
+  "If it is missing, click + and select this app.": "如果列表里没有这一项，点击「＋」并选择此应用。",
+  "Return here after granting access; if asked, quit and reopen Codync.": "授权后回到这里。若系统提示，请退出并重新打开 Codync。",
+  "Clear this permission for this installation of Codync, then approve the new request in System Settings.": "清除当前安装的 Codync 的这项权限记录，然后在系统设置中允许新的请求。",
+  "Already enabled in System Settings?": "系统设置中已开启？",
+  "Request permission again": "重新请求权限",
   "Open original assignment": "打开原派工",
   "Open original message": "打开原消息",
   "Step interrupted": "步骤已中断",

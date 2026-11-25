@@ -4,6 +4,7 @@ export interface ScreenAgentState {
   available: boolean
   needsApproval: boolean
   registered: boolean
+  permissionPaths?: { capture: string; input: string }
 }
 
 export type ComputerPermission = 'capture' | 'input' | 'portal'
@@ -21,7 +22,8 @@ export function computerAccessStep(platform: string, online: boolean, screen: Sc
   if (platform === 'darwin' && agent?.available === false) return 'unavailable'
   if (!screen.enabled) return 'enable'
   if (platform === 'darwin' && agent?.needsApproval) return 'background'
-  if (platform === 'darwin' && agent?.registered === false) return 'enable'
+  // Host 默认启用屏幕功能，首次未注册且未连接时仍显示首次开通。
+  if (platform === 'darwin' && agent?.registered === false) return screen.connected ? 'helper' : 'enable'
   if (!screen.connected) return 'helper'
   if (platform === 'linux') return screen.capture && screen.input ? 'ready' : 'portal'
   if (!screen.capture) return 'capture'

@@ -19,7 +19,9 @@ test('macOS setup advances only with observed permissions, and recovers after re
   assert.equal(computerAccessStep('darwin', true, null, agent), 'host')
   assert.equal(computerAccessStep('darwin', true, screen, { ...agent, available: false }), 'unavailable')
   assert.equal(computerAccessStep('darwin', true, { ...screen, enabled: false }, agent), 'enable')
-  assert.equal(computerAccessStep('darwin', true, screen, { ...agent, registered: false }), 'enable')
+  // 区分首次开通与仍有助手连接、后台注册却丢失的情况。
+  assert.equal(computerAccessStep('darwin', true, { ...screen, connected: false }, { ...agent, registered: false }), 'enable')
+  assert.equal(computerAccessStep('darwin', true, screen, { ...agent, registered: false }), 'helper')
   assert.equal(computerAccessStep('darwin', true, screen, { ...agent, registered: false, needsApproval: true }), 'background')
   assert.equal(computerAccessStep('darwin', true, { ...screen, connected: false }, agent), 'helper')
   assert.equal(computerAccessStep('darwin', true, screen, agent), 'capture')

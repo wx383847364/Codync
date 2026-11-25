@@ -96,9 +96,13 @@ jobs:
 
       - name: Install Apple certificate
         env:
+          MACOS_SIGNING_TEAM_ID: ${{ vars.MACOS_SIGNING_TEAM_ID }}
           APPLE_CERTIFICATE_P12: ${{ secrets.APPLE_CERTIFICATE_P12 }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
         run: |
+          [[ "$MACOS_SIGNING_TEAM_ID" =~ ^[A-Z0-9]{10}$ ]] || { echo 'Set MACOS_SIGNING_TEAM_ID to your Apple Team ID'; exit 1; }
+          test -n "$APPLE_CERTIFICATE_P12" && test -n "$APPLE_CERTIFICATE_PASSWORD" ||
+            { echo 'Configure the Developer ID Application certificate and password'; exit 1; }
           KEYCHAIN_FILE=$RUNNER_TEMP/app-signing.keychain-db
           KEYCHAIN_PASSWORD=$(openssl rand -base64 32)
           echo "$APPLE_CERTIFICATE_P12" | base64 --decode > "$RUNNER_TEMP/certificate.p12"
@@ -134,6 +138,7 @@ jobs:
           APPLE_API_KEY: ${{ runner.temp }}/AuthKey.p8
           APPLE_API_KEY_ID: ${{ secrets.ASC_KEY_ID }}
           APPLE_API_ISSUER: ${{ secrets.ASC_ISSUER_ID }}
+          MACOS_SIGNING_TEAM_ID: ${{ vars.MACOS_SIGNING_TEAM_ID }}
           ASC_PRIVATE_KEY: ${{ secrets.ASC_PRIVATE_KEY }}
         run: |
           printf '%s\n' "$ASC_PRIVATE_KEY" > "$APPLE_API_KEY"
@@ -141,12 +146,68 @@ jobs:
           [ "$NOTARIZE" = true ] || unset APPLE_API_KEY APPLE_API_KEY_ID APPLE_API_ISSUER
           npm ci
           npm run icons
-          npm run dist:mac:main -- --publish never
+          # Electron 更新源与构建仓库一致，避免分支安装后读取另一签名团队的包。
+          npm run dist:mac:main -- --publish never \
+            -c.publish.owner="$GITHUB_REPOSITORY_OWNER" -c.publish.repo="${GITHUB_REPOSITORY#*/}"
           codesign -d --entitlements - dist/mac-universal/Codync.app | grep -q com.apple.security.device.audio-input ||
             { echo "audio-input entitlement missing"; exit 1; }
-          if [ "$NOTARIZE" = true ]; then spctl --assess --type execute -v dist/mac-universal/Codync.app; fi
+          mac_app=dist/mac-universal/Codync.app
+          helper_path=Contents/Library/LoginItems/CodyncScreen.app
+          screen_app="$mac_app/$helper_path"
+          codesign --verify --deep --strict "$mac_app"
+          # 固定团队和 Bundle ID，并要求两份代码都是 Developer ID Application 签名。
+          developer_id='anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] exists and certificate leaf[field.1.2.840.113635.100.6.1.13] exists'
+          team_requirement="certificate leaf[subject.OU] = \"${MACOS_SIGNING_TEAM_ID}\""
+          codesign --verify --all-architectures -R="identifier \"com.pokai.Codync\" and $developer_id and $team_requirement" "$mac_app"
+          codesign --verify --all-architectures -R="identifier \"com.pokai.Codync.screen\" and $developer_id and $team_requirement" "$screen_app"
+          if [ "$NOTARIZE" = true ]; then spctl --assess --type execute -v "$mac_app"; fi
 
-      - name: Update feeds
+          # 核对实际打包的 Electron 更新源，避免命令行配置没有生效。
+          node -e 'const fs = require("node:fs"); const feed = require("yaml").parse(fs.readFileSync(process.argv[1], "utf8")); if (feed.provider !== "github" || feed.owner + "/" + feed.repo !== process.env.GITHUB_REPOSITORY) process.exit(1)' \
+            "$mac_app/Contents/Resources/app-update.yml"
+
+      - name: Verify Mac signing against previous release
+        shell: bash
+        working-directory: apps/desktop
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mac_app=dist/mac-universal/Codync.app
+          screen_app="$mac_app/Contents/Library/LoginItems/CodyncScreen.app"
+          developer_id='anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] exists and certificate leaf[field.1.2.840.113635.100.6.1.13] exists'
+          # 用本仓库上一份正式 Mac 包的 designated requirement 验证新包能继承旧授权。
+          # 首次签名迁移时可能没有标准 Mac zip，此时上面的固定团队要求作为基线。
+          previous_tag=$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=50" |
+            jq -rs --arg current "$GITHUB_REF_NAME" '[.[][] | select(.draft == false and .prerelease == false and (.tag_name | startswith("v")) and .tag_name != $current and any(.assets[]; .name == "codync-macos.zip"))][0].tag_name // ""')
+          if [ -n "$previous_tag" ]; then
+            previous_dir=$(mktemp -d "$RUNNER_TEMP/codync-previous.XXXXXX")
+            gh release download "$previous_tag" --repo "$GITHUB_REPOSITORY" --pattern codync-macos.zip --dir "$previous_dir"
+            ditto -x -k "$previous_dir/codync-macos.zip" "$previous_dir"
+            previous_app="$previous_dir/Codync.app"
+            codesign --verify --strict "$previous_app"
+            for bundle in "$mac_app" "$screen_app"; do
+              previous_bundle="$previous_app${bundle#"$mac_app"}"
+              if [ ! -d "$previous_bundle" ]; then
+                echo "No previous bundle for $bundle. This release starts its signed baseline."
+                continue
+              fi
+              codesign --verify --strict "$previous_bundle"
+              if codesign --verify --all-architectures -R="$developer_id" "$previous_bundle"; then
+                previous_requirement=$(codesign -d -r- "$previous_bundle" 2>&1 | sed -nE 's/^(# )?designated => //p')
+                test -n "$previous_requirement" || { echo "Missing previous signing requirement: $previous_bundle"; exit 1; }
+                codesign --verify --all-architectures -R="$previous_requirement" "$bundle"
+              else
+                # 旧包没有 Developer ID 身份，切换到正式包后由用户重新授权一次。
+                echo "Previous bundle $previous_bundle has no Developer ID signature. This release starts its signed baseline."
+              fi
+            done
+          else
+            echo 'No previous standard Mac release zip is available for upgrade verification.'
+          fi
+
+      - name: Legacy Sparkle feed
+        # 旧版原生应用固定信任上游公钥，自有仓库的 Electron 包单独走 Electron 更新源。
+        if: github.repository == 'leepokai/Codync'
         env:
           SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
         run: |
@@ -185,7 +246,9 @@ jobs:
           gh release create "$GITHUB_REF_NAME" $FILES --title "Codync $GITHUB_REF_NAME" --generate-notes --latest=false ||
             gh release upload "$GITHUB_REF_NAME" $FILES --clobber
           # Update feeds last: the release gate takes a release with all its feeds as fully uploaded.
-          gh release upload "$GITHUB_REF_NAME" latest-mac.yml ../../../build/appcast.xml --clobber
+          mac_feeds=(latest-mac.yml)
+          if [ -f ../../../build/appcast.xml ]; then mac_feeds+=(../../../build/appcast.xml); fi
+          gh release upload "$GITHUB_REF_NAME" "${mac_feeds[@]}" --clobber
 
   windows:
     needs: check

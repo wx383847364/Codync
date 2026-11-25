@@ -306,6 +306,9 @@ function UpdateSettings() {
               <UpdateButton updates={updates} />
             </HStack>
           </ValueRow>,
+          ...(window.codync.buildCommit ? [
+            <ValueRow key="build-commit" label="Build commit"><code>{window.codync.buildCommit}</code></ValueRow>,
+          ] : []),
           ...(updates.downloadPercent !== null
             ? [
                 <div key="progress" className="settings-row settings-appear">
