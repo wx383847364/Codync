@@ -30,7 +30,7 @@ Run from the repository root unless a command changes directories:
 
 ## Packaging and installing the app
 
-- A requested macOS app package (including “打包 App”) defaults to the production variant and includes replacing `/Applications/Codync.app`, restarting its bundled Host and verifying the installed app and running Host versions. Use the [desktop install procedure](docs/guides/development.md#replace-an-installed-macos-build-completely). Follow an explicit request for Dev, sandbox or package-only instead.
+- macOS 打包（含「打包 App」）默认构建正式版、替换 `/Applications/Codync.app` 并重启内置 Host。**测试通过以从「应用程序」实际启动最终安装包后的验收为准。** 核对 App 和已连接 Host 的版本，并从该 App 的正常入口复测受影响流程。构建、单元测试和沙盒检查仅作为前置验证。若明确要求 Dev、沙盒或仅打包，按指定范围验收。见 [桌面安装步骤](docs/guides/development.md#replace-an-installed-macos-build-completely)。
 - Stop the old processes for the variant before rebuilding or installing. See [desktop](docs/guides/development.md#desktop-app) and [iOS](docs/guides/development.md#ios-app) for cleanup and launch procedures.
 - Apple 构建使用当前工作树的 `build/dd`，每个工作树只保留一份构建。发布验收通过、最新正式 App 构建并验证成功、改动合并并推送到自己的 `origin/dev` 与 `origin/main` 后，只保留最新正式 App，并清理已合并且无未保存改动的本任务临时分支、工作树及过期构建产物。
 
