@@ -26,6 +26,10 @@ pkill -x "Codync Dev"
 
 ### Replace an installed macOS build completely
 
+Keep the main app and screen helper Bundle IDs fixed across releases. The macOS release workflow requires `MACOS_SIGNING_TEAM_ID` (repository variable), `APPLE_CERTIFICATE_P12` (base64-encoded Developer ID Application certificate and private key), and `APPLE_CERTIFICATE_PASSWORD` (repository secrets). Set `ASC_KEY_ID`, `ASC_ISSUER_ID` and `ASC_PRIVATE_KEY` for notarization. The workflow checks both signatures against the fixed team and, when available, the Developer ID requirements from the previous standard macOS release zip. macOS Electron builds check for updates in the repository that builds them. For a fork, mark its release latest after verifying the signed release assets. The legacy Sparkle feed belongs to the upstream native app.
+
+Keep ad-hoc builds for local testing. An ad-hoc-to-Developer ID switch can require one fresh grant. On a Mac, verify both capture and control after granting access to the first signed package, after replacing it with a different signed build, and after manually revoking and regranting one permission. Use **Settings → Updates → Build commit** to verify the installed build. A trailing `+` marks a build made from a checkout with tracked changes.
+
 For a requested **build and install**, replace the whole app and its running
 host, then verify the installed result. Building or copying the app alone does
 not finish the task.

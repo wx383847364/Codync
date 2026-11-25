@@ -1,3 +1,5 @@
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
 import { existsSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { app, ipcMain } from 'electron'
@@ -6,15 +8,20 @@ import { identity } from './environment'
 import { shouldSyncScreenAgent } from '../shared/computer-access'
 
 // Codync Screen (capture + input for Remote screen): on macOS a launchd agent inside the app
-// bundle (apps/screen-macos, registered through SMAppService), which owns the Screen Recording
-// and Accessibility grants. Linux starts its helper from the host, so nothing happens here.
+// bundle (apps/screen-macos, registered through SMAppService). macOS can attribute screen
+// recording to the containing app. Linux starts its helper from the host.
 
 const serviceName = `${identity.screenLabel}.plist`
 const isMac = process.platform === 'darwin'
 
+/** 返回当前安装包内的助手位置，供权限引导和启动状态检查共用。 */
+function screenBundlePath() {
+  return join(process.resourcesPath, '..', 'Library', 'LoginItems', `${identity.screenName}.app`)
+}
+
 /** Identifies the helper binary inside this app: its path and modification date. */
 function helperStamp() {
-  const path = join(process.resourcesPath, '..', `Library/LoginItems/${identity.screenName}.app/Contents/MacOS/${identity.screenName}`)
+  const path = join(screenBundlePath(), 'Contents', 'MacOS', identity.screenName)
   try {
     return `${path}@${statSync(path).mtimeMs}`
   } catch {
@@ -61,9 +68,38 @@ export function unregisterScreenAgent() {
   prefs.set('screenHelperStamp', null)
 }
 
+/** 通过 macOS 公开命令清除当前构建变体的单项旧授权，系统仍掌握重新授权。 */
+async function resetScreenPermission(permission: unknown) {
+  if (!isMac || !app.isPackaged) throw new Error('Screen permission reset is available in the installed Mac app.')
+  const service = permission === 'capture' ? 'ScreenCapture' : permission === 'input' ? 'Accessibility' : null
+  if (!service) throw new Error('Unknown computer access permission.')
+  const reset = promisify(execFile)
+  // macOS 可能把录屏记在主程序或助手名下，辅助功能由助手持有。
+  const bundles = permission === 'capture' ? [identity.appId, identity.screenLabel] : [identity.screenLabel]
+  let resetAny = false
+  let failure: unknown
+  for (const bundle of bundles) {
+    try {
+      await reset('/usr/bin/tccutil', ['reset', service, bundle], { timeout: 10_000 })
+      resetAny = true
+    } catch (error) {
+      // 某个目标尚未注册时继续尝试另一个，避免挡住已清理目标的后续授权。
+      console.warn(`macOS ${service} reset failed for ${bundle}`, error)
+      failure = error
+    }
+  }
+  if (!resetAny) throw failure
+}
+
 export function registerScreenIPC() {
+  // Renderer 只能选择权限类型，主程序限定为当前构建变体。
+  ipcMain.handle('screen:resetPermission', (_e, permission) => resetScreenPermission(permission))
   ipcMain.handle('screen:state', () => ({
-    available: !isMac || (app.isPackaged && existsSync(join(process.resourcesPath, '..', `Library/LoginItems/${identity.screenName}.app/Contents/MacOS/${identity.screenName}`))),
+    available: !isMac || (app.isPackaged && existsSync(join(screenBundlePath(), 'Contents', 'MacOS', identity.screenName))),
+    permissionPaths: isMac && app.isPackaged ? {
+      capture: join(process.resourcesPath, '..', '..'),
+      input: screenBundlePath(),
+    } : undefined,
     needsApproval: status() === 'requires-approval',
     registered: status() === 'enabled',
   }))

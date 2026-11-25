@@ -36,6 +36,8 @@
 .computer-access .styled-button.secondary:hover:not(:disabled) { background: var(--chrome-fill); }
 .computer-access .styled-button:focus-visible { outline: 2px solid var(--text); outline-offset: 3px; }
 .computer-access .computer-access-inline-note { flex-basis: 100%; font-size: var(--text-caption); margin-bottom: 2px; }
+.computer-access-path { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 8px; }
+.computer-access-path code { user-select: text; overflow-wrap: anywhere; max-width: 100%; }
 .computer-access-inline-note strong { font-weight: 500; color: var(--text); }
 .computer-access-notes { display: grid; gap: 8px; list-style: none; margin: 24px 0 0; padding: 0; color: var(--tertiary); }
 .computer-access-notes li { display: flex; align-items: flex-start; gap: 8px; }

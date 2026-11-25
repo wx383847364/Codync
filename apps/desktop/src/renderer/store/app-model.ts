@@ -270,12 +270,34 @@ export class AppModel extends Observable {
     return null
   }
 
-  /** Remote screen: starts/stops Codync Screen and tells the host (it only accepts this from the computer itself). */
+  /** 系统登录项发生变化时同步托盘，只在批准状态改变时重绘。 */
+  updateScreenApproval(needsApproval: boolean) {
+    if (this.screenNeedsApproval === needsApproval) return
+    this.screenNeedsApproval = needsApproval
+    this.changed()
+  }
+
+  /** 重新注册后台助手并同步托盘状态，不修改 Host 的屏幕开关。 */
+  async registerScreenAgent(on: boolean) {
+    try {
+      const result = await window.codync.app.setScreenAgent(on)
+      this.screenNeedsApproval = result.needsApproval
+      this.screenError = null
+      return result
+    } catch (error) {
+      this.screenError = error instanceof Error ? error.message : String(error)
+      throw error
+    } finally {
+      this.changed()
+    }
+  }
+
+  /** 开启或关闭后台助手，并将屏幕开关写入本机 Host。 */
   async setRemoteScreen(on: boolean) {
     const local = this.local
     if (!local) return
     try {
-      this.screenNeedsApproval = (await window.codync.app.setScreenAgent(on)).needsApproval
+      await this.registerScreenAgent(on)
       await local.setScreenEnabled(on)
       this.screenError = null
     } catch (error) {

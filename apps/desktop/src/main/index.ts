@@ -167,6 +167,8 @@ function registerIPC(tray: Tray) {
   registerFileLinks(() => chat, () => host.local?.computerId)
   registerArtifacts()
   ipcMain.on('app:version', (e) => (e.returnValue = app.getVersion()))
+  // 显示打包时写入的提交号，避免读取正在运行机器上的仓库。
+  ipcMain.on('app:buildCommit', (e) => (e.returnValue = buildConfig.buildCommit ?? null))
   ipcMain.on('app:computerName', (e) => (e.returnValue = computerName()))
   ipcMain.on('app:openedAtLogin', (e) => (e.returnValue = openedAtLogin()))
   // `reset` is answered once per start, so a reload or another window doesn't bring the welcome flow back mid-session.

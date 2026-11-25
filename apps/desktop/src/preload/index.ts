@@ -50,6 +50,7 @@ const bridge: CodyncBridge = {
   appScheme: ipcRenderer.sendSync('app:scheme') as string,
   hostPort: ipcRenderer.sendSync('app:hostPort') as number,
   appVersion: ipcRenderer.sendSync('app:version') as string,
+  buildCommit: ipcRenderer.sendSync('app:buildCommit') as string | null,
   computerName: ipcRenderer.sendSync('app:computerName') as string,
   openedAtLogin: ipcRenderer.sendSync('app:openedAtLogin') as boolean,
   debugOpen: ipcRenderer.sendSync('app:debugOpen') as string | null,
@@ -161,6 +162,8 @@ const bridge: CodyncBridge = {
     launchAtLogin: () => ipcRenderer.invoke('app:launchAtLogin'),
     openSettings: (url) => ipcRenderer.send('app:openSettings', url),
     authenticate: (url, scheme) => ipcRenderer.invoke('app:authenticate', url, scheme),
+    // 恢复授权仅清除当前 Mac 助手的一项旧记录。
+    resetScreenPermission: (permission) => ipcRenderer.invoke('screen:resetPermission', permission),
     screenAgentState: () => ipcRenderer.invoke('screen:state'),
     setScreenAgent: (on) => ipcRenderer.invoke('screen:setAgent', on),
     syncScreenAgent: (enabled) => ipcRenderer.invoke('screen:syncAgent', enabled),

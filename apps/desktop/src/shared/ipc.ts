@@ -153,6 +153,7 @@ export interface CodyncBridge {
   appScheme: string
   hostPort: number
   appVersion: string
+  buildCommit: string | null
   /** The computer's name ("Kevin's MacBook Pro"). */
   computerName: string
   /** This launch was started by the login item (Open at login). */
@@ -279,6 +280,8 @@ export interface CodyncBridge {
      * (`codync://…`), like ASWebAuthenticationSession. Rejects when cancelled or timed out.
      */
     authenticate(url: string, scheme: string): Promise<string>
+    /** 清除当前 Mac 助手的一项授权记录。 */
+    resetScreenPermission(permission: 'capture' | 'input'): Promise<void>
     /** macOS: registers or removes the Codync Screen agent (SMAppService). */
     screenAgentState(): Promise<ScreenAgentState>
     setScreenAgent(on: boolean): Promise<{ needsApproval: boolean }>

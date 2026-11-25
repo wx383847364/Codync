@@ -13,12 +13,11 @@ export function ComputerAccessView({ onContinue }: { onContinue?: (ready: boolea
   const access = useComputerAccess()
   const tr = useTr()
   useScreenViewed('computer_access')
-  const { screen, step } = access
+  const { screen, step, helperReady } = access
   const mac = window.codync.platform === 'darwin'
   const windows = window.codync.platform === 'win32'
   const ready = step === 'ready'
-  const helperReady = screen?.enabled === true && screen.connected && step !== 'background'
-  const completed = windows ? Number(ready) : Number(helperReady) + (mac
+  const completed = windows ? Number(ready) : !helperReady ? 0 : 1 + (mac
     ? Number(screen?.capture === true) + Number(screen?.input === true)
     : Number(screen?.capture === true && screen.input))
   return (
