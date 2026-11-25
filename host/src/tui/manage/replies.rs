@@ -132,7 +132,7 @@ impl App {
                     && *target == bot
                     && *scope == room
                 {
-                    *result = v["entry"]["data"]["text"].as_str().map(str::to_owned);
+                    *result = Some(v);
                     *cursor = 0;
                 }
             }

@@ -1,9 +1,12 @@
 //! 单个投递的暂停与继续，保留原始任务、顺序和执行身份。
 
-use super::{Delivery, Status, Store, completion, eligible, get};
-use crate::{LockExt, store::Entry};
+use super::{Delivery, Guidance, Status, Store, completion, eligible, get, wire};
+use crate::{
+    LockExt,
+    store::{Entry, now_ms},
+};
 use anyhow::{Result, anyhow, ensure};
-use rusqlite::{TransactionBehavior, params};
+use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
 
 /// 桌面、手机和终端共用的任务行，当前回合时间也是操作校验值。
@@ -25,6 +28,53 @@ impl Delivery {
 }
 
 impl Store {
+    /// 在发送 ACP 之前持久登记引导；Stop 或重启后按既有 started 边界处理。
+    pub fn start_guidance(&self, id: &str, active_id: &str, bot: &str) -> Result<(Entry, Vec<Entry>)> {
+        let mut c = self.db.locked();
+        let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let delivery = get(&tx, id)?
+            .filter(|d| d.target_bot_id == bot && d.status == Status::Queued)
+            .ok_or_else(|| anyhow::anyhow!("这条消息已不在等待执行"))?;
+        anyhow::ensure!(
+            get(&tx, active_id)?.is_some_and(|d| d.target_bot_id == bot
+                && d.room_id == delivery.room_id
+                && d.status == Status::Started)
+                && eligible(&tx, &delivery.room_id, bot, None)?,
+            "成员的当前回合已结束或已切换"
+        );
+        let source = tx
+            .query_row(
+                &format!(
+                    "SELECT {} FROM entries WHERE id=? AND bot_id=? AND kind='user'",
+                    super::super::entries::ENTRY_COLS
+                ),
+                params![delivery.source_entry_id, delivery.room_id],
+                super::super::entries::row_entry,
+            )
+            .optional()?
+            .ok_or_else(|| anyhow::anyhow!("原始消息已不可读"))?;
+        anyhow::ensure!(completion::direct_user_mention(&delivery, &source.data), "引导需要直接 @ 这位成员");
+        tx.execute(
+            "UPDATE deliveries SET status='started',started_at=?2,last_error='引导当前对话' WHERE id=?1",
+            params![id, now_ms()],
+        )?;
+        let cards = vec![completion::card(&tx, &delivery)?];
+        tx.commit()?;
+        Ok((source, cards))
+    }
+
+    /// 后台任务被暂停时结算曾加入的引导；新一轮执行不会重新领用这些 ID。
+    pub(crate) fn interrupt_local_task_guidance(&self, guidance: &[(String, Guidance)]) -> Result<Vec<Entry>> {
+        if guidance.is_empty() {
+            return Ok(vec![]);
+        }
+        let mut db = self.db.locked();
+        let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let entries = interrupt_guidance(&tx, guidance)?;
+        tx.commit()?;
+        Ok(entries)
+    }
+
     /// 仅接受当前回合的操作。重复请求、已完成和较旧回合的操作都无需改写。
     pub(crate) fn set_delivery_paused(
         &self,
@@ -88,4 +138,29 @@ impl Store {
             })?
             .collect::<rusqlite::Result<_>>()?)
     }
+}
+
+/// 仅更新未被取消的引导；明确未发送的恢复排队，已接受的需人工检查。
+pub(super) fn interrupt_guidance(c: &Connection, guidance: &[(String, Guidance)]) -> Result<Vec<Entry>> {
+    let mut changed = Vec::new();
+    for (guide, outcome) in guidance {
+        let queued = matches!(outcome, Guidance::Deferred);
+        let next = if queued { Status::Queued } else { Status::Interrupted };
+        let detail = if queued {
+            "等待下一回合"
+        } else {
+            "原任务已暂停，引导已中断，请检查进度后重试"
+        };
+        let count = c.execute(
+            "UPDATE deliveries SET status=?2,finished_at=?3,started_at=CASE WHEN ?4 THEN NULL ELSE started_at END,last_error=?5
+             WHERE id=?1 AND status='started' AND claimed_at IS NULL",
+            params![guide, wire(&next), (!queued).then(now_ms), queued, detail],
+        )?;
+        if count == 1
+            && let Some(delivery) = get(c, guide)?
+        {
+            changed.push(delivery);
+        }
+    }
+    completion::cards(c, changed)
 }

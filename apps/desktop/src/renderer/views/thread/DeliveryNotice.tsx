@@ -9,6 +9,9 @@ import { Field } from '../marketplace/pieces'
 import './handoff.css'
 import { useTr } from '../../lib/use-language'
 import { deliveryStatus, deliverySummary } from './delivery-status'
+import { FileDownloadCard } from './FileDownloadCard'
+
+type ResultPreview = { entry: Entry; evidence?: Entry }
 
 /** 折叠时可直接引导单一成员，多位成员的操作在详情中逐一列出。 */
 export function DeliveryNotice({ entry, deliveryId }: { entry: Entry; deliveryId?: string }) {
@@ -74,7 +77,7 @@ export function DeliveryNotice({ entry, deliveryId }: { entry: Entry; deliveryId
 function DeliveryActivity({ row, roomId, inDetails }: { row: DeliveryRow; roomId: string; inDetails: boolean }) {
   const tr = useTr()
   const store = useStore()
-  const [result, setResult] = useState<Entry | null>(null)
+  const [result, setResult] = useState<ResultPreview | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
 
@@ -90,7 +93,7 @@ function DeliveryActivity({ row, roomId, inDetails }: { row: DeliveryRow; roomId
     setLoading(true)
     setError(null)
     try {
-      setResult((await (await store.ready()).call<{ entry: Entry }>('groupDeliveryResult', { roomId, resultId: row.resultId })).entry)
+      setResult(await (await store.ready()).call<ResultPreview>('groupDeliveryResult', { roomId, resultId: row.resultId }))
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : String(failure))
     } finally {
@@ -111,7 +114,15 @@ function DeliveryActivity({ row, roomId, inDetails }: { row: DeliveryRow; roomId
     {row.resultId && <Button kind="secondary" disabled={loading} onClick={() => { /* 打开已保存的群聊结果。 */ void openResult() }}>{tr('View result')}</Button>}
     {error && <Text size="footnote" tone="secondary" role="status">{error}</Text>}
     <Sheet open={result != null} onClose={() => { /* 关闭结果页后仍可查看原派工。 */ setResult(null) }}>
-      {result && <SheetPage><ModalHeader title={tr('View result')} /><CardForm><Text>{result.data.text}</Text></CardForm></SheetPage>}
+      {result && <SheetPage><ModalHeader title={tr('View result')} /><CardForm>
+        <Text>{result.entry.data.text}</Text>
+        {result.evidence && (() => {
+          // 附件仍向 Host 请求其原始消息 ID，不依赖群聊天的分页缓存。
+          const evidence = result.evidence
+          return evidence.data.files?.map(file => <FileDownloadCard key={file.id} entry={evidence} file={file}
+            messageItems={() => []} />)
+        })()}
+      </CardForm></SheetPage>}
     </Sheet>
   </VStack>
 }

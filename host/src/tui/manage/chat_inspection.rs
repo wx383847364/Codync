@@ -102,7 +102,7 @@ impl App {
         bot: String,
         room: String,
         snapshot: Value,
-        mut result: Option<String>,
+        mut result: Option<Value>,
         mut cursor: usize,
         key: KeyCode,
     ) -> Option<Overlay> {
@@ -123,6 +123,19 @@ impl App {
                     self.pick = Some(id.into());
                     self.unfolded.insert(id.into());
                     return None;
+                }
+            }
+            KeyCode::Char('e') if result.is_some() => {
+                // 结果未载入聊天时也可以保存同一投递的证据。
+                if let Some(evidence) = result.as_ref().map(|value| &value["evidence"])
+                    && let Some(id) = evidence["id"].as_str()
+                    && let Some(files) = evidence["data"]["files"].as_array()
+                {
+                    for value in files {
+                        if let Ok(file) = serde_json::from_value(value.clone()) {
+                            self.download_shared(id.to_owned(), file, super::SharedFileAction::Save);
+                        }
+                    }
                 }
             }
             KeyCode::Enter if result.is_none() => {

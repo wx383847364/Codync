@@ -15,6 +15,7 @@ mod icons;
 mod import;
 mod import_cli;
 mod local_api;
+mod local_tasks;
 mod market;
 mod mcp;
 mod network;

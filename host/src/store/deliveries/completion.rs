@@ -9,6 +9,18 @@ use anyhow::Result;
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use serde_json::{Value, json};
 
+/// 后台任务的终态和证据由 Host 提供；开始时间限制发布只能命中原执行。
+pub(crate) struct LocalTaskResult<'a> {
+    pub started_at: Option<i64>,
+    pub status: Status,
+    pub detail: &'a str,
+    pub text: &'a str,
+    pub files: &'a [crate::chat::files::SharedFile],
+    pub follow_up: bool,
+    pub turn: i64,
+    pub guidance: &'a [(String, Guidance)],
+}
+
 /// 同一执行接收引导后的结果，随原执行一起落库。
 #[derive(Clone, Copy)]
 pub enum Guidance {
@@ -75,8 +87,8 @@ pub(super) fn card(c: &Connection, d: &Delivery) -> Result<Entry> {
             .as_array()
             .and_then(|rows| rows.iter().find(|row| row["deliveryId"] == delivery.id));
         let result_delivery = old.and_then(|row| row["resultDeliveryId"].as_str()).unwrap_or(&delivery.id);
-        let result = if delivery.status == Status::Completed {
-            visible_result(c, &delivery.room_id, result_delivery)?
+        let result = if matches!(delivery.status, Status::Completed | Status::Failed) {
+            visible_result(c, &delivery.room_id, result_delivery, delivery.status == Status::Failed)?
         } else {
             None
         };
@@ -109,20 +121,21 @@ pub(super) fn card(c: &Connection, d: &Delivery) -> Result<Entry> {
 }
 
 /// 查找显示在来源群的最终结果，正文优先于仅含文件的回复。
-fn visible_result(c: &Connection, room: &str, delivery: &str) -> Result<Option<String>> {
+fn visible_result(c: &Connection, room: &str, delivery: &str, failed: bool) -> Result<Option<String>> {
     let text = format!("delivery-result-{delivery}");
     Ok(c.query_row(
         "SELECT id FROM entries WHERE bot_id=?1 AND kind='agent' AND json_extract(data,'$.deliveryId')=?2
          AND json_extract(data,'$.final') IS 1 AND json_extract(data,'$.removed') IS NOT 1
+         AND (NOT ?4 OR json_extract(data,'$.localTask') IS 1)
          ORDER BY (id=?3) DESC,seq DESC LIMIT 1",
-        params![room, delivery, text],
+        params![room, delivery, text, failed],
         |r| r.get(0),
     )
     .optional()?)
 }
 
 /// 仅允许原始用户消息中明确 @ 的投递加入当前执行。
-fn direct_user_mention(delivery: &Delivery, source: &Value) -> bool {
+pub(super) fn direct_user_mention(delivery: &Delivery, source: &Value) -> bool {
     delivery.source_kind == "user"
         && delivery.attempt == 1
         && source["directMentions"].as_array().is_some_and(|ids| ids.iter().any(|id| *id == delivery.target_bot_id))
@@ -197,41 +210,6 @@ impl Store {
         Ok(delivery.map(|delivery| (card_key(&delivery), delivery.id)))
     }
 
-    /// 在发送 ACP 之前持久登记引导；Stop 或重启后按既有 started 边界处理。
-    pub fn start_guidance(&self, id: &str, active_id: &str, bot: &str) -> Result<(Entry, Vec<Entry>)> {
-        let mut c = self.db.locked();
-        let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let delivery = get(&tx, id)?
-            .filter(|d| d.target_bot_id == bot && d.status == Status::Queued)
-            .ok_or_else(|| anyhow::anyhow!("这条消息已不在等待执行"))?;
-        anyhow::ensure!(
-            get(&tx, active_id)?.is_some_and(|d| d.target_bot_id == bot
-                && d.room_id == delivery.room_id
-                && d.status == Status::Started)
-                && eligible(&tx, &delivery.room_id, bot, None)?,
-            "成员的当前回合已结束或已切换"
-        );
-        let source = tx
-            .query_row(
-                &format!(
-                    "SELECT {} FROM entries WHERE id=? AND bot_id=? AND kind='user'",
-                    super::super::entries::ENTRY_COLS
-                ),
-                params![delivery.source_entry_id, delivery.room_id],
-                super::super::entries::row_entry,
-            )
-            .optional()?
-            .ok_or_else(|| anyhow::anyhow!("原始消息已不可读"))?;
-        anyhow::ensure!(direct_user_mention(&delivery, &source.data), "引导需要直接 @ 这位成员");
-        tx.execute(
-            "UPDATE deliveries SET status='started',started_at=?2,last_error='引导当前对话' WHERE id=?1",
-            params![id, now_ms()],
-        )?;
-        let cards = vec![card(&tx, &delivery)?];
-        tx.commit()?;
-        Ok((source, cards))
-    }
-
     /// 结果、带条件终态和后续 @ 同事务保存；迟到结果只留记录，不复活已取消执行。
     pub fn complete_delivery(
         &self,
@@ -242,34 +220,69 @@ impl Store {
         turn: i64,
         guidance: &[(String, Guidance)],
     ) -> Result<Vec<Entry>> {
+        self.finish_delivery(id, status, text, detail, turn, guidance, None)
+    }
+
+    /// 任务排队和执行状态通过现有派工卡同步给所有客户端。
+    pub(crate) fn local_task_activity(&self, id: &str, started_at: Option<i64>, detail: &str) -> Result<Vec<Entry>> {
         let mut c = self.db.locked();
         let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let d = get(&tx, id)?.ok_or_else(|| anyhow::anyhow!("unknown delivery"))?;
+        let Some(d) = get(&tx, id)?.filter(|d| d.status == Status::Started && d.started_at == started_at) else {
+            return Ok(vec![]);
+        };
+        if !eligible(&tx, &d.room_id, &d.target_bot_id, d.source_bot_id.as_deref())? {
+            return Ok(vec![]);
+        }
+        tx.execute("UPDATE deliveries SET last_error=?2 WHERE id=?1", params![id, detail])?;
+        let entries = vec![card(&tx, &d)?];
+        tx.commit()?;
+        Ok(entries)
+    }
+
+    /// 复用群回复、证据快照和阶段回传事务，失败也有可查结果。
+    pub(crate) fn complete_local_task(&self, id: &str, local: &LocalTaskResult<'_>) -> Result<Vec<Entry>> {
+        self.finish_delivery(
+            id,
+            local.status,
+            Some(local.text),
+            Some(local.detail),
+            local.turn,
+            local.guidance,
+            Some(local),
+        )
+    }
+
+    /// 终态及来源群材料一起写入；普通模型和本地任务共用相同投递生命周期。
+    #[allow(clippy::too_many_arguments)]
+    fn finish_delivery(
+        &self,
+        id: &str,
+        status: Status,
+        text: Option<&str>,
+        detail: Option<&str>,
+        turn: i64,
+        guidance: &[(String, Guidance)],
+        local: Option<&LocalTaskResult<'_>>,
+    ) -> Result<Vec<Entry>> {
+        let mut c = self.db.locked();
+        let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let Some(d) = get(&tx, id)? else {
+            if local.is_some() {
+                return Ok(vec![]);
+            }
+            anyhow::bail!("unknown delivery");
+        };
+        if let Some(local) = local
+            && (d.started_at != local.started_at
+                || (!d.held_after_pause() && d.status != Status::Started)
+                || !eligible(&tx, &d.room_id, &d.target_bot_id, d.source_bot_id.as_deref())?)
+        {
+            return Ok(vec![]);
+        }
         // 暂停后的旧回合可能在继续请求之后才退出。它的片段已保存在执行记录中，
         // 不能写入共享的最终结果 ID，也不能触发派工；同一成员会等它退出才重新领取。
         if d.held_after_pause() {
-            // 原回合取消后，引导不能永远停留在 started；已接受或结果不明的引导需要人工检查，
-            // 只有明确被执行器拒绝的引导能恢复为普通排队消息。
-            let mut changed = Vec::new();
-            for (guide, outcome) in guidance {
-                let queued = matches!(outcome, Guidance::Deferred);
-                let next = if queued { Status::Queued } else { Status::Interrupted };
-                let detail = if queued {
-                    "等待下一回合"
-                } else {
-                    "原任务已暂停，引导已中断，请检查进度后重试"
-                };
-                let count = tx.execute(
-                    "UPDATE deliveries SET status=?2,finished_at=?3,started_at=CASE WHEN ?4 THEN NULL ELSE started_at END,last_error=?5 WHERE id=?1 AND status='started'",
-                    params![guide, wire(&next), (!queued).then(now_ms), queued, detail],
-                )?;
-                if count == 1
-                    && let Some(delivery) = get(&tx, guide)?
-                {
-                    changed.push(delivery);
-                }
-            }
-            let entries = cards(&tx, changed)?;
+            let entries = super::pause::interrupt_guidance(&tx, guidance)?;
             tx.commit()?;
             return Ok(entries);
         }
@@ -307,10 +320,31 @@ impl Store {
             if let Some(call) = call {
                 data["call"] = call.into();
             }
-            let result = entry(&tx, &result_id, &d.room_id, EntryKind::Agent, turn, &data)?;
-            entries.push(result);
+            if let Some(local) = local {
+                // 机器摘要可查且可定位，附件沿用现有群文件消息及下载鉴权。
+                data["final"] = true.into();
+                data["localTask"] = true.into();
+                let evidence_id = format!("delivery-evidence-{id}");
+                if !local.files.is_empty() {
+                    data["localTaskEvidenceId"] = json!(evidence_id);
+                }
+                entries.push(entry(&tx, &result_id, &d.room_id, EntryKind::Agent, turn, &data)?);
+                if !local.files.is_empty() {
+                    entries.push(entry(
+                        &tx,
+                        &evidence_id,
+                        &d.room_id,
+                        EntryKind::Agent,
+                        turn,
+                        &json!({"text":"Local task evidence","author":d.target_bot_id,"deliveryId":id,
+                            "final":true,"files":local.files}),
+                    )?);
+                }
+            } else {
+                entries.push(entry(&tx, &result_id, &d.room_id, EntryKind::Agent, turn, &data)?);
+            }
         }
-        if changed == 1 && status == Status::Completed {
+        if changed == 1 && status == Status::Completed && local.is_none_or(|local| local.follow_up) {
             // 只从本次投递实际发布的文件回传，文件名中的 @ 不是成员提及。
             let source = match text {
                 Some(_) => Some(result_id),
@@ -321,12 +355,16 @@ impl Store {
                 None => None,
             };
             if let Some(source) = source {
-                entries.extend(route_result(&tx, &d, &source, text, turn)?);
+                // 任务输出是证据数据，文字中的 @ 不具备派工授权。
+                entries.extend(route_result(&tx, &d, &source, if local.is_some() { None } else { text }, turn)?);
             }
         }
         // 引导与原执行共用结果，但每条来源消息保留自己的投递记录。
-        let joined_result =
-            if changed == 1 && status == Status::Completed { visible_result(&tx, &d.room_id, &d.id)? } else { None };
+        let joined_result = if changed == 1 && status == Status::Completed {
+            visible_result(&tx, &d.room_id, &d.id, false)?
+        } else {
+            None
+        };
         let original = d.id.clone();
         let mut joined = Vec::new();
         let mut changed_rows = vec![d];

@@ -100,22 +100,28 @@ pub(super) fn overlay(buf: &mut Buffer, area: Rect, app: &mut App, top: &Overlay
                     let _ = write!(hint, "  H {}", super::super::l10n::tr("Session history"));
                 }
             }
-            let text = result.clone().unwrap_or_else(|| {
-                row.map_or_else(
-                    || {
-                        super::super::l10n::tr(if snapshot.is_null() { "Loading…" } else { "No assignments yet" })
-                            .into_owned()
-                    },
-                    |row| {
-                        let mut lines = vec![
-                            super::super::app::Entry::delivery_status(row["status"].as_str().unwrap_or_default())
-                                .to_owned(),
-                        ];
-                        lines.extend(super::transcript::activity_lines(row));
-                        lines.join("\n")
-                    },
-                )
-            });
+            if result.as_ref().is_some_and(|value| value["evidence"]["data"]["files"].is_array()) {
+                let _ = write!(hint, "  e {}", super::super::l10n::tr("Save evidence"));
+            }
+            let text = result.as_ref().and_then(|value| value["entry"]["data"]["text"].as_str()).map_or_else(
+                || {
+                    row.map_or_else(
+                        || {
+                            super::super::l10n::tr(if snapshot.is_null() { "Loading…" } else { "No assignments yet" })
+                                .into_owned()
+                        },
+                        |row| {
+                            let mut lines = vec![
+                                super::super::app::Entry::delivery_status(row["status"].as_str().unwrap_or_default())
+                                    .to_owned(),
+                            ];
+                            lines.extend(super::transcript::activity_lines(row));
+                            lines.join("\n")
+                        },
+                    )
+                },
+                str::to_owned,
+            );
             let t = theme();
             let inner = frame_box(buf, centered(area, 76, 20), t.text, t.panel, Some((&title, t.text)));
             inspection_text(buf, inner, &text, *cursor, &hint);

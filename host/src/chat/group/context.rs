@@ -36,6 +36,10 @@ pub fn delivery_prompt(hub: &Hub, delivery: &Delivery, me: &BotConfig) -> Result
 /// 完整材料按 entry ID 去重；后续独立用户请求只保留原文，不自动绑定为本任务授权。
 fn assemble(hub: &Hub, s: &Snapshot, me: &BotConfig) -> Result<Prepared> {
     let mut out = vec![instructions(&s.room, &s.members, me)];
+    // 未配置本地任务的 Host 不增加群派工提示。
+    if crate::service::data_dir().join("local-tasks.json").is_file() {
+        out.push("If the user authorizes a registered local check, use list_local_tasks and start_local_task with this delivery ID. Once accepted, finish your turn so the Host can run it and update the original assignment. Do not wait or poll.".into());
+    }
     if is_member_mention(s) {
         // 点名需要可见回应；确认收悉不必反向点名，也不能扩大原任务授权。
         out.push(format!(
@@ -168,7 +172,15 @@ fn render_entry(hub: &Hub, s: &Snapshot, me: &BotConfig, e: &Entry, title: &str)
     }
     // 文件型协作结果以本群持久快照为来源，下一次执行可从实际路径读取。
     if s.delivery.source_entry_id.as_deref() == Some(e.id.as_str()) {
-        for file in e.data["files"].as_array().into_iter().flatten() {
+        // 阶段回传的摘要保留同次证据的固定文件引用。
+        let evidence = e.data["localTaskEvidenceId"].as_str().and_then(|id| hub.store.entry(id)).filter(|entry| {
+            entry.bot_id == s.room.id
+                && entry.data["final"] == true
+                && entry.data["removed"] != true
+                && entry.data["deliveryId"] == e.data["deliveryId"]
+        });
+        let attached = evidence.as_ref().map_or(&e.data["files"], |entry| &entry.data["files"]);
+        for file in attached.as_array().into_iter().flatten() {
             if let Some(id) = file["id"].as_str()
                 && let Ok(path) = crate::chat::files::path(&crate::chat::files::root(&s.room.id), id)
             {

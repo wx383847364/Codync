@@ -60,6 +60,8 @@ pub(super) async fn call(hub: &Arc<Hub>, caller: &Caller, method: &str, b: Value
                 crate::chat::fallbacks::call(hub, bot, name, &b["arguments"]).await?
             } else if crate::chat::artifacts::TOOLS.contains(&name) {
                 crate::chat::artifacts::call(hub, bot, name, b["groupSession"].as_str(), &b["arguments"]).await?
+            } else if matches!(name, crate::local_tasks::LIST | crate::local_tasks::START) {
+                crate::local_tasks::call(hub, bot, b["groupSession"].as_str(), name, &b["arguments"]).await?
             } else if crate::dev_servers::TOOLS.contains(&name) {
                 crate::dev_servers::call(hub, bot, name, b["groupSession"].as_str(), &b["arguments"]).await?
             } else {
@@ -427,13 +429,29 @@ pub(super) async fn call(hub: &Arc<Hub>, caller: &Caller, method: &str, b: Value
                         && entry.data["deliveryId"].as_str().is_some_and(|delivery| {
                             hub.store.delivery(delivery).is_ok_and(|delivery| {
                                 delivery.is_some_and(|d| {
-                                    d.room_id == room && d.status == crate::store::deliveries::Status::Completed
+                                    d.room_id == room
+                                        && (d.status == crate::store::deliveries::Status::Completed
+                                            || (d.status == crate::store::deliveries::Status::Failed
+                                                && entry.data["localTask"] == true))
                                 })
                             })
                         })
                 })
                 .ok_or_else(|| anyhow!("Delivery result is no longer available"))?;
-            json!({"entry":entry})
+            // 摘要与快照均归属已鉴权的同一投递，允许冷历史详情直接下载。
+            let evidence =
+                entry.data["localTaskEvidenceId"].as_str().and_then(|id| hub.store.entry(id)).filter(|file| {
+                    file.bot_id == room
+                        && file.kind == "agent"
+                        && file.data["final"] == true
+                        && file.data["removed"] != true
+                        && file.data["deliveryId"] == entry.data["deliveryId"]
+                });
+            let mut result = json!({"entry":entry});
+            if let Some(evidence) = evidence {
+                result["evidence"] = json!(evidence);
+            }
+            result
         }
         "retryDelivery" => {
             let delivery = hub.retry_delivery(str_arg(&b, "deliveryId")?)?;

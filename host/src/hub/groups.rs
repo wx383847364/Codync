@@ -217,7 +217,7 @@ impl Hub {
                 if root.is_symlink() {
                     continue;
                 }
-                for name in ["files", "artifacts", "uploads", "bot-memory"] {
+                for name in ["files", "artifacts", "uploads", "bot-memory", "local-task-runs"] {
                     let path = root.join(name);
                     let resolved = resolved_path(&path);
                     let destination = path.with_file_name(format!(".purging-{name}"));

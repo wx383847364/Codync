@@ -163,32 +163,43 @@ impl Hub {
 
     /// 保存终态、结果及派生投递，失败由 actor 保留内存结果重试。
     pub fn complete_delivery(
-        &self,
+        self: &std::sync::Arc<Self>,
         delivery: &Delivery,
         status: Status,
         text: Option<&str>,
         detail: Option<&str>,
         turn: i64,
         guidance: &[(String, crate::store::deliveries::Guidance)],
-    ) -> Result<()> {
+    ) -> Result<Option<tokio::sync::oneshot::Receiver<()>>> {
         let _guard = self.emit_lock.locked();
         // 群已清空时迟到的执行结果自然结束，让共享成员可以接着处理别的群。
         if self.store.bot(&delivery.room_id)?.is_some_and(|row| row.deleted) {
-            return Ok(());
+            self.local_tasks.discard(&delivery.id);
+            return Ok(None);
         }
         let id = &delivery.id;
-        let outcome = serde_json::to_value(status)?;
+        // 在同一发布锁内接手或提交普通终态，迟到的工具无法插入两者之间。
+        if let Some((waiting, entries)) = crate::local_tasks::handoff(self, id, status, turn, guidance)? {
+            self.delivery_entries(&entries);
+            return Ok(Some(waiting));
+        }
         let cards = self.store.complete_delivery(id, status, text, detail, turn, guidance)?;
         if cards.is_empty() {
-            return Ok(());
+            return Ok(None);
         }
         self.delivery_entries(&cards);
         // 暂停后的旧回合可能只结算引导状态卡；原派工没有结束，不能重复统计完成。
         if self.store.delivery(id)?.is_some_and(|delivery| delivery.held_after_pause()) {
-            return Ok(());
+            return Ok(None);
         }
-        // 等待位超时、runner已经退出的迟到回复仍留在来源群并推送群身份。
-        if let Some(entry) = cards.iter().find(|e| e.kind == "agent" && e.data["final"] == true)
+        self.report_delivery_finished(status, cards.iter().find(|e| e.kind == "agent" && e.data["final"] == true));
+        Ok(None)
+    }
+
+    /// 后台工作与模型直接交付使用相同的群通知和完成计数。
+    pub(crate) fn report_delivery_finished(&self, status: Status, entry: Option<&Entry>) {
+        // 等待位超时、runner 已退出的迟到回复仍使用来源群身份。
+        if let Some(entry) = entry
             && !self.groups.running(&crate::store::Lane::main(&entry.bot_id))
             && let Err(error) = crate::chat::group::notify(self, &entry.bot_id, entry)
         {
@@ -197,9 +208,8 @@ impl Hub {
         crate::analytics::capture(
             self,
             crate::analytics::Event::GroupDeliveryFinished,
-            json!({"outcome":outcome}).as_object().cloned().unwrap_or_default(),
+            serde_json::Map::from_iter([("outcome".into(), json!(status))]),
         );
-        Ok(())
     }
 
     /// 上下文资源不足只附可恢复说明，不改变 queued；按 rev 顺序发布到来源群。

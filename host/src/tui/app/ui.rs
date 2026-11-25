@@ -363,7 +363,7 @@ pub enum Overlay {
         bot: String,
         room: String,
         snapshot: serde_json::Value,
-        result: Option<String>,
+        result: Option<serde_json::Value>,
         cursor: usize,
     },
     Help(Editor),

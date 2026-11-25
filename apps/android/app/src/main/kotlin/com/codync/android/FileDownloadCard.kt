@@ -30,7 +30,7 @@ import com.kyant.shapes.RoundedRectangle
 /** A file a bot shared, as iOS `FileDownloadCard`: an image shows itself (tap for full size), then its name and size, and a
  *  button to download (or cancel). */
 @Composable internal fun FileDownloadCard(entry: Entry, file: SharedFile, state: AppState, store: AppStore,
-    reactions: ReactionPick, saveAs: () -> Unit, messageItems: () -> List<MenuItem>) {
+    reactions: ReactionPick?, saveAs: () -> Unit, messageItems: () -> List<MenuItem>) {
     var viewing by remember { mutableStateOf(false) }
     val menu = Modifier.contextActions(reactions = reactions) {
         if (state.fileDownloads[file.id] is FileDownloadState.Downloading) messageItems()

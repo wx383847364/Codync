@@ -431,12 +431,19 @@ impl Actor {
             pending.turn,
             &pending.active.guidance,
         ) {
-            Ok(()) => {
+            Ok(waiting) => {
                 let pending = self.pending_completion.take().expect("completion retained until commit");
                 self.hub.delivery_storage_error(&self.cfg.id, None);
                 // 故障恢复发生在 turn 结束之后，单独刷新来源群，清除曾投影的错误状态。
                 self.hub.emit_bot(&pending.active.delivery.room_id);
-                let _ = pending.active.reply.send(true);
+                if let Some(waiting) = waiting {
+                    // 交出同批等待位，后台提交后按原群顺序继续调度。
+                    tokio::spawn(async move {
+                        let _ = pending.active.reply.send(waiting.await.is_ok());
+                    });
+                } else {
+                    let _ = pending.active.reply.send(true);
+                }
                 crate::chat::group::wake(&self.hub, Some(&self.cfg.id));
             }
             Err(error) => {

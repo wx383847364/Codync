@@ -96,7 +96,7 @@ import kotlinx.serialization.json.*
                     SecondaryButton("重新尝试", action = { store.command("retryDelivery", body("deliveryId" to row.deliveryId)) })
                 }
                 }
-                DeliveryActivity(row, entry.botId, store, openEntry?.takeIf {
+                DeliveryActivity(row, entry.botId, state, store, openEntry?.takeIf {
                     state.entries.any { it.id == row.resultId }
                 })
             }
@@ -115,9 +115,11 @@ import kotlinx.serialization.json.*
 }
 
 /** 终态保留步骤时间，结果从同群历史读取。 */
-@Composable private fun DeliveryActivity(row: DeliveryRow, roomId: String, store: AppStore, openEntry: ((String) -> Unit)?) {
+/** 未加载的群结果可同时打开摘要及来源附件。 */
+@Composable private fun DeliveryActivity(row: DeliveryRow, roomId: String, state: AppState, store: AppStore, openEntry: ((String) -> Unit)?) {
     val scope = rememberCoroutineScope()
     var result by remember(row.deliveryId) { mutableStateOf<Entry?>(null) }
+    var evidence by remember(row.deliveryId) { mutableStateOf<Entry?>(null) }
     var error by remember(row.deliveryId) { mutableStateOf<String?>(null) }
     var loading by remember(row.deliveryId) { mutableStateOf(false) }
 
@@ -148,6 +150,7 @@ import kotlinx.serialization.json.*
                 error = null
                 try {
                     val reply = store.hostCall("groupDeliveryResult", body("roomId" to roomId, "resultId" to id)).jsonObject
+                    evidence = reply["evidence"]?.takeUnless { it is JsonNull }?.let { WireJson.decodeFromJsonElement<Entry>(it) }
                     result = reply["entry"]?.let { WireJson.decodeFromJsonElement<Entry>(it) }
                 } catch (failure: CancellationException) {
                     throw failure
@@ -163,7 +166,17 @@ import kotlinx.serialization.json.*
     CodyncSheet(result != null, { result = null }) {
         Column {
             ModalHeader("View result")
-            CardForm { Text(result?.text.orEmpty()) }
+            CardForm {
+                Text(result?.text.orEmpty())
+                evidence?.let { entry ->
+                    val saveFile = rememberSharedFileSavePicker(store)
+                    for (file in entry.files) {
+                        // 复用群文件组件，冷路径直接使用 Host 返回的附件消息。
+                        FileDownloadCard(entry, file, state, store, reactions = null,
+                            saveAs = { saveFile(entry, file) }) { emptyList() }
+                    }
+                }
+            }
         }
     }
 }

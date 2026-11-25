@@ -139,6 +139,18 @@ exits, unsaved results may be lost; Codync reports uncertainty and does not reru
 
 Expand a **Group dispatch** notice in the chat to see when each member started, its reported steps, and its result. Select a member’s context reading to see their latest assignment in that group. The terminal expands a selected notice with **o** and opens member details from **W**. Activity shows tool categories and their states when the agent supplies them. The group result is the member’s original reply.
 
+## Run a registered local task
+
+In an ordinary group or stage, ask a member to run a check registered on its Host.
+The original assignment card shows that the task is queued or running, then its outcome.
+Open **View result** on the card to read the summary and download evidence. The files are also available in the group. The bot can finish its turn while the check runs.
+
+On the Host computer, register checks in `local-tasks.json` in the Codync data folder.
+Each task ID maps to an object with `title`, an absolute `program`, optional `args`,
+and `timeoutSeconds`. The program writes a JSON result to the path in
+`CODYNC_TASK_RESULT`, with a `status` of `passed`, `failed`, `blocked`, or
+`needs_review`, a `summary`, and optional `evidence` paths relative to its run folder.
+
 ## Starting a new session
 
 `/new` waits for the current task and result save before switching; `/new-now` stops and

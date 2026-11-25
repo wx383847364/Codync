@@ -29,7 +29,7 @@ export function downloadDetail(state: DownloadState | undefined, file: SharedFil
 }
 
 export function FileDownloadCard({ entry, file, messageItems, reactions }: {
-  entry: Entry; file: SharedFile; messageItems: () => MenuItem[]; reactions: ReactionPick
+  entry: Entry; file: SharedFile; messageItems: () => MenuItem[]; reactions?: ReactionPick
 }) {
   const store = useStore()
   const state = store.fileDownloads.states.get(file.id)

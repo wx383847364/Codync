@@ -310,6 +310,17 @@ def prompt(request):
                 # 从 ACP 实际收到的路径读快照，避免只在 Host 测试代码里验证文件存在。
                 handoff = re.search(r"Read the Markdown at (.+?) \(SHA-256", text)
                 assert handoff and pathlib.Path(handoff.group(1)).read_text() == script["readStageHandoff"], text
+            if "localTask" in script:
+                # 使用真实 MCP，故意试一次旧派工身份，再用当前 ID 重传同一请求。
+                match = re.search(r"Protected task material. Context delivery ID: ([^.]+)\.", text)
+                assert match, text
+                args = {"taskId": script["localTask"], "contextDeliveryId": "stale-delivery"}
+                rejected = mcp_call("chat", "start_local_task", args)
+                assert rejected.get("isError"), rejected
+                args["contextDeliveryId"] = match[1]
+                first = mcp_call("chat", "start_local_task", args)
+                again = mcp_call("chat", "start_local_task", args)
+                assert not first.get("isError") and again == first, (first, again)
             if "publishStageEvidence" in script:
                 # 从实际执行目录发布证据，下一阶段必须读取自己的固定副本。
                 response = mcp_call("chat", "send_file", {"path": script["publishStageEvidence"]})

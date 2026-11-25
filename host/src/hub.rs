@@ -132,12 +132,14 @@ pub struct Hub {
     pub model_lists: crate::agent::auth::InFlight,
     /// The programs bots keep running, and what they left running through their own shells.
     pub dev_servers: crate::dev_servers::DevServers,
+    pub(crate) local_tasks: crate::local_tasks::LocalTasks,
 }
 
 impl Hub {
     pub fn busy(&self) -> bool {
         self.runtime.locked().values().any(|r| matches!(r.status, BotStatus::Working | BotStatus::NeedsInput))
             || self.terms.busy()
+            || self.local_tasks.busy()
     }
 
     pub fn new(store: Store, host_id: String, identity: Identity, token: String, port: u16) -> Arc<Self> {
@@ -175,6 +177,7 @@ impl Hub {
             terms: Arc::default(),
             model_lists: crate::agent::auth::InFlight::default(),
             dev_servers: crate::dev_servers::DevServers::default(),
+            local_tasks: crate::local_tasks::LocalTasks::default(),
         })
     }
 
@@ -211,6 +214,11 @@ impl Hub {
 
     /// Stops every bot actor (and so every agent process), waiting briefly for them to exit.
     pub async fn shutdown(&self) {
+        {
+            let _guard = self.emit_lock.locked();
+            self.local_tasks.stop_admission();
+        }
+        self.local_tasks.shutdown().await;
         self.routines.stop().await;
         let handles: Vec<BotHandle> = self.bots.locked().drain().map(|(_, h)| h).collect();
         let tasks: Vec<_> = handles
@@ -366,7 +374,7 @@ impl Hub {
 
     pub(crate) fn update_keep_awake(&self) {
         let busy = self.runtime.locked().values().any(|r| r.status == BotStatus::Working);
-        self.keep_awake.locked().set(busy || self.routines.keeps_awake());
+        self.keep_awake.locked().set(busy || self.routines.keeps_awake() || self.local_tasks.busy());
     }
 
     // MARK: entries

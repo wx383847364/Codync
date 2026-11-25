@@ -202,6 +202,32 @@ new room so they can be opened after the old files or chat are removed. The new 
 start without the previous transcript. The
 **Restore first draft** action is available before a stage has any messages.
 
+### Registered local tasks
+
+Ordinary groups and stages share the local task tools on the Host's `chat` MCP bridge.
+`list_local_tasks` lists the IDs and titles in `local-tasks.json` in the Host data folder.
+`start_local_task {taskId, contextDeliveryId}` admits one registered task per active
+group assignment. The existing bot approval setting applies. The actor can finish its
+turn immediately; the original dispatch stays active until the Host saves the result.
+The card's **View result** action opens the summary. Evidence is downloadable from the result or its group attachments. Retransmitting within the same execution reuses the
+reservation. A stale execution cannot start work or publish files.
+
+The local registry maps IDs to `{title, program, args?, timeoutSeconds}`. Use a trusted
+absolute executable and fixed argument array, with a timeout of 1–3,600 seconds.
+The executable runs in a fresh work directory. It writes
+`{status, summary, evidence?: [relativePath, …]}` to the file named by
+`CODYNC_TASK_RESULT`. The statuses are `passed`, `failed`, `blocked`, and
+`needs_review`. Standard output and error stay in local log files. Evidence must
+resolve within that run folder and uses the same immutable snapshots as shared files.
+A successful exit is required for a passed or review result. A result that still
+needs review can be opened without waking a stage's originating bot.
+
+Jobs run one at a time on the Host. Pause or Stop ends the owned run; a later
+Continue starts a fresh execution when the bot requests it again. On Host restart,
+an assignment that was executing is marked interrupted using delivery recovery.
+Only explicit stage return routing can wake a requesting bot. Report text cannot
+trigger mentions or further work.
+
 **Stage usage** reads local execution observations. A delivery can have several
 attempts after retry or fallback. An attempt that fails during setup can have a
 process start and zero observed prompts. One ACP prompt may result in several

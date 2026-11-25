@@ -120,11 +120,14 @@ private struct DeliveryActivityView: View {
     let roomId: String
     @Environment(BotStore.self) private var model
     @Environment(\.jumpToChatEntry) private var jumpToChatEntry
-    @State private var result: Entry?
+    @State private var result: Result?
     @State private var loading = false
     @State private var error: String?
 
-    private struct Result: Decodable, Sendable { let entry: Entry }
+    private struct Result: Decodable, Sendable {
+        let entry: Entry
+        let evidence: Entry?
+    }
 
     /// 终态下保留工具开始记录，只有执行中才标记正在运行。
     var body: some View {
@@ -154,7 +157,15 @@ private struct DeliveryActivityView: View {
         .codyncSheet(isPresented: Binding(get: { result != nil }, set: { if !$0 { result = nil } })) {
             VStack(spacing: 0) {
                 ModalHeader("View result")
-                CardForm { Text(result?.data.text ?? "") }
+                CardForm {
+                    Text(result?.entry.data.text ?? "")
+                    if let evidence = result?.evidence {
+                        ForEach(evidence.data.files ?? []) { file in
+                            // 证据下载沿用原群的附件消息权限。
+                            FileDownloadCard(entry: evidence, file: file) { [] }
+                        }
+                    }
+                }
             }
         }
     }
@@ -171,7 +182,7 @@ private struct DeliveryActivityView: View {
         defer { loading = false }
         do {
             let reply: Result = try await model.ready().call("groupDeliveryResult", ["roomId": roomId, "resultId": id])
-            result = reply.entry
+            result = reply
         } catch {
             self.error = error.localizedDescription
         }
