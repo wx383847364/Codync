@@ -152,6 +152,9 @@ const bridge: CodyncBridge = {
     readClipboardFiles: () => ipcRenderer.invoke('app:clipboardFiles'),
     setTraySummary: (summary: TraySummary) => ipcRenderer.send('app:traySummary', summary),
     showWindow: () => ipcRenderer.send('app:showWindow'),
+    manualWindowDrag: ipcRenderer.sendSync('app:manualWindowDrag') === true,
+    // 只传下按下位置相对于窗口的偏移，窗口目标位置由主进程计算。
+    moveChatWindow: (offsetX, offsetY) => ipcRenderer.send('app:moveChatWindow', offsetX, offsetY),
     onCommand: (cb: (c: WindowCommand) => void) => listen('app:command', cb),
     resetAllData: () => ipcRenderer.invoke('app:resetAllData'),
     setLaunchAtLogin: (on) => ipcRenderer.invoke('app:setLaunchAtLogin', on),

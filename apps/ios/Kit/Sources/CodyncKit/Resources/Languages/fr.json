@@ -1,4 +1,7 @@
 {
+  "Host execution": "Exécution par l’hôte",
+  "No registered tasks": "Aucune tâche enregistrée",
+  "Run task": "Exécuter une tâche",
   "Repair and request access again": "Réparer et redemander l’accès",
   "Path copied for {app}. Click +, then press ⌘⇧G and paste the path.": "Chemin de {app} copié. Cliquez sur +, appuyez sur ⌘⇧G, puis collez le chemin.",
   "If macOS names the screen helper, select it instead.": "Si macOS indique l’assistant de capture, sélectionnez-le.",

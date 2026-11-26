@@ -57,6 +57,7 @@ const LOCAL_ONLY: &[&str] = &[
     "connectorTarget",
     "connectorRuntime",
     "connectorCall",
+    "toolReceipt",
     // It can point a connector that holds credentials at any program; no app edits connectors yet.
     "updateConnector",
     "claimSign",
@@ -75,6 +76,8 @@ const LOCAL_ONLY: &[&str] = &[
     "setCloud",
     "setCloudUrl",
     "setApproval",
+    "groupLocalTasks",
+    "runGroupLocalTask",
     // Letting the cloud assistant in is decided at the computer, never through the cloud.
     "setAssistants",
     // Who is in the user's network of computers is decided at a computer.

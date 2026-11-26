@@ -4,9 +4,9 @@ use crate::LockExt;
 use crate::agent::process::{self, Process};
 use crate::chat::files::{self, Snapshot};
 use crate::hub::Hub;
-use crate::store::deliveries::{Delivery, Guidance, Status};
+use crate::store::deliveries::{Delivery, DirectTask, Guidance, Status};
 use anyhow::{Context, Result, ensure};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write as _;
@@ -18,14 +18,17 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 use std::time::Duration;
-use tokio::sync::{Semaphore, oneshot};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore, oneshot};
+
+mod admission;
+pub(crate) use admission::{catalog, dispatch_direct, start_direct, try_alias};
 
 pub(crate) const START: &str = "start_local_task";
 pub(crate) const LIST: &str = "list_local_tasks";
 const POLL: Duration = Duration::from_millis(250);
 const QUEUE_TIMEOUT: Duration = Duration::from_mins(10);
 
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Task {
     title: String,
@@ -33,12 +36,33 @@ struct Task {
     #[serde(default)]
     args: Vec<String>,
     timeout_seconds: u64,
+    #[serde(default)]
+    aliases: Vec<String>,
+    #[serde(default)]
+    project_root: Option<PathBuf>,
+    #[serde(default)]
+    group_ids: Vec<String>,
 }
 
 struct Job {
     id: String,
-    task: Task,
+    execution: ExecutionTask,
     delivery: Delivery,
+}
+
+enum ExecutionTask {
+    Handoff(Task),
+    Direct(DirectTask),
+}
+
+impl Job {
+    /// 派工标题在登记被撤销后仍可显示在原卡。
+    fn title(&self) -> &str {
+        match &self.execution {
+            ExecutionTask::Handoff(task) => &task.title,
+            ExecutionTask::Direct(task) => &task.title,
+        }
+    }
 }
 
 type Execution = (String, Option<i64>);
@@ -48,7 +72,7 @@ pub(crate) struct LocalTasks {
     reserved: Mutex<HashMap<String, Job>>,
     running: Mutex<HashMap<Execution, String>>,
     stopping: AtomicBool,
-    slot: Semaphore,
+    slot: Arc<Semaphore>,
 }
 
 impl Default for LocalTasks {
@@ -58,7 +82,7 @@ impl Default for LocalTasks {
             reserved: Mutex::default(),
             running: Mutex::default(),
             stopping: AtomicBool::new(false),
-            slot: Semaphore::new(1),
+            slot: Arc::new(Semaphore::new(1)),
         }
     }
 }
@@ -127,23 +151,24 @@ async fn registered() -> Result<BTreeMap<String, Task>> {
 /// 从可信工具桥取执行身份，普通群也用派工 ID 防止旧请求落到新回合。
 pub(crate) async fn call(hub: &Hub, bot: &str, group: Option<&str>, name: &str, args: &Value) -> Result<Value> {
     ensure!(!hub.local_tasks.stopping.load(Ordering::Acquire), "the Host is stopping");
-    let (_, id) = hub.team.scoped_delivery(bot, group)?.context("local tasks require an active group assignment")?;
+    let (room_id, id) =
+        hub.team.scoped_delivery(bot, group)?.context("local tasks require an active group assignment")?;
+    let room = admission::group(hub, &room_id)?;
     let tasks = registered().await?;
+    let mut valid = BTreeMap::new();
+    for (id, task) in tasks {
+        if admission::available(hub, &room, &task)? {
+            valid.insert(id, task);
+        }
+    }
     if name == LIST {
         return Ok(
-            json!({"items":tasks.iter().map(|(id, task)|json!({"taskId":id,"title":task.title})).collect::<Vec<_>>()}),
+            json!({"items":valid.iter().map(|(id, task)|json!({"taskId":id,"title":task.title})).collect::<Vec<_>>()}),
         );
     }
     let request = serde_json::from_value::<Request>(args.clone())?;
     ensure!(request.context_delivery_id == id, "contextDeliveryId does not match the current group execution");
-    let task = tasks.get(&request.task_id).context("unknown registered local task")?;
-    ensure!(
-        task.program.is_absolute()
-            && !task.title.trim().is_empty()
-            && task.title.len() <= 160
-            && (1..=3600).contains(&task.timeout_seconds),
-        "invalid registered local task"
-    );
+    let task = valid.get(&request.task_id).context("unknown or unavailable registered local task")?;
     let cfg = hub.store.bot(bot)?.filter(|bot| !bot.deleted).context("unknown bot")?.config;
     let delivery = hub
         .store
@@ -175,7 +200,7 @@ pub(crate) async fn call(hub: &Hub, bot: &str, group: Option<&str>, name: &str, 
         if let Some(job) = reserved.get(&id) {
             ensure!(job.id == request.task_id, "a different local task is already registered for this assignment");
         } else {
-            reserved.insert(id, Job { id: request.task_id, task: task.clone(), delivery });
+            reserved.insert(id, Job { id: request.task_id, execution: ExecutionTask::Handoff(task.clone()), delivery });
         }
         Ok((accepted, Vec::new()))
     })
@@ -195,7 +220,7 @@ pub(crate) fn handoff(
         reserved.remove(id);
         return Ok(None);
     }
-    let detail = format!("{} · Queued", job.task.title);
+    let detail = format!("{} · Queued", job.title());
     let entries = hub.store.local_task_activity(id, job.delivery.started_at, &detail)?;
     if let Some(job) = reserved.remove(id)
         && !entries.is_empty()
@@ -207,7 +232,7 @@ pub(crate) fn handoff(
         tokio::spawn(async move {
             hub.update_keep_awake();
             let _active = Running { hub: &hub, delivery: &job.delivery };
-            supervise(&hub, &job, turn, guidance).await;
+            supervise(&hub, &job, turn, guidance, None).await;
             let _ = finished.send(());
         });
         return Ok(Some((waiting, entries)));
@@ -217,7 +242,7 @@ pub(crate) fn handoff(
 
 /// 旧回合退出时释放自己的执行登记，写回前核对开始时间。
 struct Running<'a> {
-    hub: &'a Hub,
+    hub: &'a Arc<Hub>,
     delivery: &'a Delivery,
 }
 
@@ -226,6 +251,7 @@ impl Drop for Running<'_> {
     fn drop(&mut self) {
         self.hub.local_tasks.running.locked().remove(&(self.delivery.id.clone(), self.delivery.started_at));
         self.hub.update_keep_awake();
+        crate::chat::group::wake(self.hub, None);
     }
 }
 
@@ -264,8 +290,14 @@ fn live(hub: &Hub, delivery: &Delivery) -> Result<bool> {
 }
 
 /// 持有执行位贯穿程序运行与清理，结果发布失败时保留工作目录供本机核对。
-async fn supervise(hub: &Arc<Hub>, job: &Job, turn: i64, guidance: Vec<(String, Guidance)>) {
-    let run = run(hub, job).await;
+async fn supervise(
+    hub: &Arc<Hub>,
+    job: &Job,
+    turn: i64,
+    guidance: Vec<(String, Guidance)>,
+    permit: Option<OwnedSemaphorePermit>,
+) {
+    let run = run(hub, job, permit).await;
     if matches!(run, Ok(None)) || !live(hub, &job.delivery).unwrap_or(true) {
         reconcile_guidance(hub, &job.delivery.room_id, &guidance);
         return;
@@ -291,7 +323,7 @@ async fn supervise(hub: &Arc<Hub>, job: &Job, turn: i64, guidance: Vec<(String, 
         Outcome::Passed | Outcome::NeedsReview => Status::Completed,
         Outcome::Failed | Outcome::Blocked => Status::Failed,
     };
-    let detail = format!("{} · {}", job.task.title, report.status.label());
+    let detail = format!("{} · {}", job.title(), report.status.label());
     let mut text = format!("{detail}\n\n{}", report.summary);
     if !files.is_empty() {
         let names = files.iter().map(|file| file.name.as_str()).collect::<Vec<_>>().join(", ");
@@ -359,28 +391,46 @@ fn reconcile_guidance(hub: &Arc<Hub>, room: &str, guidance: &[(String, Guidance)
 }
 
 /// 等待本机执行位期间也查取消；按固定任务配置启动独立进程组并等实际终码。
-async fn run(hub: &Arc<Hub>, job: &Job) -> Result<Option<(Report, Vec<Snapshot>)>> {
+async fn run(
+    hub: &Arc<Hub>,
+    job: &Job,
+    permit: Option<OwnedSemaphorePermit>,
+) -> Result<Option<(Report, Vec<Snapshot>)>> {
     let wait = tokio::time::Instant::now() + QUEUE_TIMEOUT;
-    let permit = loop {
-        if !live(hub, &job.delivery)? {
-            return Ok(None);
+    let _permit = if let Some(permit) = permit {
+        permit
+    } else {
+        loop {
+            if !live(hub, &job.delivery)? {
+                return Ok(None);
+            }
+            if let Ok(permit) = hub.local_tasks.slot.clone().try_acquire_owned() {
+                break permit;
+            }
+            if tokio::time::Instant::now() >= wait {
+                return Ok(Some((
+                    Report {
+                        status: Outcome::Blocked,
+                        summary: "The local task waited too long for the Host.".into(),
+                        evidence: vec![],
+                    },
+                    vec![],
+                )));
+            }
+            tokio::time::sleep(POLL).await;
         }
-        if let Ok(permit) = hub.local_tasks.slot.try_acquire() {
-            break permit;
-        }
-        if tokio::time::Instant::now() >= wait {
-            return Ok(Some((
-                Report {
-                    status: Outcome::Blocked,
-                    summary: "The local task waited too long for the Host.".into(),
-                    evidence: vec![],
-                },
-                vec![],
-            )));
-        }
-        tokio::time::sleep(POLL).await;
     };
-    let _permit = permit;
+    let current;
+    let task = match &job.execution {
+        ExecutionTask::Handoff(task) => task,
+        ExecutionTask::Direct(intent) => {
+            let Some(task) = admission::resolve(hub, &job.delivery.room_id, intent).await else {
+                return Ok(Some((admission::blocked_report(), vec![])));
+            };
+            current = task;
+            &current
+        }
+    };
     let group_dir = files::root(&job.delivery.room_id);
     let dir = group_dir
         .parent()
@@ -389,15 +439,19 @@ async fn run(hub: &Arc<Hub>, job: &Job) -> Result<Option<(Report, Vec<Snapshot>)
         .join(&job.delivery.id)
         .join(job.delivery.started_at.context("missing task start")?.to_string());
 
-    let detail = format!("{} · Running", job.task.title);
-    let mut command = tokio::process::Command::new(&job.task.program);
+    let detail = format!("{} · Running", job.title());
+    let mut command = tokio::process::Command::new(&task.program);
     let result_path = dir.join("result.json");
-    command.args(&job.task.args).current_dir(&dir).env("CODYNC_TASK_RESULT", &result_path).stdin(Stdio::null());
+    command.args(&task.args).current_dir(&dir).env("CODYNC_TASK_RESULT", &result_path).stdin(Stdio::null());
     process::own_tree(&mut command);
     // 在同一个发布锁内复核来源后启动，停止请求不会插入校验和 spawn 之间。
     let child = hub.group_handoff_update(|| {
         if !live(hub, &job.delivery)? {
             return Ok((None, vec![]));
+        }
+        let room = admission::group(hub, &job.delivery.room_id)?;
+        if !admission::available(hub, &room, task)? {
+            return Ok((Some(Ok(None)), vec![]));
         }
         let entries = hub.store.local_task_activity(&job.delivery.id, job.delivery.started_at, &detail)?;
         let child = (!entries.is_empty()).then(|| {
@@ -405,12 +459,13 @@ async fn run(hub: &Arc<Hub>, job: &Job) -> Result<Option<(Report, Vec<Snapshot>)
             std::fs::create_dir(&dir).context("creating unique task run folder")?;
             command.stdout(std::fs::File::create(dir.join("stdout.log"))?);
             command.stderr(std::fs::File::create(dir.join("stderr.log"))?);
-            Process::new(command.spawn()?)
+            Process::new(command.spawn()?).map(Some)
         });
         Ok((child, entries))
     })?;
-    let Some(mut child) = child.transpose()? else { return Ok(None) };
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(job.task.timeout_seconds);
+    let Some(child) = child.transpose()? else { return Ok(None) };
+    let Some(mut child) = child else { return Ok(Some((admission::blocked_report(), vec![]))) };
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(task.timeout_seconds);
     let exit = loop {
         if !live(hub, &job.delivery)? {
             child.kill().await;

@@ -1,6 +1,8 @@
 //! 结果、终态、派生投递与聚合卡片的同事务保存。
 
-use super::{COLS, Delivery, REPLY_MENTION, REPLY_NOTICE, Status, TOOL_RETURN, eligible, get, insert, row, wire};
+use super::{
+    COLS, Delivery, REPLY_MENTION, REPLY_NOTICE, Status, TOOL_RETURN, delivery_eligible, get, insert, row, wire,
+};
 use crate::{
     LockExt,
     store::{BotConfig, Entry, EntryKind, Store, now_ms},
@@ -79,7 +81,7 @@ pub(super) fn card(c: &Connection, d: &Delivery) -> Result<Entry> {
         let detail = delivery.last_error.as_deref().unwrap_or_default();
         lines.push(format!(
             "{}: {} {}",
-            name.as_deref().unwrap_or(&delivery.target_bot_id),
+            if delivery.is_host_task() { "Host" } else { name.as_deref().unwrap_or(&delivery.target_bot_id) },
             wire(&delivery.status),
             detail
         ));
@@ -93,6 +95,10 @@ pub(super) fn card(c: &Connection, d: &Delivery) -> Result<Entry> {
             None
         };
         let mut item = json!({"startedAt":delivery.started_at,"resultId":result,"deliveryId":delivery.id,"targetBotId":delivery.target_bot_id,"status":delivery.status,"detail":detail,"canGuide": delivery.status == Status::Queued && direct_user_mention(delivery, &source_data),"groupHandoff":super::handoff::projection(c,delivery)?});
+        if delivery.is_host_task() {
+            item["executor"] = json!("host");
+            item["groupHandoff"] = Value::Null;
+        }
         if let Some(old) = old {
             item["resultDeliveryId"] = old["resultDeliveryId"].clone();
             item["activity"] = old["activity"].clone();
@@ -230,7 +236,7 @@ impl Store {
         let Some(d) = get(&tx, id)?.filter(|d| d.status == Status::Started && d.started_at == started_at) else {
             return Ok(vec![]);
         };
-        if !eligible(&tx, &d.room_id, &d.target_bot_id, d.source_bot_id.as_deref())? {
+        if !delivery_eligible(&tx, &d)? {
             return Ok(vec![]);
         }
         tx.execute("UPDATE deliveries SET last_error=?2 WHERE id=?1", params![id, detail])?;
@@ -275,7 +281,7 @@ impl Store {
         if let Some(local) = local
             && (d.started_at != local.started_at
                 || (!d.held_after_pause() && d.status != Status::Started)
-                || !eligible(&tx, &d.room_id, &d.target_bot_id, d.source_bot_id.as_deref())?)
+                || !delivery_eligible(&tx, &d)?)
         {
             return Ok(vec![]);
         }
@@ -324,6 +330,9 @@ impl Store {
                 // 机器摘要可查且可定位，附件沿用现有群文件消息及下载鉴权。
                 data["final"] = true.into();
                 data["localTask"] = true.into();
+                if d.is_host_task() {
+                    data["executor"] = json!("host");
+                }
                 let evidence_id = format!("delivery-evidence-{id}");
                 if !local.files.is_empty() {
                     data["localTaskEvidenceId"] = json!(evidence_id);
@@ -337,14 +346,15 @@ impl Store {
                         EntryKind::Agent,
                         turn,
                         &json!({"text":"Local task evidence","author":d.target_bot_id,"deliveryId":id,
-                            "final":true,"files":local.files}),
+                            "final":true,"files":local.files,"executor":data["executor"]}),
                     )?);
                 }
             } else {
                 entries.push(entry(&tx, &result_id, &d.room_id, EntryKind::Agent, turn, &data)?);
             }
         }
-        if changed == 1 && status == Status::Completed && local.is_none_or(|local| local.follow_up) {
+        if changed == 1 && status == Status::Completed && !d.is_host_task() && local.is_none_or(|local| local.follow_up)
+        {
             // 只从本次投递实际发布的文件回传，文件名中的 @ 不是成员提及。
             let source = match text {
                 Some(_) => Some(result_id),

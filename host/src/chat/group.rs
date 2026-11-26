@@ -217,7 +217,7 @@ async fn run(hub: &Arc<Hub>, room: &str, mut updates: watch::Receiver<()>) -> Re
 
 /// 找到最早可执行的投递并通知目标 actor；在途成员与同批后继继续等待。
 fn dispatch_next(
-    hub: &Hub,
+    hub: &Arc<Hub>,
     room: &str,
     active: &HashMap<String, Option<String>>,
     deferred: &mut std::collections::HashSet<String>,
@@ -231,10 +231,20 @@ fn dispatch_next(
             {
                 return false;
             }
+            if delivery.is_host_task() {
+                return true;
+            }
             let runtime = hub.runtime(&delivery.target_bot_id);
             !matches!(runtime.status, BotStatus::Working | BotStatus::NeedsInput) && runtime.storage_error.is_none()
         });
         let Some(delivery) = next else { return Ok(None) };
+        if delivery.is_host_task() {
+            if let Some(answer) = crate::local_tasks::dispatch_direct(hub, &delivery)? {
+                return Ok(Some((delivery, answer)));
+            }
+            deferred.insert(delivery.id);
+            continue;
+        }
         // 执行前重读群成员，清理已离开成员的旧投递。
         let valid = hub
             .store

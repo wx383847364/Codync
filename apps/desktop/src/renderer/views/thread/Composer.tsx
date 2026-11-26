@@ -67,6 +67,10 @@ function DestinationComposer({ botId, reply, about, cancelReply, onCall, onInter
   /** 提交一次原生编辑范围，正文和绑定同时更新。 */
   const setDraft = (text: string, replacement?: { start: number; end: number }) => drafts.set(draftKey, text, replacement)
   const [submitting, setSubmitting] = useState(false)
+  const [hostMenu, setHostMenu] = useState(false)
+  const [hostTasks, setHostTasks] = useState<import('@shared/models').GroupLocalTask[] | null>(null)
+  const [hostError, setHostError] = useState('')
+  const hostSubmission = useRef<{ key: string; nonce: string } | null>(null)
   const [files, setFiles] = useState<OutgoingFile[]>([])
   const [voiceSettings, setVoiceSettings] = useState(false)
   const dictation = useDictation((change) => drafts.set(draftKey, change(drafts.get(draftKey))), () => setVoiceSettings(true))
@@ -168,7 +172,13 @@ function DestinationComposer({ botId, reply, about, cancelReply, onCall, onInter
   const existing = slash === null ? [] : slashCommands(bot, slash, plugins.installedSkills, members)
   const results = fileQuery !== undefined && search?.query === fileQuery ? search : undefined
   const searching = fileQuery !== undefined && !results
-  const commands = [...existing, ...(results?.items.map(workspaceFileCommand) ?? [])]
+  const canRunHost = !!(bot && isGroup(bot) && store.hello?.groupLocalTasks && !store.isOffline
+    && !bot.stage?.closedAt && !bot.stage?.archivedAt && !reply && !about && !files.length)
+  const inHostMenu = hostMenu && slash === 'run' && canRunHost
+  const hostCommand: SlashCommand = { name: 'run', icon: 'play.fill', title: tr('Run task'), detail: tr('Host execution'), warning: false, action: { kind: 'host-menu' } }
+  const commands: SlashCommand[] = inHostMenu
+    ? (hostTasks ?? []).map(task => ({ name: task.taskId, title: task.title, icon: 'play.fill', detail: tr('Host execution'), warning: false, action: { kind: 'host-task', task } }))
+    : [...(canRunHost && slash !== null && ('run'.includes(slash) || hostCommand.title.includes(slash)) ? [hostCommand] : []), ...existing, ...(results?.items.map(workspaceFileCommand) ?? [])]
   const searchStatus = searching ? tr('Searching workspace files…') : results?.failed ? tr('Could not search workspace files.') :
     results && !results.items.length && !existing.length ? tr('No matching workspace files') : ''
 
@@ -176,6 +186,30 @@ function DestinationComposer({ botId, reply, about, cancelReply, onCall, onInter
   const run = (command: SlashCommand) => {
     if (!bot) return
     switch (command.action.kind) {
+      case 'host-menu':
+        setHostMenu(true)
+        setHostTasks(null)
+        setHostError('')
+        setDraft('/run')
+        // 目录响应只改变当前组件的候选，用户离开菜单后不会执行请求。
+        void store.groupLocalTasks(botId).then(setHostTasks).catch(error => setHostError(String(error.message ?? error)))
+        break
+      case 'host-task': {
+        if (submitting || !canRunHost) return
+        const task = command.action.task
+        const key = `${task.taskId}:${task.version}`
+        const submission = hostSubmission.current?.key === key ? hostSubmission.current : { key, nonce: crypto.randomUUID() }
+        hostSubmission.current = submission
+        setSubmitting(true)
+        setHostError('')
+        // 失败保留草稿与提交编号，网络重试可找回已创建的同一张卡。
+        void store.runGroupLocalTask(botId, task, submission.nonce).then(() => {
+          hostSubmission.current = null
+          setHostMenu(false)
+          if (drafts.get(draftKey) === '/run') setDraft('')
+        }).catch(error => setHostError(String(error.message ?? error))).finally(() => setSubmitting(false))
+        break
+      }
       case 'file': {
         if (fileRange) {
           const { candidate } = command.action
@@ -205,9 +239,9 @@ function DestinationComposer({ botId, reply, about, cancelReply, onCall, onInter
   }
   const commandMenu = useComposerMenu(draft, commands, run, returnRuns, {
     caret: fileQuery === undefined ? undefined : fileRange?.end,
-    status: searchStatus,
+    status: inHostMenu ? hostError || (hostTasks === null ? tr('Loading…') : hostTasks.length === 0 ? tr('No registered tasks') : '') : searchStatus,
     // 等待文件名匹配时保护回车，正文中的多段路径仍可直接发送。
-    loading: searching && (fileRange?.start === 0 || !fileQuery?.includes('/')),
+    loading: inHostMenu ? hostTasks === null && !hostError : searching && (fileRange?.start === 0 || !fileQuery?.includes('/')),
   })
 
   /** 接收所选附件，不按总大小拒绝；发送仍由既有分片协议完成。 */
@@ -222,8 +256,8 @@ function DestinationComposer({ botId, reply, about, cancelReply, onCall, onInter
 
   // host 拒绝提及时保留草稿，确认受理后才清空当前文本。
   const submit = async () => {
-    const command = files.length ? null : builtInCommand(bot, draft, members)
-    if (!command && !canSend) return
+    const command = files.length ? null : (canRunHost && draft.trim() === '/run' ? hostCommand : builtInCommand(bot, draft, members))
+    if (inHostMenu || (!command && !canSend)) return
     // Words still on their way would land in the emptied box (and the shortcut's tap would send them again).
     dictation.cancel()
     if (command) return run(command)

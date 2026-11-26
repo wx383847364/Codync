@@ -177,6 +177,6 @@ Group delivery events: `group_delivery_accepted` (`kind`, `source`, target count
 `outcome`, and a coarse `category` on errors), `group_delivery_storage` (`outcome`,
 `category`), and `group_mention_rejected` (`category`).. Task group creation and previous-stage reference reads report only kind, outcome and a coarse failure category. The existing
 `message_steered` event reports the adapter, outcome and `source` (`private` or `group`).
-Registered local tasks report `group_local_task_finished` (`outcome` and coarse `category`).
+Registered local tasks report `group_local_task_finished` (`outcome` and coarse `category`). Direct runs record the existing `group_delivery_accepted` event with `source: user` and `kind: host_task`.
 These never include message
 text, prompts, names, bot/delivery IDs, keys or file content.

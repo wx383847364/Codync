@@ -112,6 +112,9 @@ const bridge: CodyncBridge = {
     readClipboardFiles: async () => [],
     setTraySummary() {},
     showWindow() {},
+    manualWindowDrag: false,
+    // 网页演示没有本机聊天窗口。
+    moveChatWindow() {},
     onCommand: none,
     resetAllData: async () => {},
     setLaunchAtLogin: async () => false,

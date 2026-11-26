@@ -256,7 +256,10 @@ impl App {
         if let Some(rows) = rows {
             let retry = rows
                 .iter()
-                .filter(|row| matches!(row["status"].as_str(), Some("failed" | "interrupted" | "noReply")))
+                .filter(|row| {
+                    (row["executor"] != "host" || self.group_local_tasks)
+                        && matches!(row["status"].as_str(), Some("failed" | "interrupted" | "noReply"))
+                })
                 .collect::<Vec<_>>();
             if !retry.is_empty() {
                 for row in retry {

@@ -165,6 +165,14 @@ impl App {
 
     /// 处理 Host 回复，丢弃过期搜索并按响应打开新群。
     fn on_reply(&mut self, after: After, r: Result<Value, String>) {
+        if let After::HostTaskCatalog(id) = after {
+            self.host_task_catalog_answered(id, r);
+            return;
+        }
+        if let After::HostTaskRun(id) = after {
+            self.host_task_run_answered(id, r);
+            return;
+        }
         if let After::WorkspaceFiles(id) = after {
             self.workspace_files_answered(id, r);
             return;
@@ -250,6 +258,8 @@ impl App {
         match after {
             After::Nothing
             | After::Tracked
+            | After::HostTaskCatalog(_)
+            | After::HostTaskRun(_)
             | After::WorkspaceFiles(_)
             | After::Answered(_)
             | After::Sheet(_)
@@ -268,6 +278,8 @@ impl App {
             }
             After::Hello => {
                 self.workspace_file_search = v["workspaceFileSearch"] == true;
+                self.group_local_tasks = v["groupLocalTasks"] == true;
+                self.host_task_menu = None;
                 self.workspace_search = None;
                 self.slash_typed();
                 self.custom_icons = v["icons"].is_object();

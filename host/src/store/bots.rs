@@ -157,7 +157,7 @@ impl Store {
         if cfg.is_group() {
             for member in before.members.iter().filter(|member| !cfg.members.contains(member)) {
                 let (rows, entries) =
-                    super::deliveries::cancel_in_transaction(&tx, &cfg.id, Some(member), "成员已移除")?;
+                    super::deliveries::cancel_in_transaction(&tx, &cfg.id, Some(member), "成员已移除", true)?;
                 cancelled.extend(rows);
                 cards.extend(entries);
             }

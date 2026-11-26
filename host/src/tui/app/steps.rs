@@ -59,6 +59,7 @@ impl App {
     pub(in crate::tui) fn can_toggle_delivery(&self, bot: &Bot, task: &DeliveryControl) -> bool {
         self.online
             && self.mismatch.is_none()
+            && (task.executor.as_deref() != Some("host") || self.group_local_tasks)
             && (task.status == "started"
                 || (task.status == "paused" && !bot.stage.as_ref().is_some_and(crate::store::StageGroup::read_only)))
     }

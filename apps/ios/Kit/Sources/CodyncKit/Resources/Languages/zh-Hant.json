@@ -1,4 +1,6 @@
 {
+  "Host execution": "Host 執行",
+  "No registered tasks": "目前沒有已登記任務",
   "Repair and request access again": "修復並重新授權",
   "Path copied for {app}. Click +, then press ⌘⇧G and paste the path.": "已複製 {app} 的路徑。點選「＋」，按 ⌘⇧G，再貼上路徑。",
   "If macOS names the screen helper, select it instead.": "如果 macOS 提示要授權的是螢幕助手，請選擇下面的 App。",
@@ -7,6 +9,7 @@
   "Return here after granting access; if asked, quit and reopen Codync.": "授權後回到這裡。若系統提示，請結束並重新開啟 Codync。",
   "Open original assignment": "開啟原派工",
   "Open original message": "開啟原訊息",
+  "Run task": "執行任務",
   "Step interrupted": "步驟已中斷",
   "Disk usage": "磁碟占用",
   "Managed workspace": "託管工作區",

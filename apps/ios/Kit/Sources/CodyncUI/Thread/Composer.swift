@@ -44,7 +44,14 @@ struct Composer: View {
 
     private var bot: Bot? { model.bots[botId] }
     private var draftKey: String { artifact.map(BotStore.artifactDraftKey) ?? botId }
-    private var working: Bool { bot?.isWorking(in: botId) == true }
+    /// 群只有 Host 工作时，配对设备可查看卡片，不能从输入框停止程序。
+    private var working: Bool {
+        guard let bot else { return false }
+        if bot.isGroup, bot.deliveryControls.contains(where: { $0.executor == "host" }) {
+            return bot.members.contains { model.bots[$0]?.isWorking(in: botId) == true }
+        }
+        return bot.isWorking(in: botId)
+    }
 
     private var isEmpty: Bool { draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && files.isEmpty }
 
@@ -261,7 +268,7 @@ struct Composer: View {
     /// 空草稿可停止工作，群剩下暂停任务时仍保留群级停止。
     private var trailing: Trailing {
         if onInterrupt != nil, draft.isEmpty, files.isEmpty { return .interrupt }
-        if working || (!model.isOffline && !(bot?.deliveryControls.isEmpty ?? true)), draft.isEmpty, files.isEmpty { return .stop }
+        if working || (!model.isOffline && (bot?.deliveryControls.contains { $0.executor != "host" } ?? false)), draft.isEmpty, files.isEmpty { return .stop }
         if onCall != nil, draft.isEmpty, files.isEmpty { return .call }
         return .send
     }

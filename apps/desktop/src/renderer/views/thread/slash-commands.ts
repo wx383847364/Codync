@@ -4,9 +4,9 @@
 // for all of them, and every skill one of them has. docs/features/marketplace.md, "Commands".
 import { fastModeDetail, fastModeShown, fastModeState, groupFastMode, type FastModeState } from '../../../shared/fast-mode.ts'
 import type { WorkspaceFileCandidate } from '../../../shared/mentions.ts'
-import type { Bot } from '../../../shared/models.ts'
+import type { Bot, GroupLocalTask } from '../../../shared/models.ts'
 
-export type SlashAction = { kind: 'fast' } | { kind: 'session'; mode: string } | { kind: 'skill'; id: string } | { kind: 'file'; candidate: WorkspaceFileCandidate }
+export type SlashAction = { kind: 'fast' } | { kind: 'session'; mode: string } | { kind: 'skill'; id: string } | { kind: 'file'; candidate: WorkspaceFileCandidate } | { kind: 'host-menu' } | { kind: 'host-task'; task: GroupLocalTask }
 
 export interface SlashCommand {
   /** What follows the `/`. */

@@ -19,6 +19,7 @@ import { ExtensionsMovedTip } from './ExtensionsMovedTip'
 import { RailAccountNotice, SidebarFooter } from './SidebarFooter'
 import { UpdateBadge } from './UpdateButton'
 import { ComputerFilterHeader, computerSelection } from './ComputerFilterHeader'
+import { ChatWindowFrame } from './ChatWindowFrame'
 import { ThreadView } from './thread/ThreadView'
 import { queueVoiceKey } from './thread/voice-shortcut-keys'
 import { NewBotView, NewGroupView } from './bots/NewBotView'
@@ -407,16 +408,16 @@ function ChatSplitView() {
 
   const width = compact ? 76 : sidebarWidth
   return (
-    <div className={`split ${showAccount || context ? 'covered' : ''}`}>
+    <ChatWindowFrame covered={showAccount || context !== null}>
       <aside className={`sidebar ${compact ? 'compact' : ''} ${resizing ? 'resizing' : ''}`} style={{ width }}>
-        <div className="sidebar-header drag" inert={compact}>
+        <div className="sidebar-header drag">
           <Spacer />
-          <HStack gap={6} className="no-drag">
+          <HStack gap={6} className="no-drag" inert={compact}>
             <ComputerFilterHeader hidden={hidden} setHidden={setHidden} manage={() => setSettings('computers')} compact />
             <IconButton title="Search" icon="magnifyingglass" size={32} className="sidebar-header-action" onClick={() => setSearching(true)} />
             <IconButton title="New" icon="plus" size={32} className="sidebar-header-action" buttonRef={newButton} menuOpen={newMenu} onClick={() => setNewMenu((o) => !o)} disabled={!onlineStores.length} />
           </HStack>
-          <AnchoredMenu open={newMenu} onClose={() => setNewMenu(false)} anchor={newButton} items={newItems} />
+          <AnchoredMenu open={!compact && newMenu} onClose={() => setNewMenu(false)} anchor={newButton} items={newItems} />
         </div>
         {compact ? (
           <div className="rail-header drag">
@@ -539,6 +540,6 @@ function ChatSplitView() {
       </div>}
       <Dialog open={errorMessage !== null} title={tr('Something went wrong')} message={errorMessage} actions={[]} cancel="OK" onClose={() => app.clearErrors()} />
       <SignInCodeDialog />
-    </div>
+    </ChatWindowFrame>
   )
 }

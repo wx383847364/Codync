@@ -10,6 +10,12 @@ You add both in **Extensions**. They install on the computer, so every bot on th
 
 The header names the computer everything installs on. **Credentials** sits on that same row, beside the name. Under the open section, one line says where those items come from and that they install on this computer. Once you've added something, a count under it ("3 installed", **Connectors & skills**) opens your library, where you can sign in to a connector or remove one.
 
+## Long tool results
+
+Codync shortens eligible long text results from its built-in tools and connected MCP servers for every bot on the computer. The bot first sees the beginning, the end and selected error or warning lines. If it needs more detail, it can use the receipt ID to search for an exact phrase or read the original in pages. There is no bot setup for this.
+
+The original is kept on the Host for the same bot and conversation, and can be read for up to seven days subject to the local cache limit. The Host periodically purges expired receipts. Permanently deleting a group also clears its receipts. Short text, JSON and structured connector results, images, attachments and output from tools run directly by the agent (such as its own shell) follow their existing paths.
+
 ## Add a connector from the registry
 
 Extensions opens on one section at a time: **Agents**, **Connectors**, or **Skills**. On the desktop they are a row of chips under the search field; on a wide phone they are a side list, and on a narrow phone tabs along the top. Each section is one list you scroll. The **Connectors** list starts with the first connectors from the official MCP Registry, and more load as you scroll down to the end; if that fails, **Try again** at the end of the list asks again. Search by service name. In the terminal, Tab switches sections, and moving down the Connectors list loads more as you near its end.

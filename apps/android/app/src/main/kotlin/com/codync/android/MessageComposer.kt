@@ -162,12 +162,15 @@ private enum class Trailing { Interrupt, Stop, Call, Send }
     // Offline computers still take text: the relay holds it for them, or with no relay this phone does. Files need the computer.
     val canHold = state.actualConnection is LinkState.ComputerOffline || holdsOnPhone(state.computer.cloud, state.actualConnection)
     val canSend = !empty && !importing && !queuing && (online || canHold && files.isEmpty())
-    val working = bot.isWorking(bot.id)
+    // 群只有 Host 工作时，配对设备可查看卡片，不能从输入框停止程序。
+    val working = if (bot.kind == "group" && bot.deliveryControls.any { it.executor == "host" }) {
+        state.bots.any { it.id in bot.members && it.isWorking(bot.id) }
+    } else bot.isWorking(bot.id)
     val bare = text.text.isEmpty() && files.isEmpty()
     val trailing = when {
         onInterrupt != null && bare -> Trailing.Interrupt
         // 允许群级停止只剩下暂停任务的群，非空草稿仍能发送。
-        (working || (online && bot.deliveryControls.isNotEmpty())) && bare -> Trailing.Stop
+        (working || (online && bot.deliveryControls.any { it.executor != "host" })) && bare -> Trailing.Stop
         onCall != null && bare -> Trailing.Call
         else -> Trailing.Send
     }

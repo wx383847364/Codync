@@ -204,6 +204,24 @@ start without the previous transcript. The
 
 ### Registered local tasks
 
+On the computer running the Host, use **/ → Run task** in an ordinary or stage
+group. The Host queues the selected task version and creates its original
+assignment card without starting an agent session. A user can also send a
+standalone, exact task alias. Replies, quotes, pasted content, attachments,
+voice and messages from paired devices follow ordinary chat routing. Ambiguous
+aliases prompt the user to choose from the menu.
+
+Each registry entry can add `aliases` (an array of complete phrases) and
+`projectRoot` (an absolute directory matched against a group member’s working
+directory). An optional `groupIds` array also grants access to named groups, such
+as a stage whose members use Host-managed workspaces. An entry without either
+restriction is available across groups.
+The catalog shares the title, task ID and version only. The Host verifies the
+selected version before execution. If the registration changes or disappears,
+the original card shows a blocked result. A submitted nonce reopens the same
+card, and any execution that might already have started stays interrupted after
+restart. Paired clients can read the result and evidence.
+
 Ordinary groups and stages share the local task tools on the Host's `chat` MCP bridge.
 `list_local_tasks` lists the IDs and titles in `local-tasks.json` in the Host data folder.
 `start_local_task {taskId, contextDeliveryId}` admits one registered task per active

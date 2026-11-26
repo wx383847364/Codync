@@ -79,6 +79,8 @@ pub enum Event {
     MessageSent,
     /// 原请求方按需读取委派回复，只记录结果类别。
     BotReplyRead,
+    /// Host 工具回执存取，只记录操作与结果。
+    ToolReceiptHandled,
     /// The user had a queued message handled now (`agent::bot::steer`).
     MessageSteered,
     QueuedMessageRemoved,
@@ -190,6 +192,7 @@ impl Event {
             Self::BotDeleted => "bot_deleted",
             Self::MessageSent => "message_sent",
             Self::BotReplyRead => "bot_reply_read",
+            Self::ToolReceiptHandled => "tool_receipt_handled",
             Self::MessageSteered => "message_steered",
             Self::QueuedMessageRemoved => "queued_message_removed",
             Self::TurnStopped => "turn_stopped",

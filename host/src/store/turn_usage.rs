@@ -162,10 +162,10 @@ impl Store {
         let since: i64 =
             c.query_row("SELECT CAST(v AS INTEGER) FROM kv WHERE k='turn.usage.since'", [], |r| r.get(0))?;
         let (deliveries, retries, unmatched): (i64, i64, i64) = c.query_row(
-            "SELECT COUNT(*), COALESCE(SUM(parent_id IS NOT NULL),0), COALESCE(SUM(started_at IS NOT NULL AND NOT EXISTS(
+            "SELECT COUNT(*), COALESCE(SUM(parent_id IS NOT NULL),0), COALESCE(SUM(started_at IS NOT NULL AND source_kind!=?2 AND NOT EXISTS(
                 SELECT 1 FROM turn_usage_attempts t WHERE t.delivery_id=d.id)),0)
-             FROM deliveries d WHERE room_id=?",
-            [room],
+             FROM deliveries d WHERE room_id=?1",
+            params![room, super::deliveries::DIRECT],
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
         )?;
         let counts = c.query_row(

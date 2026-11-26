@@ -54,7 +54,7 @@ export const ChatRow = memo(function ChatRow({ entry, groupStart, groupHandoffCa
     case 'agent':
       return (
         <VStack align="flex-start" gap={4} className={groupStart ? 'chat-row group-start' : 'chat-row'}>
-          {chat && isGroup(chat) && groupStart ? <AuthorLabel botId={entry.data.author} groupHandoffCard={groupHandoffCard} latestAuthor={latestAuthor} /> : null}
+          {chat && isGroup(chat) && groupStart ? <AuthorLabel botId={entry.data.executor === 'host' ? undefined : entry.data.author} name={entry.data.executor === 'host' ? 'Host' : undefined} groupHandoffCard={groupHandoffCard} latestAuthor={latestAuthor} /> : null}
           <AgentBubble entry={entry} openTrace={openTrace} reply={reply} openArtifact={openArtifact} />
           <VStack gap={4} className={chat && isGroup(chat) ? 'chat-row-indent' : undefined}>
             <ReactionsRow entry={entry} />

@@ -266,6 +266,10 @@ export interface CodyncBridge {
     setTraySummary(summary: TraySummary): void
     /** Brings the chat window forward (a phone waits for this computer to let it in). */
     showWindow(): void
+    /** 此系统需要使用兼容拖动路径。 */
+    manualWindowDrag: boolean
+    /** 用鼠标当前屏幕位置和按下时的偏移移动聊天窗口。 */
+    moveChatWindow(offsetX: number, offsetY: number): void
     onCommand(cb: (command: WindowCommand) => void): () => void
     resetAllData(): Promise<void>
     setLaunchAtLogin(on: boolean): Promise<boolean>

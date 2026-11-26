@@ -258,6 +258,17 @@ pub(super) async fn call(hub: &Arc<Hub>, caller: &Caller, method: &str, b: Value
             .await??;
             json!({"items": items})
         }
+        "groupLocalTasks" => crate::local_tasks::catalog(hub, str_arg(&b, "roomId")?).await?,
+        "runGroupLocalTask" => {
+            crate::local_tasks::start_direct(
+                hub,
+                str_arg(&b, "roomId")?,
+                str_arg(&b, "clientNonce")?,
+                str_arg(&b, "taskId")?,
+                str_arg(&b, "version")?,
+            )
+            .await?
+        }
         "send" => {
             let bot = str_arg(&b, "botId")?;
             let raw_text = b["text"].as_str().unwrap_or_default();
@@ -335,6 +346,18 @@ pub(super) async fn call(hub: &Arc<Hub>, caller: &Caller, method: &str, b: Value
                 data["call"] = crate::chat::calls::checked(call)?.into();
                 crate::chat::calls::heard(hub, bot, call, caller.device_key())?;
             }
+            // 仅当前本机用户提交的独立文字可以命中登记别名；回复、语音、粘贴和引用沿用普通聊天。
+            if matches!(caller, Caller::Local)
+                && row.config.is_group()
+                && data["attachments"].as_array().is_some_and(Vec::is_empty)
+                && b["mentions"].as_array().is_none_or(Vec::is_empty)
+                && b["replyTo"].is_null()
+                && b["call"].is_null()
+                && pasted.is_empty()
+                && let Some(entry) = crate::local_tasks::try_alias(hub, &row.config, text, nonce).await?
+            {
+                return Ok(ControlFlow::Break(json!({"entry":entry})));
+            }
             json!({"entry": crate::chat::messages::post(hub, &row.config, data)?})
         }
         // A voice call is on (its audio flows): the lead speaks first.
@@ -379,6 +402,9 @@ pub(super) async fn call(hub: &Arc<Hub>, caller: &Caller, method: &str, b: Value
         "stop" => {
             let bot = str_arg(&b, "botId")?;
             match hub.store.bot(bot)? {
+                Some(row) if row.config.is_group() && !matches!(caller, Caller::Local) => {
+                    hub.cancel_deliveries_scoped(bot, None, "群聊已停止", false)?;
+                }
                 Some(row) if row.config.is_group() => crate::chat::group::stop(hub, bot)?,
                 _ => hub.send_cmd(bot, Cmd::Stop)?,
             }
@@ -454,7 +480,9 @@ pub(super) async fn call(hub: &Arc<Hub>, caller: &Caller, method: &str, b: Value
             result
         }
         "retryDelivery" => {
-            let delivery = hub.retry_delivery(str_arg(&b, "deliveryId")?)?;
+            let id = str_arg(&b, "deliveryId")?;
+            check_host_task_control(hub, caller, id)?;
+            let delivery = hub.retry_delivery(id)?;
             crate::chat::group::ensure_runner(hub, &delivery.room_id);
             json!({"delivery":delivery})
         }
@@ -550,7 +578,9 @@ pub(super) async fn call(hub: &Arc<Hub>, caller: &Caller, method: &str, b: Value
             // 群、投递和回合必须同时匹配，过期控件无法停掉后续工作。
             let started_at = b["startedAt"].as_i64().ok_or_else(|| anyhow!("missing delivery start time"))?;
             let paused = b["paused"].as_bool().ok_or_else(|| anyhow!("missing paused state"))?;
-            hub.set_delivery_paused(str_arg(&b, "botId")?, str_arg(&b, "deliveryId")?, started_at, paused)?;
+            let id = str_arg(&b, "deliveryId")?;
+            check_host_task_control(hub, caller, id)?;
+            hub.set_delivery_paused(str_arg(&b, "botId")?, id, started_at, paused)?;
             json!({})
         }
         "newSession" => {
@@ -593,4 +623,12 @@ pub(super) async fn call(hub: &Arc<Hub>, caller: &Caller, method: &str, b: Value
         }
         _ => return Ok(ControlFlow::Continue(b)),
     }))
+}
+
+/// 已配对设备可以看原卡，启动或继续 Host 程序仅允许本机。
+fn check_host_task_control(hub: &Hub, caller: &Caller, id: &str) -> Result<()> {
+    if !matches!(caller, Caller::Local) && hub.store.delivery(id)?.is_some_and(|d| d.is_host_task()) {
+        return Err(super::devices::Forbidden.into());
+    }
+    Ok(())
 }

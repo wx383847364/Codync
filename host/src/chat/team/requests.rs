@@ -31,7 +31,8 @@ pub enum Turn {
 #[derive(Default)]
 pub(super) struct RequestState {
     /// Bots in a turn.
-    pub(super) active: HashMap<String, Turn>,
+    pub(super) active: HashMap<String, (Turn, u64)>,
+    next_generation: u64,
     pub(super) messages: usize,
     pub(super) messages_by_sender: HashMap<String, usize>,
 }
@@ -66,14 +67,14 @@ impl Requests {
     /// MCP 调用读取 actor 设置的可信执行身份，不能从模型入参伪造。
     pub fn delivery(&self, bot: &str) -> Option<(String, String)> {
         match self.0.locked().active.get(bot) {
-            Some(Turn::Delivery { room, id, .. }) => Some((room.clone(), id.clone())),
+            Some((Turn::Delivery { room, id, .. }, _)) => Some((room.clone(), id.clone())),
             _ => None,
         }
     }
 
     /// 验证工具桥的会话归属并返回当时的投递 ID，迟到的调用无法归到其他群。
     pub(crate) fn scoped_delivery(&self, bot: &str, group: Option<&str>) -> Result<Option<(String, String)>> {
-        if let Some(Turn::Delivery { room, id, isolated }) = self.0.locked().active.get(bot) {
+        if let Some((Turn::Delivery { room, id, isolated }, _)) = self.0.locked().active.get(bot) {
             ensure!(group == isolated.then_some(room.as_str()), "the tool is bound to another conversation");
             Ok(Some((room.clone(), id.clone())))
         } else {
@@ -84,11 +85,29 @@ impl Requests {
 
     /// 工具桥据此隔离整理，不能派工或修改用户记忆。
     pub fn maintaining(&self, bot: &str) -> bool {
-        matches!(self.0.locked().active.get(bot), Some(Turn::Maintenance))
+        matches!(self.0.locked().active.get(bot), Some((Turn::Maintenance, _)))
     }
 
+    /// 为每次模型回合分配新代次，同一次群投递暂停再继续也会产生新代次。
     pub fn start_turn(&self, bot: &str, turn: Turn) {
-        self.0.locked().active.insert(bot.to_owned(), turn);
+        let mut state = self.0.locked();
+        state.next_generation += 1;
+        let generation = state.next_generation;
+        state.active.insert(bot.to_owned(), (turn, generation));
+    }
+
+    /// 同一把锁内读取工具回合代次和归属，拒绝已结束、整理中或另一独立群的调用。
+    pub(crate) fn receipt_turn(&self, bot: &str, group: Option<&str>) -> Result<(Turn, u64)> {
+        let state = self.0.locked();
+        let (turn, generation) = state.active.get(bot).ok_or_else(|| anyhow::anyhow!("the tool turn has ended"))?;
+        match turn {
+            Turn::Maintenance => bail!("tools are unavailable during context maintenance"),
+            Turn::Delivery { room, isolated, .. } => {
+                ensure!(group == isolated.then_some(room.as_str()), "the tool is bound to another conversation");
+            }
+            _ => ensure!(group.is_none(), "the tool is bound to another conversation"),
+        }
+        Ok((turn.clone(), *generation))
     }
 
     /// `bot`'s turn ended (or it was deleted): it can't send more until its next turn.
@@ -100,7 +119,7 @@ impl Requests {
 impl RequestState {
     /// 派工沿持久来源累计链深，文字与工具转换不能重置保护上限。
     fn next_hop(&self, from: &str) -> Result<u8> {
-        match self.active.get(from) {
+        match self.active.get(from).map(|(turn, _)| turn) {
             None => bail!("the requesting bot is no longer working"),
             Some(Turn::Delivery { .. }) => bail!("group deliveries use durable admission"),
             Some(Turn::Maintenance) => bail!("tools are unavailable during context maintenance"),
@@ -132,6 +151,22 @@ mod tests {
         requests.end_turn("bot");
         assert!(requests.scoped_delivery("bot", Some("fresh")).is_err());
         assert!(requests.scoped_delivery("bot", None).unwrap().is_none());
+    }
+
+    /// 普通、私聊或恢复的回合用同一代次机制，迟到回执不能跟随新回合。
+    #[test]
+    fn receipt_turn_changes_generation_on_retry_and_rejects_inactive_calls() {
+        let requests = Requests::default();
+        let turn = Turn::Delivery { room: "qa".into(), id: "same".into(), isolated: false };
+        requests.start_turn("bot", turn.clone());
+        let (_, first) = requests.receipt_turn("bot", None).unwrap();
+        requests.end_turn("bot");
+        assert!(requests.receipt_turn("bot", None).is_err());
+        requests.start_turn("bot", turn);
+        let (_, retry) = requests.receipt_turn("bot", None).unwrap();
+        assert_ne!(first, retry);
+        requests.start_turn("bot", Turn::Maintenance);
+        assert!(requests.receipt_turn("bot", None).is_err());
     }
 
     #[test]

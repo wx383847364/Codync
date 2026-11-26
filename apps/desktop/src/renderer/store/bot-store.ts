@@ -409,6 +409,16 @@ export class BotStore extends BotSending {
     return (await client.call<{ items: import('@shared/mentions').WorkspaceFileCandidate[] }>('searchWorkspaceFiles', { botId, query })).items
   }
 
+  /** 查询本群当前可选的登记任务。 */
+  async groupLocalTasks(roomId: string) {
+    return (await (await this.ready()).call<{ items: import('@shared/models').GroupLocalTask[] }>('groupLocalTasks', { roomId })).items
+  }
+
+  /** 提交用户选中的任务版本，重试沿用原提交身份。 */
+  async runGroupLocalTask(roomId: string, task: import('@shared/models').GroupLocalTask, clientNonce: string) {
+    return (await this.ready()).call('runGroupLocalTask', { roomId, taskId: task.taskId, version: task.version, clientNonce })
+  }
+
   async listDirs(path: string | null) {
     return (await this.ready()).call<DirListing>('listDirs', { path })
   }

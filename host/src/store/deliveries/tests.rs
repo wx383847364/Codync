@@ -751,3 +751,45 @@ fn group_recommendation_uses_display_threshold_without_changing_actual_window() 
     s.save_scoped_context("a", "claude", None, "threshold-session", None, Some(1_000_000)).unwrap();
     assert_eq!(s.group_session_contexts("g").unwrap()["members"][0]["recommended"], false);
 }
+
+/// 直派工原子去重，独立于成员，保留明确的重启边界。
+#[test]
+fn direct_task_reuses_card_and_recovers_only_before_start() {
+    let s = stage_store();
+    let task = DirectTask { task_id: "one".into(), title: "Check".into(), version: "v1".into() };
+    let (source, card, added) = s.post_direct_task("g", "nonce", "Run check", &task).unwrap();
+    assert!(added);
+    let (again, same, added) = s.post_direct_task("g", "nonce", "Run check", &task).unwrap();
+    assert_eq!((again.id, same.id, added), (source.id, card.id, false));
+    let different = DirectTask { version: "v2".into(), ..task.clone() };
+    assert!(s.post_direct_task("g", "nonce", "Run check", &different).is_err());
+    let id = card.data["deliveryId"].as_str().unwrap();
+    assert_eq!(card.data["deliveryRows"][0]["executor"], "host");
+    assert!(s.claim_delivery(id, "g").unwrap().0.is_none());
+    s.recover_deliveries().unwrap();
+    assert_eq!(s.delivery(id).unwrap().unwrap().status, Status::Queued);
+    s.delete_bot("b").unwrap();
+    assert!(s.start_direct_task(id).unwrap().0.is_some());
+    let usage = s.stage_usage("g").unwrap();
+    assert_eq!(usage["counts"]["prompts"], 0);
+    assert_eq!(usage["startedDeliveriesWithoutAttempt"], 0);
+    s.recover_deliveries().unwrap();
+    assert_eq!(s.delivery(id).unwrap().unwrap().status, Status::Interrupted);
+    let (retry, _) = s.retry_delivery(id).unwrap();
+    assert!(retry.is_host_task());
+    assert!(s.direct_task(&retry).unwrap() == task);
+}
+
+/// 私聊不可写入直派工，关闭阶段拒绝入队且不留下用户消息。
+#[test]
+fn direct_task_does_not_post_in_private_or_closed_groups() {
+    let s = stage_store();
+    let task = DirectTask { task_id: "one".into(), title: "Check".into(), version: "v1".into() };
+    assert!(s.post_direct_task("a", "nonce", "Run check", &task).is_err());
+    assert!(s.find_by_nonce("a", "nonce").is_none());
+    let mut group = s.bot("g").unwrap().unwrap().config;
+    group.stage.as_mut().unwrap().closed_at = Some(1);
+    s.save_bot(&group).unwrap();
+    assert!(s.post_direct_task("g", "nonce", "Run check", &task).is_err());
+    assert!(s.find_by_nonce("g", "nonce").is_none());
+}

@@ -19,6 +19,16 @@ pub enum SlashAction {
     Mention,
     Session,
     File(Reference),
+    HostMenu,
+    HostTask { version: String },
+}
+
+/// 当前群的目录响应和重试身份，切换群后不会执行旧选择。
+pub(super) struct HostTaskMenu {
+    id: Uuid,
+    room: String,
+    items: Option<Vec<Value>>,
+    submitting: Option<(String, Uuid, bool)>,
 }
 
 pub(super) struct WorkspaceSearch {
@@ -42,10 +52,10 @@ impl SlashCommand {
     /// 描述命令的用户行为，包含群成员选择和会话切换选项。
     pub fn about(&self) -> String {
         match self.action {
-            SlashAction::Mention | SlashAction::File(_) => self.detail.clone(),
+            SlashAction::Mention | SlashAction::File(_) | SlashAction::HostTask { .. } => self.detail.clone(),
             SlashAction::Skill if self.detail.is_empty() => self.title.clone(),
             SlashAction::Skill => self.detail.replace('\n', " "),
-            SlashAction::Fast | SlashAction::DevServers | SlashAction::Session => {
+            SlashAction::Fast | SlashAction::DevServers | SlashAction::Session | SlashAction::HostMenu => {
                 format!("{} · {}", self.title, self.detail)
             }
         }
@@ -84,7 +94,13 @@ impl App {
             detail: bot.dev_servers.iter().map(|server| server.name.as_str()).collect::<Vec<_>>().join(", "),
             action: SlashAction::DevServers,
         });
-        fast.into_iter().chain(servers).collect()
+        let host = (self.group_local_tasks && self.bot().is_some_and(|bot| bot.group)).then(|| SlashCommand {
+            name: "run".into(),
+            title: crate::tui::l10n::tr("Run task").into_owned(),
+            detail: crate::tui::l10n::tr("Host execution").into_owned(),
+            action: SlashAction::HostMenu,
+        });
+        host.into_iter().chain(fast).chain(servers).collect()
     }
 
     /// Built-in commands, then the skills the bot (or any member of a group) has on, whose name
@@ -92,6 +108,23 @@ impl App {
     /// 按来源列出适用命令，群成员选择与会话操作保持四端一致。
     pub fn slash_commands(&self) -> Vec<SlashCommand> {
         let draft = self.draft();
+        if draft.text == "/run"
+            && let Some(menu) = self.current_host_task_menu()
+        {
+            return menu
+                .items
+                .iter()
+                .flatten()
+                .filter_map(|item| {
+                    Some(SlashCommand {
+                        name: item["taskId"].as_str()?.into(),
+                        title: item["title"].as_str()?.into(),
+                        detail: crate::tui::l10n::tr("Host execution").into_owned(),
+                        action: SlashAction::HostTask { version: item["version"].as_str()?.into() },
+                    })
+                })
+                .collect();
+        }
         if self.file_query().is_none()
             && let Some((start, end)) = self.mention_query()
         {
@@ -246,6 +279,34 @@ impl App {
 
     /// 执行所选命令，群操作逐成员发送可信 host 意图。
     fn run_slash(&mut self, command: &SlashCommand) {
+        if command.action == SlashAction::HostMenu {
+            if let Some(room) = self.selected.clone() {
+                let id = Uuid::new_v4();
+                self.drafts.insert(room.clone(), Editor::with("/run"));
+                self.host_task_menu = Some(HostTaskMenu { id, room: room.clone(), items: None, submitting: None });
+                self.call("groupLocalTasks", json!({"roomId":room}), After::HostTaskCatalog(id));
+            }
+            return;
+        }
+        if let SlashAction::HostTask { version } = &command.action {
+            if let Some(menu) = self.host_task_menu.as_mut().filter(|menu| self.selected.as_ref() == Some(&menu.room)) {
+                if menu.submitting.as_ref().is_some_and(|(_, _, busy)| *busy) {
+                    return;
+                }
+                let key = format!("{}:{version}", command.name);
+                let nonce = menu
+                    .submitting
+                    .as_ref()
+                    .filter(|(old, _, _)| *old == key)
+                    .map_or_else(Uuid::new_v4, |(_, nonce, _)| *nonce);
+                menu.submitting = Some((key, nonce, true));
+                let id = menu.id;
+                let params =
+                    json!({"roomId":menu.room,"taskId":command.name,"version":version,"clientNonce":nonce.to_string()});
+                self.call("runGroupLocalTask", params, After::HostTaskRun(id));
+            }
+            return;
+        }
         if command.action == SlashAction::Session {
             if let Some(bot) = &self.selected {
                 self.call("newSession", json!({"botId":bot,"mode":command.detail}), After::Nothing);
@@ -294,6 +355,7 @@ impl App {
                 String::new()
             }
             SlashAction::Skill => format!("/{} ", command.name),
+            SlashAction::HostMenu | SlashAction::HostTask { .. } => return,
         };
         if let Some(key) = self.selected.clone() {
             self.drafts.insert(key, Editor::with(&fill));
@@ -344,6 +406,50 @@ impl App {
                 Some(reply.and_then(|value| {
                     serde_json::from_value(value["items"].clone()).map_err(|error| error.to_string())
                 }));
+        }
+    }
+
+    /// 切群或退出当前任务列表后，之前的候选不能再运行。
+    fn current_host_task_menu(&self) -> Option<&HostTaskMenu> {
+        self.host_task_menu.as_ref().filter(|menu| self.selected.as_ref() == Some(&menu.room))
+    }
+
+    /// 使用当前菜单请求的响应，错误和空目录用现有短提示显示。
+    pub(super) fn host_task_catalog_answered(&mut self, id: Uuid, result: Result<Value, String>) {
+        if let Some(menu) = self.host_task_menu.as_mut().filter(|menu| menu.id == id) {
+            match result {
+                Ok(value) => {
+                    let items = value["items"].as_array().cloned().unwrap_or_default();
+                    let empty = items.is_empty();
+                    menu.items = Some(items);
+                    if empty {
+                        self.flash("No registered tasks");
+                    }
+                }
+                Err(error) => {
+                    self.host_task_menu = None;
+                    self.flash(&error);
+                }
+            }
+        }
+    }
+
+    /// 只有成功才清除这次下单的草稿；失败可携原编号重试。
+    pub(super) fn host_task_run_answered(&mut self, id: Uuid, result: Result<Value, String>) {
+        let Some(menu) = self.host_task_menu.as_mut().filter(|menu| menu.id == id) else { return };
+        match result {
+            Ok(_) => {
+                if let Some(draft) = self.drafts.get_mut(&menu.room).filter(|draft| draft.text == "/run") {
+                    draft.clear();
+                }
+                self.host_task_menu = None;
+            }
+            Err(error) => {
+                if let Some((_, _, busy)) = &mut menu.submitting {
+                    *busy = false;
+                }
+                self.flash(&error);
+            }
         }
     }
 

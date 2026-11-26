@@ -46,6 +46,7 @@ The host owns:
 
 - Bots, chats, sessions and agent processes: creating, configuring, starting, idling and resuming them.
 - MCP servers and connectors: installing them, parsing pasted configs, sign-in, and handing them to agents.
+  The Bot's Host-operated MCP bridges shorten results consisting of one non-JSON text block with over 6,000 Unicode characters and at most 1 MiB, and preserve tool error flags. The Host stores the original in a local cache accessible for seven days or until 128 newer receipts displace it. A periodic sweep removes expired text, and permanent group deletion removes that group’s receipts. The connection captures the active group delivery before the tool is forwarded, and original text is searched or paged only for the originating bot and conversation. Tools run by the agent's own harness bypass these bridges.
 - Conversation rules: groups, replies, mentions, collaboration and queueing.
 - Routines, memory, usage, bot order, voice-call credentials, remote screen signaling and push sealing.
 - Validation, state every client shows the same way, and anything that spawns processes or touches the computer's files.

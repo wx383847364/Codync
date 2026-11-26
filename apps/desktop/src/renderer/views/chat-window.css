@@ -417,3 +417,29 @@ html[data-platform="darwin"] .sidebar-header {
   right: 0;
   height: 40px;
 }
+
+/* macOS 顶部为侧栏、会话和详情保留同样高的标题带，列表从标题带下方开始。 */
+html[data-platform="darwin"] .split {
+  --window-title-height: 64px;
+}
+html[data-platform="darwin"] .split :is(.sidebar-header, .detail-drag, .details-drag) {
+  height: var(--window-title-height);
+}
+html[data-platform="darwin"] .split .sidebar:not(.compact) .roster {
+  padding-top: var(--window-title-height);
+  scroll-padding-top: var(--window-title-height);
+}
+html[data-platform="darwin"] .split .top-chrome {
+  min-height: var(--window-title-height);
+}
+html[data-platform="darwin"] .split .details-identity {
+  padding-top: calc(var(--window-title-height) + 4px);
+}
+/* 受影响系统将自绘区域交回指针事件，标题栏外的拖柄和内容不参与。 */
+.split.manual-window-drag :is(.sidebar-header, .top-chrome, .details-drag, .detail-drag) {
+  -webkit-app-region: no-drag;
+  user-select: none;
+}
+.split.manual-window-drag:not(.covered) .top-chrome {
+  pointer-events: auto;
+}
