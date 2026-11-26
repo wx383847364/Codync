@@ -3,7 +3,7 @@ import { registerAppearance } from './appearance'
 import { execFileSync } from 'node:child_process'
 import { hostname } from 'node:os'
 import { join } from 'node:path'
-import { app, autoUpdater, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeTheme, session, shell, type IpcMainInvokeEvent, type OpenDialogOptions } from 'electron'
+import { app, autoUpdater, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeTheme, screen, session, shell, type IpcMainInvokeEvent, type OpenDialogOptions } from 'electron'
 import type { HostSnapshot, WindowCommand } from '../shared/ipc'
 import { devPort, HostController } from './host-controller'
 import { registerFileSaves } from './file-saves'
@@ -57,6 +57,9 @@ let chat: BrowserWindow | null = null
 let pairing: BrowserWindow | null = null
 const quitLifecycle = new QuitLifecycle(app, autoUpdater)
 const isMac = process.platform === 'darwin'
+// macOS 27.2 的自绘标题栏原生拖动可能失效，保留普通系统版本的拖动路径。
+const [macMajor, macMinor] = isMac ? process.getSystemVersion().split('.').map(Number) : []
+const manualWindowDrag = macMajor === 27 && (macMinor ?? 0) >= 2
 
 /** 本机验收包直接进入会话，避免首次启动打开账号或权限引导。 */
 function rendererURL(page: string) {
@@ -157,8 +160,21 @@ function menu() {
   Menu.setApplicationMenu(Menu.buildFromTemplate(template))
 }
 
+/** 注册主进程消息，其中聊天窗移动只允许当前聊天窗发起。 */
 function registerIPC(tray: Tray) {
   registerHostProxy()
+  // 只有当前聊天窗口的主框架能请求兼容移动，实际位置始终按系统指针计算。
+  ipcMain.on('app:manualWindowDrag', (event) => (event.returnValue = manualWindowDrag))
+  // 外部文件预览、配对窗口和全屏窗口不参与标题栏兼容移动。
+  ipcMain.on('app:moveChatWindow', (event, offsetX: unknown, offsetY: unknown) => {
+    if (!manualWindowDrag || !chat || event.sender !== chat.webContents ||
+      event.senderFrame !== chat.webContents.mainFrame || chat.isFullScreen() || chat.isMaximized()) return
+    if (typeof offsetX !== 'number' || typeof offsetY !== 'number' ||
+      !Number.isFinite(offsetX) || !Number.isFinite(offsetY) ||
+      offsetX < 0 || offsetX > chat.getBounds().width || offsetY < 0 || offsetY > 64) return
+    const { x, y } = screen.getCursorScreenPoint()
+    chat.setPosition(Math.round(x - offsetX), Math.round(y - offsetY))
+  })
   ipcMain.on('app:hostPort', (e) => (e.returnValue = identity.port))
   ipcMain.on('app:name', (e) => (e.returnValue = app.getName()))
   ipcMain.on('app:scheme', (e) => (e.returnValue = identity.scheme))

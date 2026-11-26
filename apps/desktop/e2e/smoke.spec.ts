@@ -33,3 +33,30 @@ test('updates identifies the running build by commit', async () => {
     await browser.close()
   }
 })
+
+// 扩大的 macOS 标题带覆盖侧栏空白，但搜索按钮仍可点击。
+test('the macOS sidebar title band preserves its search control', async () => {
+  test.skip(process.platform !== 'darwin', 'macOS custom title bar')
+  const { browser, page } = await attach()
+  try {
+    // 此套件上一项打开「更新」设置，先收起弹层以测试标题带自身的命中区域。
+    await page.keyboard.press('Escape')
+    await expect(page.locator('.modal-card.shown')).toHaveCount(0)
+    const header = page.locator('.sidebar:not(.compact) .sidebar-header')
+    await expect(header).toBeVisible()
+    const box = await header.boundingBox()
+    expect(box?.height).toBe(64)
+    // 从交通灯右侧、工具按钮左侧验证接近下缘的新增空白仍属于标题带。
+    const hitsTitleBand = await header.evaluate((element) => {
+      const { left, top } = element.getBoundingClientRect()
+      const hit = document.elementFromPoint(left + 100, top + 59)
+      return hit?.closest('.sidebar-header') === element && !hit.closest('.no-drag')
+    })
+    expect(hitsTitleBand).toBe(true)
+    await header.getByRole('button', { name: 'Search', exact: true }).click()
+    await expect(page.getByRole('textbox', { name: 'Search bots' })).toBeVisible()
+    await page.keyboard.press('Escape')
+  } finally {
+    await browser.close()
+  }
+})
