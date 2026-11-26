@@ -150,6 +150,7 @@ export interface Bot {
 
 /** 兼容不同版本的 Host，并保留主会话版本供详情刷新。 */
 export interface GroupDeliveryControl {
+  executor?: "host"
   deliveryId: string
   targetBotId: string
   startedAt: number
@@ -363,6 +364,7 @@ export interface AgentSwitch {
 }
 
 export interface DeliveryRow {
+  executor?: "host"
   deliveryId: string; targetBotId: string; status: string; detail: string
   canGuide?: boolean
   startedAt?: number | null
@@ -372,6 +374,7 @@ export interface DeliveryRow {
 }
 
 export interface EntryData {
+  executor?: "host"
   deliveryAttempt?: number
   parentDeliveryId?: string | null
   deliveryId?: string
@@ -614,6 +617,7 @@ export interface Hello {
   /** 主机能按附件身份校验原图尺寸，不包含正文路径读取能力。 */
   fileImageInfo?: boolean
   workspaceFileSearch?: boolean
+  groupLocalTasks?: boolean
   iconsRevision?: number
   icons?: import('./custom-icons').CustomIcons
   hostId: string
@@ -829,3 +833,6 @@ export interface GroupDraft {
   groupLeaderId?: string
   pinned?: boolean
 }
+
+/** Host 公开的登记描述，命令与参数由主机持有。 */
+export interface GroupLocalTask { taskId: string; title: string; version: string }

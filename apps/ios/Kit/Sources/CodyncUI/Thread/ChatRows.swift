@@ -42,7 +42,7 @@ struct ChatRow: View {
             .padding(.top, groupStart ? 12 : 4)
         case "agent":
             VStack(alignment: .leading, spacing: 4) {
-                if chat?.isGroup == true, groupStart { AuthorLabel(botId: entry.data.author, handoffPending: handoffPending, groupContextLabel: groupContextLabel, contextModel: contextModel, contextReasoning: contextReasoning, inspectContext: inspectContext, contextRecommended: contextRecommended, contextWaiting: contextWaiting, newSession: newSession) }
+                if chat?.isGroup == true, groupStart { AuthorLabel(botId: entry.data.executor == "host" ? nil : entry.data.author, name: entry.data.executor == "host" ? "Host" : nil, handoffPending: handoffPending, groupContextLabel: groupContextLabel, contextModel: contextModel, contextReasoning: contextReasoning, inspectContext: inspectContext, contextRecommended: contextRecommended, contextWaiting: contextWaiting, newSession: newSession) }
                 AgentBubble(entry: entry, openTrace: openTrace, reply: reply, openArtifact: openArtifact)
                 ReactionsRow(entry: entry)
                     .padding(.leading, chat?.isGroup == true ? 34 : 0)
@@ -328,7 +328,7 @@ struct WorkingIndicators: View {
     /// 私聊延续原有的单标签布局。
     var body: some View {
         if chat.isGroup {
-            let held = chat.deliveryControls.filter { $0.status != "started" }
+            let held = chat.deliveryControls.filter { $0.executor != "host" && $0.status != "started" }
             WrapLayout(spacing: 8, leading: true) {
                 // 按成员身份保留状态，每次执行独立折叠。
                 ForEach(bots) { bot in

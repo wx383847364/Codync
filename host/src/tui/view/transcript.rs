@@ -475,15 +475,19 @@ fn entry_lines(
                             .unwrap_or_default();
                         details.push(format!(
                             "{}：{}{reason}",
-                            app.author_name(row["targetBotId"].as_str()),
+                            if row["executor"] == "host" {
+                                "Host".into()
+                            } else {
+                                app.author_name(row["targetBotId"].as_str())
+                            },
                             Entry::delivery_status(row["status"].as_str().unwrap_or_default())
                         ));
                         details.extend(activity_lines(row));
                     }
-                    if rows
-                        .iter()
-                        .any(|row| matches!(row["status"].as_str(), Some("failed" | "interrupted" | "noReply")))
-                    {
+                    if rows.iter().any(|row| {
+                        (row["executor"] != "host" || app.group_local_tasks)
+                            && matches!(row["status"].as_str(), Some("failed" | "interrupted" | "noReply"))
+                    }) {
                         details.push("F 重试失败的派工".into());
                     }
                     details

@@ -1,7 +1,9 @@
 //! 群投递的持久状态与原子领取；actor 只能领取房间 runner 指定的 ID。
 
 mod completion;
+mod direct;
 pub(crate) use completion::LocalTaskResult;
+pub(crate) use direct::{DIRECT, DirectTask};
 pub(crate) mod handoff;
 pub(crate) mod member_session;
 pub use completion::Guidance;
@@ -152,13 +154,22 @@ pub(super) fn eligible(c: &Connection, room: &str, target: &str, source: Option<
     )?)
 }
 
+/// Host 只依赖房间归属，兼容字段中的房间 ID 不代表群成员。
+fn delivery_eligible(c: &Connection, delivery: &Delivery) -> Result<bool> {
+    if delivery.is_host_task() {
+        return Ok(c.query_row(
+            "SELECT EXISTS(SELECT 1 FROM bots WHERE id=?1 AND deleted=0 AND json_extract(config,'$.kind')='group')",
+            [&delivery.room_id],
+            |row| row.get(0),
+        )?);
+    }
+    eligible(c, &delivery.room_id, &delivery.target_bot_id, delivery.source_bot_id.as_deref())
+}
+
 /// 同一写事务内分配顺序、写入投递，避免跨房间或重试分配冲突。
 fn insert(c: &Connection, delivery: &Delivery) -> Result<Delivery> {
     ensure!(!super::bots::stage_closed(c, &delivery.room_id)?, "Restore or reopen the stage to send work.");
-    ensure!(
-        eligible(c, &delivery.room_id, &delivery.target_bot_id, delivery.source_bot_id.as_deref())?,
-        "成员已不在群内"
-    );
+    ensure!(delivery_eligible(c, delivery)?, "成员已不在群内");
     let seq: i64 =
         c.query_row("SELECT COALESCE(MAX(room_seq),0)+1 FROM deliveries WHERE room_id=?", [&delivery.room_id], |r| {
             r.get(0)
@@ -213,6 +224,11 @@ pub(super) fn cancel_for_deletion(c: &Connection, id: &str) -> Result<(Vec<Deliv
 }
 
 impl Delivery {
+    /// 房间 ID 仅用于旧客户端的目标字段，由来源类型决定执行职责。
+    pub(crate) fn is_host_task(&self) -> bool {
+        self.source_kind == DIRECT
+    }
+
     /// 用户消息开启新批次；回复和工具随后从该行继承轮次与链深。
     pub fn speak(room: &str, entry: &str, target: &str) -> Self {
         Self {
@@ -247,11 +263,12 @@ pub(super) fn cancel_in_transaction(
     room: &str,
     target: Option<&str>,
     reason: &str,
+    include_host: bool,
 ) -> Result<(Vec<Delivery>, Vec<Entry>)> {
-    let mut changed = c.prepare(&format!("SELECT {COLS} FROM deliveries WHERE room_id=?1 AND (?2 IS NULL OR target_bot_id=?2 OR source_bot_id=?2) AND status IN ('queued','claimed','started','paused')"))?
-        .query_map(params![room,target],row)?.collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut changed = c.prepare(&format!("SELECT {COLS} FROM deliveries WHERE room_id=?1 AND (?2 IS NULL OR target_bot_id=?2 OR source_bot_id=?2) AND (?3 OR source_kind!=?4) AND status IN ('queued','claimed','started','paused')"))?
+        .query_map(params![room,target,include_host,DIRECT],row)?.collect::<rusqlite::Result<Vec<_>>>()?;
     let at = now_ms();
-    c.execute("UPDATE deliveries SET status='cancelled',last_error=?3,finished_at=?4 WHERE room_id=?1 AND (?2 IS NULL OR target_bot_id=?2 OR source_bot_id=?2) AND status IN ('queued','claimed','started','paused')",params![room,target,reason,at])?;
+    c.execute("UPDATE deliveries SET status='cancelled',last_error=?3,finished_at=?4 WHERE room_id=?1 AND (?2 IS NULL OR target_bot_id=?2 OR source_bot_id=?2) AND (?5 OR source_kind!=?6) AND status IN ('queued','claimed','started','paused')",params![room,target,reason,at,include_host,DIRECT])?;
     // 返回已提交语义的快照，调用方只在成功提交后通知这些稳定身份。
     for delivery in &mut changed {
         delivery.status = Status::Cancelled;
@@ -423,7 +440,7 @@ impl Store {
         let mut c = self.db.locked();
         let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let Some(delivery) = get(&tx, id)? else { return Ok((None, vec![])) };
-        if delivery.status != Status::Queued || delivery.target_bot_id != bot {
+        if delivery.is_host_task() || delivery.status != Status::Queued || delivery.target_bot_id != bot {
             return Ok((None, vec![]));
         }
         ensure!(!super::bots::stage_closed(&tx, &delivery.room_id)?, "Restore or reopen the stage to send work.");
@@ -504,9 +521,20 @@ impl Store {
         target: Option<&str>,
         reason: &str,
     ) -> Result<(Vec<Delivery>, Vec<Entry>)> {
+        self.cancel_deliveries_scoped(room, target, reason, true)
+    }
+
+    /// 配对设备停止普通群派工时，Host 程序保持原权限和状态。
+    pub(crate) fn cancel_deliveries_scoped(
+        &self,
+        room: &str,
+        target: Option<&str>,
+        reason: &str,
+        include_host: bool,
+    ) -> Result<(Vec<Delivery>, Vec<Entry>)> {
         let mut c = self.db.locked();
         let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let (changed, entries) = cancel_in_transaction(&tx, room, target, reason)?;
+        let (changed, entries) = cancel_in_transaction(&tx, room, target, reason, include_host)?;
         tx.commit()?;
         Ok((changed, entries))
     }

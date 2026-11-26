@@ -16,7 +16,7 @@ export function WorkingTransition({ bots, chat, entries }: { bots: Bot[]; chat: 
   const group = isGroup(chat)
   const controls = store.isOffline ? [] : chat.deliveryControls ?? []
   // 保留暂停和等待继续的任务行，过滤中断宽限期内尚未清掉的旧活动。
-  const held = controls.filter((task) => task.status !== 'started')
+  const held = controls.filter((task) => task.executor !== 'host' && task.status !== 'started')
   const running = bots.filter((bot) => controls.some((task) => task.status === 'started' && task.targetBotId === bot.id)
     || !held.some((task) => task.targetBotId === bot.id && (bot.startedAt ?? Infinity) <= task.startedAt))
   const visible = running.length > 0 || held.length > 0

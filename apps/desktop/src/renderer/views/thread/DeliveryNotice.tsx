@@ -34,7 +34,8 @@ export function DeliveryNotice({ entry, deliveryId }: { entry: Entry; deliveryId
   const phase = store.hello?.groupSessionContexts
     ? ['draft', 'approved', 'switched', 'sent'].find(value => rows.some(row => row.groupHandoff?.phase === value))
     : undefined
-  const summary = phase === 'draft' ? tr('Waiting for a new session')
+  const host = rows.some(row => row.executor === 'host')
+  const summary = host ? `${tr('Host execution')} · ${deliverySummary(rows)}` : phase === 'draft' ? tr('Waiting for a new session')
     : phase === 'sent' ? tr('New session started. Original dispatch resumed.')
     : phase ? tr('Preparing a new session') : deliverySummary(rows)
   return <HStack id={deliveryId == null ? entry.id : undefined} className="delivery-notice" align="flex-start" gap={8}>
@@ -48,11 +49,13 @@ export function DeliveryNotice({ entry, deliveryId }: { entry: Entry; deliveryId
             const id = activeId(row)
             return <VStack key={row.deliveryId} gap={5}>
               <HStack gap={8}>
-              <Text size="footnote" tone="secondary" grow>{store.bots.get(row.targetBotId)?.name ?? '已移除成员'}：{deliveryStatus(row.status)}{row.detail ? ` · ${row.detail}` : ''}</Text>
+              <Text size="footnote" tone="secondary" grow>{row.executor === 'host' ? tr('Host execution') : store.bots.get(row.targetBotId)?.name ?? '已移除成员'}：{deliveryStatus(row.status)}{row.detail ? ` · ${row.detail}` : ''}</Text>
               {id
                 ? <Button kind="secondary" onClick={() => store.guideDelivery(row.deliveryId, id)}>引导</Button>
-                : ['failed', 'interrupted', 'noReply'].includes(row.status)
+                : (row.executor !== 'host' || store.hello?.groupLocalTasks) && ['failed', 'interrupted', 'noReply'].includes(row.status)
                   ? <Button kind="secondary" onClick={() => store.retryDelivery(row.deliveryId)}>重新尝试</Button> : null}
+              {row.executor === 'host' && store.hello?.groupLocalTasks && row.startedAt != null && ['started', 'paused'].includes(row.status)
+                ? <Button kind="secondary" onClick={() => store.setDeliveryPaused(entry.botId, row.deliveryId, row.startedAt!, row.status === 'started')}>{tr(row.status === 'started' ? 'Pause' : 'Continue')}</Button> : null}
               </HStack>
               <DeliveryActivity row={row} roomId={entry.botId} inDetails={deliveryId != null} />
             </VStack>

@@ -61,6 +61,8 @@ pub enum After {
     PrivateGroupHandoff(String),
     Connectors,
     Skills,
+    HostTaskCatalog(uuid::Uuid),
+    HostTaskRun(uuid::Uuid),
     WorkspaceFiles(uuid::Uuid),
     Installed,
     /// Memory, routines, marketplace, sign-in (`manage`).

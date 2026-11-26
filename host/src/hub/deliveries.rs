@@ -230,9 +230,24 @@ impl Hub {
 
     /// 持久取消和发布成功后调用方才能停止执行。
     pub fn cancel_deliveries(&self, room: &str, target: Option<&str>, reason: &str) -> Result<()> {
+        self.cancel_deliveries_scoped(room, target, reason, true)
+    }
+
+    /// 只取消调用者权限覆盖的执行，并发布对应原卡。
+    pub(crate) fn cancel_deliveries_scoped(
+        &self,
+        room: &str,
+        target: Option<&str>,
+        reason: &str,
+        include_host: bool,
+    ) -> Result<()> {
         let refresh = {
             let _guard = self.emit_lock.locked();
-            let (cancelled, cards) = self.store.cancel_deliveries(room, target, reason)?;
+            let (cancelled, cards) = if include_host {
+                self.store.cancel_deliveries(room, target, reason)?
+            } else {
+                self.store.cancel_deliveries_scoped(room, target, reason, false)?
+            };
             self.delivery_entries(&cards);
             self.stop_delivery_turns(&cancelled);
             !cancelled.is_empty()
@@ -245,7 +260,7 @@ impl Hub {
 
     /// 中断通知使用已提交的稳定 ID，接收者只停止匹配的执行或上下文维护。
     pub(super) fn stop_delivery_turns(&self, deliveries: &[Delivery]) {
-        for delivery in deliveries {
+        for delivery in deliveries.iter().filter(|delivery| !delivery.is_host_task()) {
             let _ = self.send_cmd(
                 &delivery.target_bot_id,
                 crate::agent::bot::Cmd::CancelGroup {

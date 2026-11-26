@@ -267,7 +267,7 @@ private fun AppState.chatEntries(bot: Bot) = entries.filter { it.botId == bot.id
         it.isWorking(bot.id)
     } else emptyList()
     val controls = if (state.connection is LinkState.Ready) bot.deliveryControls else emptyList()
-    val held = controls.filter { it.status != "started" }
+    val held = controls.filter { it.executor != "host" && it.status != "started" }
     val active = when {
         state.connection !is LinkState.Ready -> emptyList()
         members.isNotEmpty() -> members.filter { member ->

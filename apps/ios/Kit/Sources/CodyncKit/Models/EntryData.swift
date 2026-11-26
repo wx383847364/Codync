@@ -54,6 +54,7 @@ public struct EntryData: Codable, Hashable, Sendable {
     public var sourceBotId: String?
     public var targetBotId: String?
     /// The bot that wrote it (a group shows who spoke).
+    public var executor: String? = nil
     public var author: String?
     /// user: the message it replies to, as the computer quoted it.
     public var replyTo: ReplyQuote?
@@ -237,6 +238,7 @@ public struct Mention: Codable, Hashable, Sendable {
 /// 同一来源事件和 attempt 卡片内的一个目标，名字由客户端当前成员列表呈现。
 public struct DeliveryRow: Codable, Hashable, Sendable {
     public var deliveryId: String
+    public var executor: String? = nil
     public var targetBotId: String
     public var status: String
     public var detail: String

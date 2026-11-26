@@ -255,12 +255,12 @@ fun editMentions(before: String, after: String, mentions: List<Mention>, replace
 
 /** Host 提供的单任务状态和当前可操作的回合。 */
 @Serializable
-data class GroupDeliveryControl(val deliveryId: String, val targetBotId: String, val startedAt: Long, val status: String, val preview: String)
+data class GroupDeliveryControl(val deliveryId: String, val targetBotId: String, val startedAt: Long, val status: String, val preview: String, val executor: String? = null)
 
 /** 聚合卡内的目标行，当前显示名从成员列表读取。 */
 @Serializable
 data class DeliveryRow(val deliveryId: String, val targetBotId: String, val status: String, val detail: String = "",
-    val groupHandoff: GroupHandoff? = null, val canGuide: Boolean = false,
+    val groupHandoff: GroupHandoff? = null, val canGuide: Boolean = false, val executor: String? = null,
     val startedAt: Long? = null, val resultId: String? = null, val activity: List<Activity>? = null) {
     /** Host 提供公开的工具类别及时间，客户端不解析工具内容。 */
     @Serializable data class Activity(val id: String, val label: String, val at: Long, val status: String)

@@ -106,7 +106,11 @@ pub(super) fn held_deliveries(out: &mut Built, app: &App, bot: &Bot, width: usiz
     gap(out);
     for task in bot.delivery_controls.iter().filter(|task| task.status != "started") {
         let action = app.can_toggle_delivery(bot, task);
-        let name = app.author_name(Some(&task.target_bot_id));
+        let name = if task.executor.as_deref() == Some("host") {
+            "Host".into()
+        } else {
+            app.author_name(Some(&task.target_bot_id))
+        };
         let status = tr(if task.status == "paused" { "Paused" } else { "Continuing…" });
         let text = format!(" {name} · {status} · {}", task.preview);
         let label = Span::styled(truncate(&text, width.saturating_sub(if action { 16 } else { 0 })), t.secondary);
@@ -145,7 +149,11 @@ pub(super) fn delivery_controls(buf: &mut Buffer, area: Rect, app: &App, tasks: 
     let inner = frame_box(buf, frame, t.text, t.panel, Some(("Group tasks", t.text)));
     let rows = usize::from(inner.height.saturating_sub(1));
     for (line, (index, task)) in tasks.iter().enumerate().skip(window(cursor, rows)).take(rows).enumerate() {
-        let name = app.author_name(Some(&task.target_bot_id));
+        let name = if task.executor.as_deref() == Some("host") {
+            "Host".into()
+        } else {
+            app.author_name(Some(&task.target_bot_id))
+        };
         let action = tr(if task.status == "started" { "Pause" } else { "Continue" });
         let mark = if index == cursor { ">" } else { " " };
         let label = format!("{mark} {action} {name} · {}", task.preview);

@@ -6,6 +6,7 @@ import Foundation
 public struct GroupDeliveryControl: Codable, Hashable, Identifiable, Sendable {
     public let deliveryId: String
     public let targetBotId: String
+    public var executor: String? = nil
     public let startedAt: Int64
     public let status: String
     public let preview: String

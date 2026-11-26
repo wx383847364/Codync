@@ -155,7 +155,7 @@ internal fun chatItems(entries: List<Entry>, pending: List<PendingSend>, busy: B
         }
         "agent" -> Column(Modifier.fillMaxWidth().padding(top = if (groupStart) 12.dp else 4.dp).animateContentSize(Motion.layoutSize),
             verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            if (group && groupStart) AuthorLabel(entry.data.text("author"), state, handoffPending = handoffPending, contextLabel = groupContextLabel, inspectContext = inspectContext,
+            if (group && groupStart) AuthorLabel(entry.data.text("author").takeUnless { entry.data.text("executor") == "host" }, state, name = "Host".takeIf { entry.data.text("executor") == "host" }, handoffPending = handoffPending, contextLabel = groupContextLabel, inspectContext = inspectContext,
                 contextModel = contextModel, contextReasoning = contextReasoning,
                 contextRecommended = contextRecommended, contextWaiting = contextWaiting, newSession = newSession)
             AgentBubble(entry, state, store, openTrace, reply, openArtifact, saveSharedFile)

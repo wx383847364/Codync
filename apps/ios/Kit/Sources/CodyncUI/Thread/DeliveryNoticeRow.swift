@@ -79,11 +79,11 @@ struct DeliveryNoticeRow: View {
                     // 明确选择一个成员；其他成员的投递状态由 host 独立更新。
                     VStack(alignment: .leading, spacing: 5) {
                         HStack(spacing: 8) {
-                        Text("\(model.bots[row.targetBotId]?.name ?? "已移除成员")：\(row.statusText)" + (row.detail.isEmpty ? "" : " · \(row.detail)"))
+                        Text("\(row.executor == "host" ? L10n.tr("Host execution") : model.bots[row.targetBotId]?.name ?? "已移除成员")：\(row.statusText)" + (row.detail.isEmpty ? "" : " · \(row.detail)"))
                             .font(.footnote).foregroundStyle(Palette.secondary)
                         if let id = activeId(row) {
                             Button("引导") { model.guideDelivery(row.deliveryId, activeId: id) }.buttonStyle(.secondary)
-                        } else if ["failed", "interrupted", "noReply"].contains(row.status) {
+                        } else if row.executor != "host", ["failed", "interrupted", "noReply"].contains(row.status) {
                             Button("重新尝试") { model.retryDelivery(row.deliveryId) }.buttonStyle(.secondary)
                         }
                     }
@@ -91,7 +91,7 @@ struct DeliveryNoticeRow: View {
                     }
                 }
             } label: {
-                Text(summary).font(.footnote).foregroundStyle(Palette.secondary).lineLimit(1)
+                Text(rows.contains { $0.executor == "host" } ? "\(L10n.tr("Host execution")) · \(summary)" : summary).font(.footnote).foregroundStyle(Palette.secondary).lineLimit(1)
             }
             if !expanded, let (deliveryId, activeId) = eligible.first {
                 Button(eligible.count == 1 ? "引导" : "引导…") {

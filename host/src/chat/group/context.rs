@@ -150,8 +150,11 @@ fn render_entry(hub: &Hub, s: &Snapshot, me: &BotConfig, e: &Entry, title: &str)
     let who = author(s, e);
     let raw = e.data["text"].as_str().unwrap_or_default();
     let attachments = e.data["attachments"].as_array().map_or(&[][..], Vec::as_slice);
-    let rendered =
-        crate::chat::prompt::of_message(&hub.store, &me.skills, &crate::chat::uploads::root(&s.room), &e.data);
+    let rendered = if e.data["executor"] == "host" && s.delivery.source_entry_id.as_deref() != Some(e.id.as_str()) {
+        excerpt(raw.lines().next().unwrap_or("Host task result"), 96, 384)
+    } else {
+        crate::chat::prompt::of_message(&hub.store, &me.skills, &crate::chat::uploads::root(&s.room), &e.data)
+    };
     let marker = if s.delivery.source_entry_id.as_deref() == Some(e.id.as_str()) {
         "Request (complete original):\n"
     } else {
@@ -161,7 +164,7 @@ fn render_entry(hub: &Hub, s: &Snapshot, me: &BotConfig, e: &Entry, title: &str)
     let quote = if quote.is_empty() { String::new() } else { format!("{quote} ") };
     let mut text =
         format!("{title}; entryId={}, seq={}, role={}\n{marker}{who}: {quote}{rendered}", e.id, e.seq, e.kind);
-    if !rendered.contains(raw) {
+    if e.data["executor"] != "host" && !rendered.contains(raw) {
         let _ = write!(text, "\nExact original text:\n{raw}");
     }
     if !e.data["replyTo"].is_null() {
@@ -224,7 +227,11 @@ fn background(s: &Snapshot, protected: &HashSet<String>) -> (String, Vec<String>
             author(s, e)
         );
         let raw = e.data["text"].as_str().unwrap_or_default();
-        let excerpt = excerpt(raw, 384, 1_536);
+        let excerpt = if e.data["executor"] == "host" {
+            excerpt(raw.lines().next().unwrap_or_default(), 96, 384)
+        } else {
+            excerpt(raw, 384, 1_536)
+        };
         let candidate = format!("{text}{prefix}{excerpt}");
         if estimate(&candidate) > BACKGROUND_TOKENS || candidate.len() > BACKGROUND_BYTES {
             continue;
@@ -257,6 +264,9 @@ pub(super) fn excerpt(text: &str, tokens: usize, bytes: usize) -> String {
 
 /// 作者仅从本群配置取名，不能向群背景注入成员私聊或其他群内容。
 fn author(s: &Snapshot, e: &Entry) -> String {
+    if e.data["executor"] == "host" {
+        return "Host".into();
+    }
     if e.kind == "user" {
         return "User".into();
     }

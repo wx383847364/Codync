@@ -114,6 +114,8 @@ pub struct App {
     pub slash_pick: (String, usize),
     pub(super) workspace_file_search: bool,
     workspace_search: Option<slash::WorkspaceSearch>,
+    pub(in crate::tui) group_local_tasks: bool,
+    host_task_menu: Option<slash::HostTaskMenu>,
     /// Files dropped on the composer (pasted paths), per draft like the text.
     pub files: HashMap<String, Vec<std::path::PathBuf>>,
     /// What was pasted into each draft, sent along so memory never takes it as the user's own words.
@@ -232,6 +234,8 @@ impl App {
             slash_pick: (String::new(), 0),
             workspace_file_search: false,
             workspace_search: None,
+            group_local_tasks: false,
+            host_task_menu: None,
             files: HashMap::new(),
             pasted: HashMap::new(),
             sends: HashMap::new(),

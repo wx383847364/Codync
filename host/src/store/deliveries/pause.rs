@@ -18,6 +18,7 @@ pub(crate) struct DeliveryControl {
     pub started_at: i64,
     pub status: String,
     pub preview: String,
+    pub executor: Option<String>,
 }
 
 impl Delivery {
@@ -100,7 +101,7 @@ impl Store {
             delivery.status = Status::Paused;
         } else {
             ensure!(!super::super::bots::stage_closed(&tx, room)?, "Restore or reopen the stage to send work.");
-            ensure!(eligible(&tx, room, &delivery.target_bot_id, delivery.source_bot_id.as_deref())?, "成员已不在群内");
+            ensure!(super::delivery_eligible(&tx, &delivery)?, "任务的群聊已不可用");
             // 保留上次的开始时间，调度器用它辨别继续的任务，新回合开始时会更新该时间。
             tx.execute("UPDATE deliveries SET status='queued',claimed_at=NULL,last_error=NULL WHERE id=?1", [id])?;
             delivery.status = Status::Queued;
@@ -118,7 +119,7 @@ impl Store {
         let mut query = db.prepare(
             "SELECT d.id,d.target_bot_id,d.started_at,
                 CASE d.status WHEN 'started' THEN 'started' WHEN 'paused' THEN 'paused' ELSE 'resuming' END,
-                substr(COALESCE(d.body,json_extract(e.data,'$.text'),''),1,160)
+                substr(COALESCE(d.body,json_extract(e.data,'$.text'),''),1,160), d.source_kind
              FROM deliveries d LEFT JOIN entries e ON e.id=d.source_entry_id
              WHERE d.room_id=? AND d.started_at IS NOT NULL AND d.status IN ('queued','claimed','started','paused')
              AND (d.status!='started' OR d.claimed_at IS NOT NULL)
@@ -134,6 +135,7 @@ impl Store {
                     started_at: row.get(2)?,
                     status: row.get(3)?,
                     preview,
+                    executor: (row.get_ref(5)?.as_str()? == super::DIRECT).then(|| "host".to_owned()),
                 })
             })?
             .collect::<rusqlite::Result<_>>()?)

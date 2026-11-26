@@ -80,19 +80,19 @@ import kotlinx.serialization.json.*
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         // 展开和收起复用通用动画与可访问性语义。
         Disclosure(expanded, { expanded = !expanded }, Modifier.weight(1f), {
-            Text(summary, style = Type.footnote, color = Palette.secondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(if (rows.any { it.executor == "host" }) tr("Host execution") + " · " + summary else summary, style = Type.footnote, color = Palette.secondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }) {
             Text("第 ${entry.data["deliveryAttempt"]?.jsonPrimitive?.intOrNull ?: 1} 次投递" + (if (entry.data.text("parentDeliveryId") != null) " · 重试投递" else ""), style = Type.footnote, color = Palette.secondary)
             for (row in rows) Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("${state.bots.firstOrNull { it.id == row.targetBotId }?.name ?: "已移除成员"}：${row.statusText}" + (if (row.detail.isEmpty()) "" else " · ${row.detail}"),
+                Text("${if (row.executor == "host") tr("Host execution") else state.bots.firstOrNull { it.id == row.targetBotId }?.name ?: "已移除成员"}：${row.statusText}" + (if (row.detail.isEmpty()) "" else " · ${row.detail}"),
                     modifier = Modifier.weight(1f), style = Type.footnote, color = Palette.secondary)
                 val id = activeId(row)
                 if (id != null) {
                     // 每个操作只引导该行对应的成员。
                     SecondaryButton("引导", enabled = "guide:" + row.deliveryId !in state.busy,
                         action = { store.guideDelivery(row.deliveryId, id) })
-                } else if (row.status in listOf("failed", "interrupted", "noReply")) {
+                } else if (row.executor != "host" && row.status in listOf("failed", "interrupted", "noReply")) {
                     SecondaryButton("重新尝试", action = { store.command("retryDelivery", body("deliveryId" to row.deliveryId)) })
                 }
                 }
