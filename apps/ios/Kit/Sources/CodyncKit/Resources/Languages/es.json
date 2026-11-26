@@ -1,4 +1,7 @@
 {
+  "Host execution": "Ejecución en el host",
+  "No registered tasks": "No hay tareas registradas",
+  "Run task": "Ejecutar tarea",
   "Repair and request access again": "Reparar y volver a solicitar acceso",
   "Path copied for {app}. Click +, then press ⌘⇧G and paste the path.": "Ruta de {app} copiada. Haz clic en +, pulsa ⌘⇧G y pega la ruta.",
   "If macOS names the screen helper, select it instead.": "Si macOS indica el asistente de pantalla, selecciona ese asistente.",

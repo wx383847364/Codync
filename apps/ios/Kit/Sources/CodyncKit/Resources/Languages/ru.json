@@ -1,4 +1,7 @@
 {
+  "Host execution": "Выполнение на хосте",
+  "No registered tasks": "Нет зарегистрированных задач",
+  "Run task": "Запустить задачу",
   "Repair and request access again": "Исправить и повторно запросить доступ",
   "Path copied for {app}. Click +, then press ⌘⇧G and paste the path.": "Путь к {app} скопирован. Нажмите +, затем ⌘⇧G и вставьте путь.",
   "If macOS names the screen helper, select it instead.": "Если macOS указывает помощник экрана, выберите его.",
