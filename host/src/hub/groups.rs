@@ -175,8 +175,9 @@ impl Hub {
         }
     }
 
-    /// 删除 Host 专属目录；仍被存活 Bot 使用的工作区保存下来。
+    /// 删除该群的本机工具回执和专属目录；仍被存活 Bot 使用的工作区保存下来。
     fn finish_group_purge(&self, key: &str, ids: &[String]) -> Result<()> {
+        crate::mcp::receipts::purge(ids)?;
         for id in ids {
             self.routines.purge_bot(&self.store, id)?;
         }

@@ -57,6 +57,7 @@ const LOCAL_ONLY: &[&str] = &[
     "connectorTarget",
     "connectorRuntime",
     "connectorCall",
+    "toolReceipt",
     // It can point a connector that holds credentials at any program; no app edits connectors yet.
     "updateConnector",
     "claimSign",

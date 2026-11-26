@@ -89,8 +89,12 @@ pub async fn dispatch(hub: &Arc<Hub>, caller: &Caller, method: &str, b: Value) -
         }
     }
     if method == "connectorRuntime" && b["checkOnly"] == true {
-        // 本地代理逐次检查执行窗口，不读取凭据或解锁保险库。
-        return Ok(serde_json::json!({}));
+        // 本地代理逐次检查执行窗口，可同时取得回执归属，不读取凭据或解锁保险库。
+        return Ok(if b["receiptScope"] == true {
+            serde_json::json!({"receiptScope":crate::mcp::receipts::connector_scope(hub, &b)})
+        } else {
+            serde_json::json!({})
+        });
     }
 
     let observed = crate::analytics::observe_call(hub, caller, method, &b);
@@ -107,6 +111,9 @@ pub async fn dispatch(hub: &Arc<Hub>, caller: &Caller, method: &str, b: Value) -
 
 /// 路由已授权请求，图片头部检查沿用 Control 权限和现有文件身份。
 async fn route(hub: &Arc<Hub>, caller: &Caller, method: &str, b: Value) -> Result<Value> {
+    if method == "toolReceipt" {
+        return crate::mcp::receipts::dispatch(hub, b).await;
+    }
     if method == "setIcon" {
         return crate::icons::set(hub, &b).await;
     }

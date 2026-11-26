@@ -162,14 +162,15 @@ impl Actor {
             composio.then_some("composio"),
         ];
         for name in builtin.into_iter().flatten() {
-            let mut server = crate::mcp::acp_server(name, &exe, &[name, "--bot", &self.cfg.id], port);
-            if let Some(group) = self.isolated_group_room()
-                && let Some(env) = server["env"].as_array_mut()
-            {
-                // 会话 A 的桥即使在会话 B 执行时仍存活，也只能请求 A 的操作。
-                env.push(json!({"name":crate::mcp::GROUP_SESSION_ENV,"value":group}));
+            servers.push(crate::mcp::acp_server(name, &exe, &[name, "--bot", &self.cfg.id], port));
+        }
+        if let Some(group) = self.isolated_group_room() {
+            for server in &mut servers {
+                if let Some(env) = server["env"].as_array_mut() {
+                    // 内置工具和连接器都绑定同一独立群，迟到结果不可被其它群读取。
+                    env.push(json!({"name":crate::mcp::GROUP_SESSION_ENV,"value":group}));
+                }
             }
-            servers.push(server);
         }
         Ok(Value::Array(servers))
     }

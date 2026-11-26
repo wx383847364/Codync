@@ -2,7 +2,7 @@
 
 use anyhow::Result;
 use serde_json::{Value, json};
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::mpsc;
 
@@ -10,11 +10,19 @@ use tokio::sync::mpsc;
 pub async fn serve_remote(connector: String, bot: Option<String>, port: u16) -> Result<()> {
     let token = std::fs::read_to_string(crate::service::data_dir().join("token")).unwrap_or_default();
     let remote = Remote { port, token: token.trim().to_owned(), connector, bot };
+    let group = std::env::var(super::GROUP_SESSION_ENV).ok();
+    let bridge =
+        remote.bot.as_deref().map(|bot| super::receipts::Bridge::new(port, &remote.token, bot, group.as_deref()));
+    let pending = Arc::new(super::receipts::Pending::default());
+    let responses = pending.clone();
     // Both transports answer through one writer: the SSE one answers from its own stream.
     let (tx, mut rx) = mpsc::unbounded_channel::<Value>();
+    // 两种传输共用响应出口，分别发出的结果也按原请求 ID 处理。
     let writer = tokio::spawn(async move {
         let mut out = tokio::io::stdout();
-        while let Some(reply) = rx.recv().await {
+        while let Some(mut reply) = rx.recv().await {
+            // 单条结果只有存盘成功才替换；给批量响应设置总预算，避免阻塞后续通知。
+            let _ = tokio::time::timeout(Duration::from_millis(650), responses.shorten(&mut reply)).await;
             let mut line = serde_json::to_vec(&reply)?;
             line.push(b'\n');
             out.write_all(&line).await?;
@@ -30,12 +38,20 @@ pub async fn serve_remote(connector: String, bot: Option<String>, port: u16) -> 
     while let Some(line) = lines.next_line().await? {
         let Ok(msg) = serde_json::from_str::<Value>(&line) else { continue };
         // 批量消息逐项保留 ID；门禁拒绝工作工具时仍允许同批的只读初始化或通知。
-        let (msg, refused) =
-            super::connector_message(msg, &remote.connector, remote.bot.as_deref(), port, &remote.token).await;
+        let (msg, refused, bound) = super::connector_message(
+            msg,
+            &remote.connector,
+            remote.bot.as_deref(),
+            port,
+            &remote.token,
+            bridge.as_ref(),
+        )
+        .await;
         for response in refused {
             tx.send(response)?;
         }
         let Some(msg) = msg else { continue };
+        pending.forward(&msg, bound.as_ref());
         let replies = match &legacy {
             Some(endpoint) => remote.post_legacy(endpoint, &msg).await,
             None => match remote.forward(&msg, &mut session).await {

@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::task::JoinSet;
 
+/// 同时启动工具回执清理，让空闲 Host 也定期回收已过期的本机原文。
 /// Starts the host's background work. Answers the tasks that run the computer's agent CLIs, for [`stop_agent_checks`].
 pub fn start(hub: &Arc<Hub>) -> JoinSet<()> {
     tokio::spawn({
@@ -17,6 +18,7 @@ pub fn start(hub: &Arc<Hub>) -> JoinSet<()> {
     });
     tokio::spawn(registry::refresh_loop());
     tokio::spawn(crate::icons::cleanup_loop(hub.clone()));
+    tokio::spawn(crate::mcp::receipts::sweep_loop());
     tokio::spawn(market::refresh_first_page());
     tokio::spawn(market::automatic_loop(hub.clone()));
     tokio::spawn(voice::refresh_loop(hub.clone()));
