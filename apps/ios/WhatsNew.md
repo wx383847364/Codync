@@ -6,7 +6,7 @@ any left). tools/asc-submit.py reads the released version's section;
 a version without one gets a generic "Bug fixes and improvements" line. Delete old sections.
 -->
 
-## 2.55.0
+## 2.56.0
 
 ### zh-Hant
 - 在群組中辨識由主機直接執行的派工，並從原派工查看結果和下載證據。
