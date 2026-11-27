@@ -67,6 +67,7 @@ pub fn tools() -> Value {
                 },
             },
             "annotations": {"readOnlyHint": true},
+            "_meta": {"anthropic/alwaysLoad": true},
         },
         {
             "name": "message_bot",
@@ -82,6 +83,7 @@ pub fn tools() -> Value {
                 "required": ["botId", "message"],
             },
             "annotations": {"readOnlyHint": false, "idempotentHint": false},
+            "_meta": {"anthropic/alwaysLoad": true},
         },
         replies::tool()
     ])

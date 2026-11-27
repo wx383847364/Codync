@@ -532,6 +532,15 @@ async fn message_turns_have_no_resume_marker_and_restart_expires_both_notices() 
     f.shutdown().await;
 }
 
+/// 只有协作必需工具提前加载，原文读取工具仍保持按需。
+#[test]
+fn only_team_dispatch_tools_are_always_loaded() {
+    for tool in tools().as_array().unwrap() {
+        let always = matches!(tool["name"].as_str(), Some("list_bots" | "message_bot"));
+        assert_eq!(tool["_meta"]["anthropic/alwaysLoad"].as_bool().unwrap_or(false), always);
+    }
+}
+
 #[test]
 fn restart_marks_requests_interrupted_without_replaying_them() {
     let store = Store::open(std::path::Path::new(":memory:")).unwrap();
