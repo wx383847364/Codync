@@ -239,6 +239,7 @@
     "hello.computerId": "string",
     "hello.device": "string",
     "hello.fileImageInfo": "bool",
+    "hello.groupLocalTasks": "bool",
     "hello.groupMemberActivity": "bool",
     "hello.groupMemberPicker": "bool",
     "hello.groupResourceUsage": "bool",
