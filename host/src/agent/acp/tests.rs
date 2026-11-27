@@ -1,5 +1,24 @@
 use super::*;
 
+/// 用独立进程验证关机拒绝启动，不关闭其他测试共用的 ACP 登记表。
+#[tokio::test]
+async fn spawn_is_rejected_after_host_shutdown() {
+    const CHILD: &str = "CODYNC_ACP_SHUTDOWN_TEST_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        let test = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "agent::acp::tests::spawn_is_rejected_after_host_shutdown"])
+            .env(CHILD, "1")
+            .output()
+            .unwrap();
+        assert!(test.status.success(), "{}", String::from_utf8_lossy(&test.stdout));
+        assert!(String::from_utf8_lossy(&test.stdout).contains("1 passed"));
+        return;
+    }
+    stop_all().await;
+    let result = Acp::spawn("exit 0", env!("CARGO_MANIFEST_DIR"), &[]);
+    assert!(matches!(result, Err(error) if error.to_string().contains("the host is stopping")));
+}
+
 async fn descendant_agent() -> (Arc<Acp>, mpsc::UnboundedReceiver<Incoming>) {
     let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/process_agent.py");
     let python = if cfg!(windows) { "python" } else { "python3" };
