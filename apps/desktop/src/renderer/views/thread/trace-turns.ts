@@ -1,9 +1,13 @@
 import type { Entry } from '../../../shared/models.ts'
 
-/** A bot's entries grouped by turn, oldest turn first, each turn's entries in their order. */
+/** 按回合分组并保留组内顺序，逐条追加以避免长回合反复复制已有记录。 */
 export function traceTurns(entries: Entry[]): [number, Entry[]][] {
   const turns = new Map<number, Entry[]>()
-  for (const e of entries) turns.set(e.turn, [...(turns.get(e.turn) ?? []), e])
+  for (const entry of entries) {
+    const turn = turns.get(entry.turn)
+    if (turn) turn.push(entry)
+    else turns.set(entry.turn, [entry])
+  }
   return [...turns.entries()].sort((a, b) => a[0] - b[0])
 }
 
