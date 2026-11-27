@@ -153,18 +153,19 @@ export class ComputerAccess extends Observable {
     } finally { this.busy = null; this.changed() }
   }
 
-  /** 手动添加时先复制当前安装路径，再打开相应的权限页。 */
-  private guideManualPermission(permission: 'capture' | 'input', copyPath: boolean) {
-    const path = copyPath ? this.agent?.permissionPaths?.[permission] : undefined
+  /** 恢复后复制安装路径，并让录屏列表重新加载本次授权请求产生的记录。 */
+  private guideManualPermission(permission: 'capture' | 'input', repair: boolean) {
+    const path = repair ? this.agent?.permissionPaths?.[permission] : undefined
     if (path) {
       window.codync.app.copy(path)
       this.copiedPermission = permission
     }
-    this.openSettings(permission)
+    this.openSettings(permission, repair && permission === 'capture')
   }
 
-  openSettings(permission: keyof typeof computerPermissionSettings) {
-    window.codync.app.openSettings(computerPermissionSettings[permission])
+  /** 打开对应的系统设置页，录屏恢复可以请求重新加载列表。 */
+  openSettings(permission: keyof typeof computerPermissionSettings, reload = false) {
+    window.codync.app.openSettings(computerPermissionSettings[permission], reload)
   }
 }
 

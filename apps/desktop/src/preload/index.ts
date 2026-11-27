@@ -163,7 +163,8 @@ const bridge: CodyncBridge = {
     showInDock: () => ipcRenderer.invoke('app:showInDock'),
     setShowInDock: (on) => ipcRenderer.invoke('app:setShowInDock', on),
     launchAtLogin: () => ipcRenderer.invoke('app:launchAtLogin'),
-    openSettings: (url) => ipcRenderer.send('app:openSettings', url),
+    // 转发设置链接及显式录屏恢复所需的重新加载请求。
+    openSettings: (url, reload) => ipcRenderer.send('app:openSettings', url, reload),
     authenticate: (url, scheme) => ipcRenderer.invoke('app:authenticate', url, scheme),
     // 恢复授权仅清除当前 Mac 助手的一项旧记录。
     resetScreenPermission: (permission) => ipcRenderer.invoke('screen:resetPermission', permission),
