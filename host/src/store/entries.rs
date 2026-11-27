@@ -361,7 +361,7 @@ impl Store {
 
     /// Permission cards left `pending` (and sends left `queued`) by a crash or restart
     /// can never be honored; returns how many were closed out.
-    /// 交接暂停中的用户消息由 actor 恢复，群投递由独立的持久投递逻辑恢复。
+    /// 交接暂停中的消息、群派工和已持久接纳的本机私聊请求各自恢复。
     pub fn expire_pending(&self) -> Result<usize> {
         let ids: Vec<String> = {
             let c = self.db.locked();
@@ -374,7 +374,8 @@ impl Store {
                       AND json_extract(card.data, '$.handoff.status') IN ('draft', 'approved', 'kept')
                   ))
                   OR (kind = 'notice' AND json_extract(data, '$.delegationId') IS NOT NULL
-                      AND json_extract(data, '$.status') IN ('queued', 'sent')))",
+                      AND json_extract(data, '$.status') IN ('queued', 'sent')
+                      AND json_type(data, '$.localBotRequestHops') IS NULL))",
             )?;
             st.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?
         };

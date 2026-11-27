@@ -27,6 +27,13 @@ impl Fixture {
             .unwrap();
             store.save_bot(&cfg).unwrap();
         }
+        let f = Self::open(dir, store);
+        f.sending("a");
+        f
+    }
+
+    /// 启动指定数据库的测试 Host，重启时沿用 Bot、通知和执行器日志。
+    fn open(dir: PathBuf, store: Store) -> Self {
         let hub = Hub::new(
             store,
             "test-host".into(),
@@ -35,9 +42,7 @@ impl Fixture {
             19222,
         );
         hub.start().unwrap();
-        let f = Self { hub, dir };
-        f.sending("a");
-        f
+        Self { hub, dir }
     }
 
     /// `bot` is in a turn of its own, so it may send; its replies start real turns that end this.
@@ -48,6 +53,12 @@ impl Fixture {
 
     fn message(&self, message: &str) -> Result<Value> {
         call(&self.hub, "a", "message_bot", &json!({"botId": "b", "message": message}))
+    }
+
+    /// 从执行器日志判断发送方实际接到了该请求的回音。
+    fn heard(&self, request: &Value) -> bool {
+        let id = request["requestId"].as_str().unwrap();
+        self.prompts_of("a").iter().any(|prompt| prompt.contains(id))
     }
 
     fn notices(&self, request: &Value) -> Vec<crate::store::Entry> {
@@ -116,6 +127,13 @@ impl Fixture {
             .filter(|e| e.kind == "agent" && e.data["final"] == true)
             .map(|e| e.data["text"].as_str().unwrap_or_default().to_owned())
             .collect()
+    }
+
+    /// 优雅关机后从同一数据库启动，覆盖升级时 Host 的实际恢复入口。
+    async fn restart(self) -> Self {
+        self.hub.shutdown().await;
+        let store = Store::open(&self.dir.join("test.db")).unwrap();
+        Self::open(self.dir, store)
     }
 
     pub(super) async fn shutdown(self) {
@@ -289,6 +307,7 @@ async fn failures_reach_the_sender_and_release_capacity() {
     f.shutdown().await;
 }
 
+/// 接收方停止后，已接纳但未执行的两项请求均回传取消。
 #[tokio::test]
 async fn recipient_stop_cancels_queued_messages_before_execution() {
     let f = Fixture::new();
@@ -304,16 +323,17 @@ async fn recipient_stop_cancels_queued_messages_before_execution() {
         assert!(notices.iter().all(|e| e.data["status"] == "cancelled"
             && e.data["text"].as_str().unwrap().ends_with("Cancelled before execution.")));
     }
+    f.until(|| f.heard(&first) && f.heard(&second) && f.idle("a")).await;
+    f.sending("a");
     let later = f.message("new work after Stop").unwrap();
-    f.until(|| f.took("a", 1)).await;
+    f.until(|| f.heard(&later) && f.idle("a")).await;
     assert_eq!(f.prompts().len(), 2);
     assert!(f.prompts()[1].ends_with("\n\nnew work after Stop"));
     assert!(f.notices(&later).iter().all(|e| e.data["status"] == "completed"));
-    // What the user stopped doesn't wake the sender: only the later message's reply did.
-    assert_eq!(f.prompts_of("a").len(), 1);
     f.shutdown().await;
 }
 
+/// 正在执行的请求被取消后通知发送方，其额度可立即复用。
 #[tokio::test]
 async fn recipient_stop_cancels_running_message_and_releases_capacity() {
     let f = Fixture::new();
@@ -323,10 +343,8 @@ async fn recipient_stop_cancels_running_message_and_releases_capacity() {
     f.until(|| f.hub.team.0.locked().messages == 0).await;
     assert!(f.notices(&receipt).iter().all(|e| e.data["status"] == "cancelled"
         && e.data["text"].as_str().unwrap().contains("Partial work may have happened")));
-    // What the user stopped doesn't wake the sender: its only turn is the later message's reply.
-    let later = f.message("later work").unwrap();
-    f.until(|| f.took("a", 1)).await;
-    assert!(f.prompts_of("a")[0].contains(later["requestId"].as_str().unwrap()));
+    f.until(|| f.heard(&receipt) && f.idle("a")).await;
+    assert!(f.prompts_of("a")[0].contains("Recipient stopped"));
     f.shutdown().await;
 }
 
@@ -345,6 +363,7 @@ async fn replies_that_arrive_while_the_sender_works_are_one_turn() {
     f.shutdown().await;
 }
 
+/// Stop 消费此前已等待的回复，重启后仍保留可查终态。
 #[tokio::test]
 async fn stopping_the_sender_drops_the_replies_queued_for_it() {
     let f = Fixture::new();
@@ -356,6 +375,8 @@ async fn stopping_the_sender_drops_the_replies_queued_for_it() {
     f.until(|| f.idle("a")).await;
     // Both notices still show the outcome.
     assert!(f.notices(&receipt).iter().all(|e| e.data["status"] == "completed"));
+    assert_eq!(f.hub.store.pending_local_replies().unwrap().len(), 0);
+    let f = f.restart().await;
     f.send_to("a", "next").await;
     f.until(|| f.took("a", 2)).await;
     assert_eq!(f.prompts_of("a")[1], "next");
@@ -396,6 +417,7 @@ async fn requests_from_several_senders_keep_fifo_and_user_batch_boundaries() {
     f.shutdown().await;
 }
 
+/// 双方通知必须同时写入，接纳失败不留可恢复记录或占用额度。
 #[tokio::test]
 async fn failed_message_admission_never_executes_or_leaks_capacity() {
     let f = Fixture::new();
@@ -410,8 +432,8 @@ async fn failed_message_admission_never_executes_or_leaks_capacity() {
     assert!(result.is_err());
     assert_eq!(f.hub.team.0.locked().messages, 0);
     let history = f.hub.store.history("a", i64::MAX, 100).unwrap();
-    assert_eq!(history.len(), 1);
-    assert_eq!(history[0].data["status"], "cancelled");
+    assert!(history.is_empty());
+    assert!(f.hub.store.pending_local_requests().unwrap().is_empty());
     db.execute_batch("DROP TRIGGER reject_message;").unwrap();
     f.hub.send_cmd("b", Cmd::Shutdown).unwrap();
     f.until(|| f.hub.send_cmd("b", Cmd::RefreshTools).is_err()).await;
@@ -419,7 +441,7 @@ async fn failed_message_admission_never_executes_or_leaks_capacity() {
     assert!(result.is_err());
     assert_eq!(f.hub.team.0.locked().messages, 0);
     assert_eq!(f.prompts().len(), 0);
-    assert!(f.hub.store.history("a", i64::MAX, 100).unwrap().iter().all(|e| e.data["status"] == "cancelled"));
+    assert!(f.hub.store.history("a", i64::MAX, 100).unwrap().is_empty());
     drop(db);
     f.shutdown().await;
 }
@@ -479,6 +501,7 @@ async fn a_member_in_a_room_turn_mentions_instead_of_messaging() {
     f.shutdown().await;
 }
 
+/// 删除发送方保留已接纳工作，删除接收方则结算请求并通知发送方。
 #[tokio::test]
 async fn sender_deletion_preserves_messages_and_recipient_deletion_closes_them() {
     let f = Fixture::new();
@@ -505,31 +528,20 @@ async fn sender_deletion_preserves_messages_and_recipient_deletion_closes_them()
         assert!(f.notices(receipt).iter().all(|e| e.data["status"] == "cancelled"));
     }
     assert_eq!(f.prompts().len(), 1);
-    // Deleting the recipient doesn't wake the sender: its only turn is a later message's reply.
-    let later = call(&f.hub, "a", "message_bot", &json!({"botId": "c", "message": "later work"})).unwrap();
-    f.until(|| f.took("a", 1)).await;
-    assert!(f.prompts_of("a")[0].contains(later["requestId"].as_str().unwrap()));
+    f.until(|| f.heard(&running) && f.heard(&queued) && f.idle("a")).await;
     f.shutdown().await;
 }
 
-#[tokio::test]
-async fn message_turns_have_no_resume_marker_and_restart_expires_both_notices() {
-    let f = Fixture::new();
-    let running = f.message("BLOCK active message").unwrap();
-    f.until(|| f.prompts().len() == 1).await;
-    let queued = f.message("queued message").unwrap();
-    assert!(f.hub.store.kv_get("turn.inflight.b").is_none_or(|v| v.is_empty()));
-    // A new store connection applies the same startup cleanup to the
-    // persisted queued and running notices, without replaying a prompt.
-    let store = Store::open(&f.dir.join("test.db")).unwrap();
-    assert_eq!(store.expire_pending().unwrap(), 4);
-    for receipt in [&running, &queued] {
-        assert!(f.notices(receipt).iter().all(|e| e.data["status"] == "failed"
-            && e.data["text"].as_str().unwrap().contains("Interrupted by host restart")));
+#[path = "recovery_tests.rs"]
+mod recovery;
+
+/// 只有协作必需工具提前加载，原文读取工具仍保持按需。
+#[test]
+fn only_team_dispatch_tools_are_always_loaded() {
+    for tool in tools().as_array().unwrap() {
+        let always = matches!(tool["name"].as_str(), Some("list_bots" | "message_bot"));
+        assert_eq!(tool["_meta"]["anthropic/alwaysLoad"].as_bool().unwrap_or(false), always);
     }
-    assert_eq!(f.prompts().len(), 1);
-    drop(store);
-    f.shutdown().await;
 }
 
 #[test]

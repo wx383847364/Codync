@@ -149,8 +149,19 @@ pub(super) fn finish_entry(
     reply: Option<&str>,
     source: Option<&ReplySource>,
 ) {
-    let Some(mut entry) = hub.store.entry(id) else { return };
-    if let Some(message) = entry.data.get_mut("botMessage").and_then(Value::as_object_mut) {
+    let Some(entry) = hub.store.entry(id) else { return };
+    hub.set_entry(id, &finished_data(entry.data, status, detail, reply, source));
+}
+
+/// 构造终态通知，供单条通知和本机双边事务共用。
+pub(super) fn finished_data(
+    mut data: Value,
+    status: RequestStatus,
+    detail: &str,
+    reply: Option<&str>,
+    source: Option<&ReplySource>,
+) -> Value {
+    if let Some(message) = data.get_mut("botMessage").and_then(Value::as_object_mut) {
         if let Some(reply) = reply {
             message.insert("reply".into(), reply.into());
         }
@@ -161,13 +172,13 @@ pub(super) fn finish_entry(
             message.insert("detail".into(), detail.into());
         }
     }
-    entry.data["status"] = json!(status);
-    let heading = entry.data["heading"].as_str().unwrap_or("Bot request");
-    entry.data["text"] = format!("{heading}\n{detail}").into();
+    data["status"] = json!(status);
+    let heading = data["heading"].as_str().unwrap_or("Bot request");
+    data["text"] = format!("{heading}\n{detail}").into();
     if !matches!(status, RequestStatus::Completed) {
-        entry.data["style"] = "error".into();
+        data["style"] = "error".into();
     }
-    hub.set_entry(id, &entry.data);
+    data
 }
 
 /// 工具参数不包含聊天身份或路径；字面检索和批量范围减少模型往返，字符预算不变。

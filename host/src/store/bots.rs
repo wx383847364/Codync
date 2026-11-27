@@ -58,6 +58,7 @@ fn delete_bot_on(c: &Connection, id: &str) -> Result<(i64, Vec<super::deliveries
     // 删除标记与取消持久投递同事务提交，封住取消后再次入队的窗口。
     c.execute("UPDATE bots SET rev = ?2, deleted = 1, session_id = NULL WHERE id = ?1", params![id, rev])?;
     let (cancelled, cards) = super::deliveries::cancel_for_deletion(c, id)?;
+    super::team::delete_local_replies_for_bot(c, id)?;
     c.execute("DELETE FROM entries WHERE bot_id = ?1", [id])?;
     delete_bot_resources_on(c, id)?;
     Ok((rev, cancelled, cards))

@@ -26,7 +26,13 @@ const EXIT_GRACE: Duration = Duration::from_secs(10);
 /// Agents [`Acp::kill`] is still stopping, for the host to wait for before it exits.
 static STOPPING: std::sync::Mutex<Vec<tokio::task::JoinHandle<()>>> = std::sync::Mutex::new(Vec::new());
 /// Every agent started, for the host to stop whichever are left before it exits.
-static STARTED: std::sync::Mutex<Vec<Weak<Acp>>> = std::sync::Mutex::new(Vec::new());
+static STARTED: std::sync::Mutex<Started> = std::sync::Mutex::new(Started { closed: false, agents: Vec::new() });
+
+/// 关机关闭登记表后，尚未启动的 ACP 子进程不得再接纳。
+struct Started {
+    closed: bool,
+    agents: Vec<Weak<Acp>>,
+}
 
 pub enum Incoming {
     Notification { method: String, params: Value },
@@ -185,6 +191,7 @@ pub struct Acp {
 impl Acp {
     /// Spawns `command` through the shell so user-provided commands (npx, env vars) just work.
     /// `env` stays out of the command line (it can hold API keys).
+    /// 启动并登记 ACP 进程，确保关机清理能看到所有已接纳进程。
     pub fn spawn(
         command: &str,
         cwd: &str,
@@ -200,6 +207,9 @@ impl Acp {
             .kill_on_drop(true);
         // So `kill` can stop everything it started.
         super::process::own_tree(&mut process);
+        // 持锁到进程完成登记，关机不会在启动和登记之间取走列表。
+        let mut started = STARTED.locked();
+        anyhow::ensure!(!started.closed, "the host is stopping");
         let mut child = process.spawn().with_context(|| format!("starting `{command}`"))?;
         let stdin = child.stdin.take().expect("stdin is piped");
         let stdout = child.stdout.take().expect("stdout is piped");
@@ -275,7 +285,8 @@ impl Acp {
             #[cfg(unix)]
             pid,
         });
-        note_started(&acp);
+        started.agents.retain(|agent| agent.strong_count() > 0);
+        started.agents.push(Arc::downgrade(&acp));
         Ok((acp, rx))
     }
 
@@ -351,18 +362,16 @@ pub async fn stopped() {
     futures::future::join_all(tasks).await;
 }
 
-/// Stops every agent left and waits for them, before the host exits: `process::exit` drops no process, and Cursor's agent
-/// outlives its closed stdin. The bots stop their own, so this is for a sign-in check or a model list still under way.
+/// 永久关闭新进程登记，在 Host 退出前等待剩余 ACP 进程结束。
 pub async fn stop_all() {
-    let started: Vec<_> = std::mem::take(&mut *STARTED.locked()).iter().filter_map(Weak::upgrade).collect();
+    let started = {
+        let mut state = STARTED.locked();
+        state.closed = true;
+        std::mem::take(&mut state.agents)
+    };
+    let started: Vec<_> = started.iter().filter_map(Weak::upgrade).collect();
     futures::future::join_all(started.iter().map(|acp| acp.kill())).await;
     stopped().await;
-}
-
-fn note_started(acp: &Arc<Acp>) {
-    let mut started = STARTED.locked();
-    started.retain(|acp| acp.strong_count() > 0);
-    started.push(Arc::downgrade(acp));
 }
 
 /// The result for a `session/request_permission`: the option picked, or `cancelled` without one.

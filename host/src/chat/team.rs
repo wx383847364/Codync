@@ -16,9 +16,12 @@ use std::sync::Arc;
 
 pub mod assistant;
 mod directory;
+mod private;
 pub mod remote;
 mod replies;
 mod requests;
+use private::message_bot;
+pub(crate) use private::restore;
 pub use requests::{Requests, Turn};
 
 const MAX_MESSAGE_BYTES: usize = 32_000;
@@ -67,10 +70,11 @@ pub fn tools() -> Value {
                 },
             },
             "annotations": {"readOnlyHint": true},
+            "_meta": {"anthropic/alwaysLoad": true},
         },
         {
             "name": "message_bot",
-            "description": "Send a self-contained task and return when queued. In group turns, target another current member by botId; the result stays in the source group, never your private chat. Group Stop or member removal cancels related unfinished deliveries. An optional group idempotencyKey reuses the original request only for identical text, scoped to sender, source group and target; changed text conflicts. Outside groups the recipient's reply comes back later as a new turn in your own chat, with busy replies taken together; stopping the sender does not cancel accepted private requests. Do not wait or poll. No automatic replay of uncertain execution after restart; check effects before manually retrying.",
+            "description": "Send a self-contained task and return when queued. In group turns, target another current member by botId; the result stays in the source group, never your private chat. Group Stop or member removal cancels related unfinished deliveries. An optional group idempotencyKey reuses the original request only for identical text, scoped to sender, source group and target; changed text conflicts. Outside groups the recipient's reply comes back later as a new turn in your own chat, with busy replies taken together; stopping the sender does not cancel accepted private requests. A cancellation is delivered as an outcome. After restart, only accepted local requests known not to have started resume waiting. Do not wait or poll. Check effects before retrying uncertain work.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -82,6 +86,7 @@ pub fn tools() -> Value {
                 "required": ["botId", "message"],
             },
             "annotations": {"readOnlyHint": false, "idempotentHint": false},
+            "_meta": {"anthropic/alwaysLoad": true},
         },
         replies::tool()
     ])
@@ -92,8 +97,6 @@ pub fn tools() -> Value {
 pub struct BotRequest {
     pub entry_id: String,
     pub prompt: String,
-    /// The chain's handoffs so far; the reply carries them into the sender's turn, so the chain stays bounded.
-    hops: u8,
     lifetime: MessageLifetime,
 }
 
@@ -103,62 +106,58 @@ impl BotRequest {
         &self.lifetime.request_id
     }
 
-    pub fn mark_started(&mut self) {
-        self.lifetime.start();
+    /// 持久记录已开始后才允许发送接收方的 prompt。
+    pub fn mark_started(&mut self) -> Result<()> {
+        if self.lifetime.started { Ok(()) } else { self.lifetime.start() }
     }
 
-    /// 结束请求并保存精确回复关联；取消不唤醒请求方，回复沿用现有正文传递上限。
+    /// 按执行结果收尾；用户取消回给请求方，关机保留待恢复状态。
     pub fn complete(mut self, result: Result<String>, cancelled: bool, entry: Option<&crate::store::Entry>) {
         let message = &mut self.lifetime;
         if cancelled {
-            message.finish(RequestStatus::Cancelled, "Recipient stopped. Partial work may have happened.", None);
-            message.back.cancelled(&message.hub, self.hops);
+            message.cancel("Recipient stopped. Partial work may have happened.");
             return;
         }
-        let outcome = match result {
+        match result {
             Ok(text) => {
                 let reply = truncate(&text, NOTICE_REPLY_BYTES);
                 let detail = format!("Reply from {}:\n{reply}", message.target_name);
                 let source =
                     entry.filter(|e| e.data["text"].as_str() == Some(text.as_str())).map(replies::ReplySource::new);
-                message.finish_with_source(RequestStatus::Completed, &detail, Some(&reply), source.as_ref());
-                // 实测分页取回增加总开销并出现验收失败，撤回自动预览但保留按需取回。
-                Ok(truncate(&text, MAX_MESSAGE_BYTES))
+                message.end(
+                    RequestStatus::Completed,
+                    &detail,
+                    Some(&reply),
+                    source.as_ref(),
+                    Ok(truncate(&text, MAX_MESSAGE_BYTES)),
+                );
             }
             Err(error) => {
                 let detail = format!("{error:#}");
-                message.finish(RequestStatus::Failed, &detail, None);
-                Err(detail)
+                message.end(RequestStatus::Failed, &detail, None, None, Err(detail.clone()));
             }
-        };
-        match &message.back {
-            Back::Local { sender } => {
-                let reply = BotReply {
-                    request_id: message.request_id.clone(),
-                    quote: message.quote.clone(),
-                    from_name: message.target_name.clone(),
-                    outcome,
-                    hops: self.hops,
-                };
-                // A deleted sender has no chat to take the reply; its notice already shows it.
-                let _ = message.hub.send_cmd(sender, Cmd::BotReply(reply));
-            }
-            Back::Remote(to) => remote::answer(&message.hub, to, &outcome, self.hops),
-            Back::Assistant { request } => message.hub.assistant.answered(request, outcome),
         }
     }
 }
 
 /// What a recipient's turn came to, on its way back to the bot that sent the request.
+#[derive(Serialize, Deserialize)]
 pub struct BotReply {
     request_id: String,
     quote: String,
     from_name: String,
     outcome: std::result::Result<String, String>,
     hops: u8,
+    /// 本机待转述回复的发送方通知 ID。
+    pending_entry: Option<String>,
 }
 
 impl BotReply {
+    /// 取出本机待送记录的归属，跨机回复没有本机持久记录。
+    pub(crate) fn pending_entry(self) -> Option<String> {
+        self.pending_entry
+    }
+
     /// 返回本回合回复关联，用于记录主脑共享开销。
     pub fn request_id(&self) -> &str {
         &self.request_id
@@ -206,18 +205,6 @@ enum Back {
     Assistant { request: String },
 }
 
-impl Back {
-    /// The user stopped the recipient: a local sender's notice already shows it, and a remote one
-    /// or the cloud assistant hears so, without a reply turn.
-    fn cancelled(&self, hub: &Arc<Hub>, hops: u8) {
-        match self {
-            Self::Local { .. } => {}
-            Self::Remote(to) => remote::cancelled(hub, to, hops),
-            Self::Assistant { request } => hub.assistant.cancelled(request),
-        }
-    }
-}
-
 /// Owned by the recipient's command/queue/turn after admission, never by the sender.
 /// Drop also covers commands discarded during actor shutdown.
 struct MessageLifetime {
@@ -229,12 +216,13 @@ struct MessageLifetime {
     /// The exchange notices on this computer: the sender's (when local), then the recipient's.
     entries: Vec<String>,
     target_name: String,
+    hops: u8,
     started: bool,
     finished: bool,
 }
 
 impl MessageLifetime {
-    /// A request's lifetime before its notices: dropped early, it ends the ones saved by then.
+    /// 创建请求生命周期，链深由实际投递填入。
     fn new(hub: &Arc<Hub>, request_id: &str, message: &str, back: Back, target_name: &str) -> Self {
         Self {
             hub: hub.clone(),
@@ -243,20 +231,27 @@ impl MessageLifetime {
             back,
             entries: vec![],
             target_name: target_name.to_owned(),
+            hops: 0,
             started: false,
             finished: false,
         }
     }
 
-    /// Hands the request to `target`'s actor, which owns this lifetime from then on. The last
-    /// notice is the recipient's.
-    fn deliver(self, target: &str, hops: u8, prompt: String) -> Result<()> {
+    /// 把请求移交给接收方 actor，并保存取消或恢复时沿用的链深。
+    fn deliver(mut self, target: &str, hops: u8, prompt: String) -> Result<()> {
+        self.hops = hops;
         let hub = self.hub.clone();
         let entry_id = self.entries.last().cloned().unwrap_or_default();
-        hub.send_cmd(target, Cmd::BotRequest(BotRequest { entry_id, prompt, hops, lifetime: self }))
+        hub.send_cmd(target, Cmd::BotRequest(BotRequest { entry_id, prompt, lifetime: self }))
     }
 
-    fn start(&mut self) {
+    /// 本机请求先提交开始状态；远端和云助手沿用原有通知。
+    fn start(&mut self) -> Result<()> {
+        if matches!(self.back, Back::Local { .. }) {
+            private::start(self)?;
+            self.started = true;
+            return Ok(());
+        }
         self.started = true;
         if let Back::Assistant { request } = &self.back {
             self.hub.assistant.started(request);
@@ -269,25 +264,44 @@ impl MessageLifetime {
                 self.hub.set_entry(id, &e.data);
             }
         }
+        Ok(())
     }
 
-    /// 沿用既有结束语义；没有回复正文关联时只保存执行状态与通知摘要。
-    fn finish(&mut self, status: RequestStatus, detail: &str, reply: Option<&str>) {
-        self.finish_with_source(status, detail, reply, None);
-    }
-
-    /// 将完成状态和全文关联写入同一通知更新，不改变原有回复传递方式。
-    fn finish_with_source(
+    /// 终态和待送回复由本机事务保存，其他发送方沿用各自回复通道。
+    fn end(
         &mut self,
         status: RequestStatus,
         detail: &str,
         reply: Option<&str>,
         source: Option<&replies::ReplySource>,
+        outcome: Result<String, String>,
     ) {
+        self.finished = true;
+        if let Back::Local { sender } = &self.back {
+            if !self.entries.is_empty() {
+                private::finish(self, sender, status, detail, reply, source, outcome);
+            }
+            return;
+        }
         for id in &self.entries {
             replies::finish_entry(&self.hub, id, status, detail, reply, source);
         }
-        self.finished = true;
+        match &self.back {
+            Back::Remote(to) if status == RequestStatus::Cancelled => remote::cancelled(&self.hub, to, self.hops),
+            Back::Remote(to) => remote::answer(&self.hub, to, &outcome, self.hops),
+            Back::Assistant { request } if status == RequestStatus::Cancelled => self.hub.assistant.cancelled(request),
+            Back::Assistant { request } => self.hub.assistant.answered(request, outcome),
+            Back::Local { .. } => unreachable!(),
+        }
+    }
+
+    /// 关机保留本机请求供下次启动结算，显式取消仍立即结束。
+    fn cancel(&mut self, detail: &str) {
+        if self.hub.routines.stopping() && matches!(self.back, Back::Local { .. }) {
+            self.finished = true;
+            return;
+        }
+        self.end(RequestStatus::Cancelled, detail, None, None, Err(detail.to_owned()));
     }
 }
 
@@ -297,6 +311,7 @@ fn finish_entry(hub: &Hub, id: &str, status: RequestStatus, detail: &str, reply:
 }
 
 impl Drop for MessageLifetime {
+    /// 处理队列丢弃和 actor 退出，并释放发送者的额度。
     fn drop(&mut self) {
         if !self.finished {
             let detail = if self.started {
@@ -304,8 +319,7 @@ impl Drop for MessageLifetime {
             } else {
                 "Cancelled before execution."
             };
-            self.finish(RequestStatus::Cancelled, detail, None);
-            self.back.cancelled(&self.hub, 0);
+            self.cancel(detail);
         }
         if let Back::Local { sender } = &self.back {
             self.hub.team.release_message(sender);
@@ -325,17 +339,22 @@ struct Exchange<'a> {
 }
 
 impl Exchange<'_> {
-    /// Saves its notice in `bot`'s chat, waiting for the reply; the recipient's opens its next turn.
-    fn notice(&self, hub: &Hub, bot: &str, heading: &str, recipient: bool) -> Result<String> {
+    /// 构造双方共用的等待通知。
+    fn notice_data(&self, heading: &str) -> Value {
         let mut message = json!({"sourceBotId": self.source, "targetBotId": self.target, "text": self.text});
         if let Some(peer) = self.peer_name {
             message["peerName"] = peer.into();
         }
-        let data = json!({
+        json!({
             "text": format!("{heading}\nWaiting for a reply…"),
             "heading": heading, "style": "info", "status": RequestStatus::Queued, "delegationId": self.request,
             "sourceBotId": self.source, "targetBotId": self.target, "botMessage": message,
-        });
+        })
+    }
+
+    /// 保存单边通知供远端和云助手使用。
+    fn notice(&self, hub: &Hub, bot: &str, heading: &str, recipient: bool) -> Result<String> {
+        let data = self.notice_data(heading);
         let turn = hub.store.max_turn(bot) + i64::from(recipient);
         let entry = hub.add_entry(&Lane::main(bot), EntryKind::Notice, turn, &data);
         entry.map(|e| e.id).ok_or_else(|| anyhow!("couldn't save bot message"))
@@ -478,29 +497,6 @@ fn check_request(hub: &Hub, source: &BotConfig, message: &str) -> Result<()> {
         bail!("message_bot isn't available in a group chat: @-mention the room's members instead");
     }
     Ok(())
-}
-
-fn message_bot(hub: &Arc<Hub>, source: &BotConfig, to: &str, message: &str) -> Result<Value> {
-    check_request(hub, source, message)?;
-    if source.id == to {
-        bail!("a bot cannot message itself");
-    }
-    let target = visible_bot(hub, to)?;
-    let hops = hub.team.reserve_message(&source.id)?;
-    let id = uuid::Uuid::new_v4().to_string();
-    // From here on the lifetime gives the reservation back, also when a notice can't be saved.
-    let mut lifetime = MessageLifetime::new(hub, &id, message, Back::Local { sender: source.id.clone() }, &target.name);
-    let exchange = Exchange { request: &id, source: &source.id, target: &target.id, text: message, peer_name: None };
-    let (asked, from) =
-        (format!("Messaged {}: {message}", target.name), format!("Message from {}: {message}", source.name));
-    lifetime.entries.push(exchange.notice(hub, &source.id, &asked, false)?);
-    lifetime.entries.push(exchange.notice(hub, &target.id, &from, true)?);
-    let who = format!("Another Codync bot, {},", source.name);
-    lifetime.deliver(&target.id, hops, request_prompt(&who, &source.name, message))?;
-    Ok(json!({
-        "requestId": id, "botId": target.id, "name": target.name, "status": RequestStatus::Queued,
-        "note": "Queued. The reply comes back to you as a new turn in your chat: don't wait or poll for it.",
-    }))
 }
 
 #[cfg(test)]
