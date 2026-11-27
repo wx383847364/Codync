@@ -278,7 +278,7 @@ export interface CodyncBridge {
     showInDock(): Promise<boolean>
     setShowInDock(on: boolean): Promise<boolean>
     launchAtLogin(): Promise<boolean>
-    openSettings(url: string): void
+    openSettings(url: string, reload?: boolean): void
     /**
      * Opens `url` in the system browser and resolves with the URL it returns to on `scheme`
      * (`codync://…`), like ASWebAuthenticationSession. Rejects when cancelled or timed out.

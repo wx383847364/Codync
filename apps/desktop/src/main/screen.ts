@@ -2,10 +2,10 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { existsSync, statSync } from 'node:fs'
 import { join } from 'node:path'
-import { app, ipcMain } from 'electron'
+import { app, ipcMain, shell } from 'electron'
 import { prefs } from './host-controller'
 import { identity } from './environment'
-import { shouldSyncScreenAgent } from '../shared/computer-access'
+import { computerPermissionSettings, shouldSyncScreenAgent } from '../shared/computer-access'
 
 // Codync Screen (capture + input for Remote screen): on macOS a launchd agent inside the app
 // bundle (apps/screen-macos, registered through SMAppService). macOS can attribute screen
@@ -13,6 +13,30 @@ import { shouldSyncScreenAgent } from '../shared/computer-access'
 
 const serviceName = `${identity.screenLabel}.plist`
 const isMac = process.platform === 'darwin'
+const runCommand = promisify(execFile)
+
+// 重新打开同一个链接可能沿用旧列表。通过 AppKit 正常退出系统设置，等旧进程退出后再定位录屏页。
+const quitSystemSettings = `
+ObjC.import('AppKit')
+const settings = $.NSRunningApplication.runningApplicationsWithBundleIdentifier('com.apple.systempreferences').js[0]
+if (settings && settings.terminate) {
+  const deadline = Date.now() + 4000
+  while (!settings.terminated && Date.now() < deadline) {
+    $.NSRunLoop.currentRunLoop.runUntilDate($.NSDate.dateWithTimeIntervalSinceNow(0.05))
+  }
+}
+if (settings && !settings.terminated) throw new Error('System Settings did not quit.')
+`
+
+/** 在录屏恢复后重新打开权限页，退出请求失败时仍打开该页供用户继续授权。 */
+export async function reopenScreenRecordingSettings() {
+  try {
+    await runCommand('/usr/bin/osascript', ['-l', 'JavaScript', '-e', quitSystemSettings], { timeout: 5_000 })
+  } catch (error) {
+    console.warn('Could not reload macOS Screen Recording settings', error)
+  }
+  await shell.openExternal(computerPermissionSettings.capture)
+}
 
 /** 返回当前安装包内的助手位置，供权限引导和启动状态检查共用。 */
 function screenBundlePath() {
@@ -73,14 +97,13 @@ async function resetScreenPermission(permission: unknown) {
   if (!isMac || !app.isPackaged) throw new Error('Screen permission reset is available in the installed Mac app.')
   const service = permission === 'capture' ? 'ScreenCapture' : permission === 'input' ? 'Accessibility' : null
   if (!service) throw new Error('Unknown computer access permission.')
-  const reset = promisify(execFile)
   // macOS 可能把录屏记在主程序或助手名下，辅助功能由助手持有。
   const bundles = permission === 'capture' ? [identity.appId, identity.screenLabel] : [identity.screenLabel]
   let resetAny = false
   let failure: unknown
   for (const bundle of bundles) {
     try {
-      await reset('/usr/bin/tccutil', ['reset', service, bundle], { timeout: 10_000 })
+      await runCommand('/usr/bin/tccutil', ['reset', service, bundle], { timeout: 10_000 })
       resetAny = true
     } catch (error) {
       // 某个目标尚未注册时继续尝试另一个，避免挡住已清理目标的后续授权。

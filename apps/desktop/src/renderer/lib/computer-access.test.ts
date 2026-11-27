@@ -36,6 +36,7 @@ test('repeated checks never request permissions; explicit actions and failures s
   let platform = 'macos'
   let resetFails = false
   let settings = ''
+  let reloadSettings = false
   let allowCaptureOnRequest = false
   const clipboard: string[] = []
   const permissionRequests: string[] = []
@@ -48,7 +49,11 @@ test('repeated checks never request permissions; explicit actions and failures s
       calls.push(`reset:${permission}`)
       if (resetFails) throw new Error('Reset denied')
     },
-    openSettings: (url: string) => { settings = url },
+    // 记录导航与重新加载请求，区分首次授权和清除旧录屏记录后的回退。
+    openSettings: (url: string, reload: boolean) => {
+      settings = url
+      reloadSettings = reload
+    },
   } } } })
   const app = { updateScreenApproval() { /* 本用例只检查录屏和控制权限。 */ }, local: { connection: { kind: 'online' }, client: { call: async (method: string, body?: { permission?: string }) => {
     calls.push(method)
@@ -78,6 +83,7 @@ test('repeated checks never request permissions; explicit actions and failures s
   settings = ''
   await access.request('capture')
   assert.match(settings, /Privacy_ScreenCapture/)
+  assert.equal(reloadSettings, false)
   assert.deepEqual(clipboard, [])
   settings = ''
   capture = true
@@ -90,6 +96,7 @@ test('repeated checks never request permissions; explicit actions and failures s
   await access.recoverPermission('input')
   assert.deepEqual(calls.slice(-3), ['reset:input', 'requestScreenPermission', 'screenStatus'])
   assert.match(settings, /Privacy_Accessibility/)
+  assert.equal(reloadSettings, false)
   assert.equal(permissionRequests.at(-1), 'input')
   assert.deepEqual(clipboard, [permissionPaths.input])
   assert.equal(access.copiedPermission, 'input')
@@ -103,6 +110,7 @@ test('repeated checks never request permissions; explicit actions and failures s
   await access.recoverPermission('capture')
   assert.deepEqual(calls.slice(-3), ['reset:capture', 'requestScreenPermission', 'screenStatus'])
   assert.match(settings, /Privacy_ScreenCapture/)
+  assert.equal(reloadSettings, true)
   assert.equal(access.screen?.input, true)
   assert.equal(permissionRequests.at(-1), 'capture')
   assert.deepEqual(clipboard, [permissionPaths.input, permissionPaths.capture])

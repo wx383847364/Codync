@@ -18,7 +18,8 @@ import { Updates, yieldsToInstall } from './updates'
 import { handleURL, registerAuthIPC, registerSchemes, urlFromArgv } from './auth'
 import { registerSpeech } from './speech'
 import { VoiceShortcutKeys } from './voice-shortcut'
-import { registerScreenIPC } from './screen'
+import { registerScreenIPC, reopenScreenRecordingSettings } from './screen'
+import { computerPermissionSettings } from '../shared/computer-access'
 import { registerCloud } from './cloud'
 import { registerSSH } from './ssh'
 import { registerSSHConfig } from './ssh-config'
@@ -201,8 +202,14 @@ function registerIPC(tray: Tray) {
   ipcMain.on('app:openExternal', (_e, url: string) => {
     if (/^(https?|mailto|x-apple\.systempreferences):/.test(url)) void shell.openExternal(url)
   })
-  ipcMain.on('app:openSettings', (_e, url: string) => {
-    if (url.startsWith('x-apple.systempreferences:')) void shell.openExternal(url)
+  // 仅允许重新加载录屏权限页，其他设置链接沿用普通导航。
+  ipcMain.on('app:openSettings', (_e, url: string, reload?: boolean) => {
+    if (typeof url !== 'string' || !url.startsWith('x-apple.systempreferences:')) return
+    const opening = isMac && reload === true && url === computerPermissionSettings.capture
+      ? reopenScreenRecordingSettings()
+      : shell.openExternal(url)
+    // 系统拒绝打开链接时保留错误，避免未处理的 IPC 异常。
+    void opening.catch((error) => console.warn('Could not open System Settings', error))
   })
   ipcMain.on('app:copy', (_e, text: string) => clipboard.writeText(text))
   ipcMain.handle('app:pickFiles', async (e) => {
