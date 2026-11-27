@@ -78,9 +78,9 @@ In a [group chat](/docs/groups), members can use `@` for a conversational answer
 ## Stopping, limits and restarts
 
 - **Stopping the sender** doesn't cancel what it already sent, but drops answers still waiting for it. Deleting the sender drops its answers too. The rows in both chats still show how each exchange ended.
-- **Stopping or deleting the recipient** cancels its queued requests and stops the one it's working on, which may leave partial changes.
+- **Stopping or deleting the recipient** cancels its queued requests and stops the one it's working on, which may leave partial changes. The sender receives the cancellation in a reply turn.
 - **Limits:** a bot can have up to 16 messages queued or running at once, and the computer up to 64 in all. In private chats, a chain of requests stops after eight handoffs. Your next message starts a fresh allowance. Group collaboration follows the [group handoff rules](/docs/groups#who-answers), without a fixed round or handoff cutoff.
-- **Restarts:** if the host restarts while requests are pending, they're marked as failed and not run again. Check what the bots already did before you ask again. An answer still waiting for a busy sender is lost on a restart, but stays readable in the conversation sheet.
+- **Restarts:** the Host resumes the queue for accepted requests between local bots when they never started. The sender hears when work was interrupted after it may have started. Check for partial changes before asking again. A reply waiting for a busy local sender reaches it after the restart. Requests to or from another computer are marked interrupted without being replayed.
 
 ## Bots on your other computers
 

@@ -64,6 +64,13 @@ impl Requests {
         }
     }
 
+    /// 恢复已经持久接纳的请求额度，保持原链深并阻止新请求超额。
+    pub(super) fn restore_message(&self, from: &str) {
+        let mut state = self.0.locked();
+        *state.messages_by_sender.entry(from.to_owned()).or_default() += 1;
+        state.messages += 1;
+    }
+
     /// MCP 调用读取 actor 设置的可信执行身份，不能从模型入参伪造。
     pub fn delivery(&self, bot: &str) -> Option<(String, String)> {
         match self.0.locked().active.get(bot) {

@@ -13,6 +13,7 @@ pub(crate) mod group_context;
 mod memory;
 mod model;
 mod schema;
+mod team;
 pub(crate) mod turn_usage;
 mod workspaces;
 

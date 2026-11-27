@@ -269,8 +269,7 @@ fn send_back(hub: &Arc<Hub>, to: &Return, mut body: String, status: RequestStatu
     });
 }
 
-/// The outcome of a request this computer's bot sent: its notice ends and, unless the other
-/// side's user stopped the work, the sender gets a reply turn.
+/// 收到远端请求终态后更新通知，并把成功、失败或取消回给本机发送方。
 fn replied(hub: &Hub, id: &str, waiter: Waiter, m: &Message) {
     let peer = &waiter.peer;
     let status = m.meta.as_ref().and_then(|meta| serde_json::from_value(meta["codync"].clone()).ok());
@@ -286,7 +285,7 @@ fn replied(hub: &Hub, id: &str, waiter: Waiter, m: &Message) {
         Some(RequestStatus::Cancelled) => {
             let detail = format!("{peer} was stopped before finishing. Partial work may have happened.");
             finish_entry(hub, &entry, RequestStatus::Cancelled, &detail, None);
-            return;
+            Err(detail)
         }
         Some(RequestStatus::Failed) => {
             finish_entry(hub, &entry, RequestStatus::Failed, &m.body, None);
@@ -300,7 +299,13 @@ fn replied(hub: &Hub, id: &str, waiter: Waiter, m: &Message) {
             Ok(truncate(&m.body, MAX_MESSAGE_BYTES))
         }
     };
-    let reply =
-        BotReply { request_id: id.to_owned(), quote: waiter.quote, from_name: peer.clone(), outcome, hops: m.hops };
+    let reply = BotReply {
+        request_id: id.to_owned(),
+        quote: waiter.quote,
+        from_name: peer.clone(),
+        outcome,
+        hops: m.hops,
+        pending_entry: None,
+    };
     let _ = hub.send_cmd(&sender, Cmd::BotReply(reply));
 }

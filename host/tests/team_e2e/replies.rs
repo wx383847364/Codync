@@ -2,6 +2,42 @@
 
 use super::*;
 
+/// 从真实 MCP 入队后强杀 Host，只恢复明确未开始的私聊请求。
+#[tokio::test]
+async fn local_private_requests_recover_after_host_crash() {
+    let mut host = Host::start().await;
+    let lead = host.bot("lead").await;
+    let worker = host.bot("worker").await;
+    host.call("send", json!({"botId": lead, "text": format!("DELEGATE {worker} PERMISSION active work")})).await;
+    host.wait_for(&worker, |entry| entry["kind"] == "permission" && entry["data"]["status"] == "pending").await;
+    host.call("send", json!({"botId": lead, "text": format!("DELEGATE {worker} waiting work")})).await;
+    let waiting = host
+        .wait_for(&lead, |entry| {
+            entry["data"]["status"] == "queued" && entry["data"]["botMessage"]["text"] == "waiting work"
+        })
+        .await;
+    restart_group_host(&mut host).await;
+    host.wait_for(&lead, |entry| {
+        entry["data"]["status"] == "failed"
+            && entry["data"]["botMessage"]["detail"]
+                .as_str()
+                .is_some_and(|detail| detail.contains("Interrupted by host restart"))
+    })
+    .await;
+    host.wait_for(&lead, |entry| entry["id"] == waiting["id"] && entry["data"]["status"] == "completed").await;
+    host.wait_for(&lead, |entry| {
+        entry["data"]["final"] == true
+            && entry["data"]["text"]
+                .as_str()
+                .is_some_and(|text| text.contains("Relayed:") && text.contains("waiting work"))
+    })
+    .await;
+    let worker_prompts = host.fixture_log("worker", "prompts.jsonl");
+    assert_eq!(worker_prompts.len(), 2);
+    assert!(worker_prompts[0].as_str().unwrap().ends_with("PERMISSION active work"));
+    assert!(worker_prompts[1].as_str().unwrap().ends_with("waiting work"));
+}
+
 /// 群维护在 session/load 后跳过时仍记录未知消耗，正常业务执行不丢失、不重复或归到私聊请求。
 #[tokio::test]
 async fn group_maintenance_session_recovery_keeps_its_unknown_usage_once() {

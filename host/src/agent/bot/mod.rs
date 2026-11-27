@@ -128,6 +128,7 @@ pub fn spawn(hub: Arc<Hub>, base: BotConfig) -> BotHandle {
         active_request: None,
         reply_hops: None,
         reply_requests: Vec::new(),
+        starting_replies: None,
         usage_attempt: None,
         active_prompt: false,
         prompt_call: None,
@@ -332,6 +333,8 @@ struct Actor {
     reply_hops: Option<u8>,
     /// 主脑当前回合对应的全部回复请求，共享用量不能精确拆分。
     reply_requests: Vec<String>,
+    /// 正在首发待送回复，回合恢复点随消费一起写入。
+    starting_replies: Option<Vec<String>>,
     /// 当前启动或执行尝试；记录完成即取走，避免重复计量。
     usage_attempt: Option<usage::Attempt>,
     /// The running turn is one the host started, with no message of the user's (`Cmd::Prompt`).

@@ -217,11 +217,22 @@ impl Actor {
         // Queued messages are dropped too: Stop means "stop everything". A room's late turn stays: the room was
         // told this member answers there once free, and only the group's Stop drops it.
         for queued in std::mem::take(&mut self.queue) {
-            if let Queued::User { entry_id, .. } = queued
-                && let Some(mut e) = self.hub.store.entry(&entry_id)
-            {
-                e.data["status"] = "cancelled".into();
-                self.hub.set_entry(&entry_id, &e.data);
+            match queued {
+                Queued::User { entry_id, .. } => {
+                    if let Some(mut e) = self.hub.store.entry(&entry_id) {
+                        e.data["status"] = "cancelled".into();
+                        self.hub.set_entry(&entry_id, &e.data);
+                    }
+                }
+                // 只丢弃本次 Stop 前已等待的回复，重启不再唤醒。
+                Queued::BotReply(reply) => {
+                    if let Some(entry) = reply.pending_entry()
+                        && let Err(error) = self.hub.store.consume_local_replies(&[entry], None)
+                    {
+                        tracing::warn!(%error, "couldn't discard a stopped bot reply");
+                    }
+                }
+                _ => {}
             }
         }
         self.clear_empty_capacity_handoff();
@@ -307,12 +318,11 @@ impl Actor {
                     continue;
                 }
                 Some(Queued::BotRequest(_)) => {
-                    let Some(Queued::BotRequest(mut request)) = self.queue.pop_front() else {
+                    let Some(Queued::BotRequest(request)) = self.queue.pop_front() else {
                         unreachable!("front is a bot request")
                     };
                     let ids = [request.entry_id.clone()];
                     let prompt = request.prompt.clone();
-                    request.mark_started();
                     self.active_request = Some(request);
                     let result = self.start_turn(main.clone(), &ids, &prompt, false, done_tx).await;
                     if let Err(e) = result {
@@ -332,9 +342,12 @@ impl Actor {
                     // 同一主脑回合合并多条回复，其开销保留为共享批次。
                     self.reply_requests = replies.iter().map(|reply| reply.request_id().to_owned()).collect();
                     let prompt = crate::chat::team::reply_prompt(&replies);
+                    self.starting_replies =
+                        Some(replies.into_iter().filter_map(crate::chat::team::BotReply::pending_entry).collect());
                     if let Err(e) = self.start_turn(main.clone(), &[], &prompt, false, done_tx).await {
                         self.start_error(e, done_tx).await;
                     }
+                    self.starting_replies = None;
                     continue;
                 }
                 Some(Queued::Prompt { .. }) => {

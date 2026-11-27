@@ -56,10 +56,7 @@ whether the exchange is pending, completed, failed or cancelled. The base notice
 heading and rendered text remain unchanged for clients that display plain notices.
 Clients read the structured data directly; they do not parse display strings.
 
-Existing notices remain ordinary notices. There is no startup rewrite, data
-migration or transcript-cache reset. The existing restart cleanup still marks
-unfinished requests failed and adds the failure detail to their structured data,
-when present. It never replays work.
+New local requests persist both notices and their chain depth together. The Host recognizes these records at startup. Older notices and requests from other computers or the cloud assistant keep the previous interrupted outcome. No transcript migration is needed.
 
 `botConversation {botId, peerId}` returns `{entries}`: the newest 200 main-chat
 notices containing structured messages with that peer, oldest first. It requires
@@ -191,12 +188,11 @@ The team tools add no task scheduler or isolated worktrees. Give bots explicit f
 ## Stops, failures and restart
 
 - Accepted requests survive the sender's completion, Stop, disconnection and deletion. Stop on the sender drops replies still queued for it; a deleted sender's replies are dropped (both notices still show the outcome).
-- Stopping or deleting the recipient cancels its queued requests and stops running work; started work may have left partial changes. A cancellation the user caused doesn't wake the sender; its notices show it.
+- Stopping or deleting the recipient cancels its queued requests and stops running work; started work may have left partial changes. The sender receives the cancellation in a reply turn. Stopping the sender still discards replies that are already waiting for it.
 - Recipient startup failures, crashes, refusals and empty replies mark both notices failed and come back to the sender as a failed reply.
-- Pending request notices are persisted with IDs and statuses. After host restart they become interrupted errors; request turns are not automatically replayed. Check partial work before retrying. There is no automatic retry. Ordinary user turns and running reply turns retain their existing session-resume behavior.
-- A reply still queued for a busy sender lives only in memory: a host restart drops it, and the sender never relays it. Both notices are already completed and keep the reply (`botMessage.reply`), so its summary stays readable in the conversation sheet. New completed local replies can also be
-  retrieved by the original sender with `read_bot_reply` after restart, while their bound trace
-  remains. There is no automatic wakeup or execution replay.
+- On restart, the Host returns accepted local requests to the queue when it knows they never started. It reports an interruption to the sender for a request that may have started. Check for partial changes before asking again. Requests to or from other computers and the cloud assistant are marked interrupted without being replayed.
+- The Host keeps the automatic reply body for a busy local sender until startup has prepared the sender's reply turn or the user stops the sender. Immediately before sending to the agent, the Host consumes the stored body and marks the session for recovery in one transaction. If the Host stops at that boundary, the following start resumes the session without replaying that body. The notice remains available. The original sender can still use `read_bot_reply` to retrieve the trace after a restart while that trace remains.
+- Claude Code loads the schemas for `list_bots` and `message_bot` before tool search. `read_bot_reply` remains available on demand.
 
 ## Limits
 

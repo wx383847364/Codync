@@ -1,6 +1,6 @@
 //! Starting a turn and wrapping it up: final reply, notices, the reply to a requesting bot or room, alerts and memory.
 
-use super::{Actor, Conn, Done, Instructions, NoticeStyle, Queued, Reacted, Seg};
+use super::{Actor, Conn, Done, Instructions, NoticeStyle, Queued, Reacted, Seg, inflight_key};
 use crate::agent::acp::{self, Incoming};
 use crate::analytics::{self, TurnOutcome, TurnSource};
 use crate::chat::context::{self, Snapshot};
@@ -161,16 +161,15 @@ impl Actor {
         // relay_turn 已选定执行器，先固定尝试身份，再进入可能失败的会话初始化。
         self.begin_usage();
         // 群投递由持久投递表恢复，started 不重放；私聊 inflight 不承载群执行。
-        // A bot request's
-        // persisted notices are marked interrupted instead of silently repeating work. Nor is a call's opening (the
-        // call is over). A reply turn is resumed.
+        // 私聊回信的恢复点由队列和消费操作一起提交，尚未送出时只恢复待送回复。
         self.set_inflight(
             !carries_handoff
                 && self.group_compaction.is_none()
                 && self.active_request.is_none()
                 && self.active_delivery.is_none()
                 && self.active_routine.is_none()
-                && !self.active_prompt,
+                && !self.active_prompt
+                && self.starting_replies.is_none(),
         );
         // A message the host wrote in the user's place (`from: host`) isn't the user asking.
         let typed = |id: &&String| self.hub.store.entry(id).is_some_and(|e| e.data["from"] != "host");
@@ -278,10 +277,22 @@ impl Actor {
             // 维护没有用户或业务来源，也不能成为文件记忆变更的归属回合。
             memory::turns::begin_turn(&self.cfg.id, &sid, self.hub.runtime(&self.cfg.id).message);
         }
-        if carries_handoff {
+        if carries_handoff && self.starting_replies.is_none() {
             // 写入 ACP 前为防止未知执行被自动重放，按普通 in-flight 回合处理。
             self.mark_user_messages(entry_ids);
             self.set_inflight(true);
+        }
+        if let Some(request) = self.active_request.as_mut() {
+            request.mark_started()?;
+        }
+        if let Some(entries) = &self.starting_replies {
+            // 本机事务与 ACP 写入无法原子化。发送前先确认恢复边界，写入结果不明时只恢复会话，
+            // 不重送整份回复；事务失败则不向代理发送。
+            self.hub.store.consume_local_replies(
+                entries,
+                Some((&self.cfg.id, &inflight_key(&self.cfg.id), &now_ms().to_string())),
+            )?;
+            self.starting_replies = None;
         }
         // Written before this returns, so a Stop right after is sent after the prompt.
         let answer = acp.send("session/prompt", params).await?;

@@ -189,6 +189,9 @@ impl Hub {
         self.store.interrupt_usage_attempts()?;
         crate::chat::memory::import_old_memory(self);
         self.routines.restore(&self.store)?;
+        // 先固定上一进程的请求和回复，启动 actor 后的新记录不参加这次重投。
+        let pending_requests = self.store.pending_local_requests()?;
+        let pending_replies = self.store.pending_local_replies()?;
         self.resume_group_purges();
         crate::market::turn_on_installed_once(&self.store)?;
         for row in self.store.bots()? {
@@ -198,6 +201,7 @@ impl Hub {
                 self.spawn_bot(row.config);
             }
         }
+        crate::chat::team::restore(self, pending_requests, pending_replies)?;
         crate::chat::calls::rewatch(self);
         crate::chat::group::wake(self, None);
         crate::routines::start(self);
@@ -235,10 +239,16 @@ impl Hub {
         self.keep_awake.locked().set(false);
     }
 
+    /// 可预先拒绝已退出的接收方；接纳后发生的退出仍由请求生命周期处理。
+    pub(crate) fn accepts_bot_commands(&self, bot_id: &str) -> bool {
+        self.bots.locked().get(bot_id).is_some_and(|actor| !actor.tx.is_closed())
+    }
+
+    /// 向当前 Bot actor 发送命令，即使发送失败也不在 actor 表锁内释放命令。
     pub fn send_cmd(&self, bot_id: &str, cmd: Cmd) -> Result<()> {
-        let bots = self.bots.locked();
-        let h = bots.get(bot_id).ok_or_else(|| anyhow!("unknown bot"))?;
-        h.tx.send(cmd).map_err(|_| anyhow!("bot stopped"))
+        // 被拒绝的命令可能在释放时通知另一只 Bot，不能在持有 actor 表锁时销毁。
+        let tx = self.bots.locked().get(bot_id).map(|h| h.tx.clone());
+        tx.ok_or_else(|| anyhow!("unknown bot"))?.send(cmd).map_err(|_| anyhow!("bot stopped"))
     }
 
     // MARK: bots
@@ -378,6 +388,14 @@ impl Hub {
     }
 
     // MARK: entries
+
+    /// 在发布锁内提交多条聊天记录，按持久版本顺序发送事件。
+    pub(crate) fn transcript_update<T>(&self, save: impl FnOnce() -> Result<(T, Vec<Entry>)>) -> Result<T> {
+        let _guard = self.emit_lock.locked();
+        let (result, entries) = save()?;
+        self.delivery_entries(&entries);
+        Ok(result)
+    }
 
     /// Persists and broadcasts a new transcript entry. A failed write is logged here
     /// (once) and yields `None`: the conversation goes on without that line.
